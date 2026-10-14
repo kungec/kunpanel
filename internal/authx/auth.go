@@ -97,3 +97,15 @@ func (l *Limiter) Reset(ip string) {
 	defer l.mu.Unlock()
 	delete(l.fails, ip)
 }
+
+// Sweep 清理已过期且不再活跃的条目(长期运行防 map 缓慢增长)
+func (l *Limiter) Sweep() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := time.Now()
+	for k, f := range l.fails {
+		if f.count >= l.maxFails && now.After(f.until) {
+			delete(l.fails, k)
+		}
+	}
+}

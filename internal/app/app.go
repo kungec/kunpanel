@@ -41,6 +41,8 @@ var version = "dev"
 func Run(o Options) error {
 	// GC 调优:面板内存占用 <50MB,降低 GC 频率减少 CPU 开销
 	debug.SetGCPercent(200)
+	// 软内存上限:异常泄漏时激进 GC 而非无限增长(非硬限制,不 panic)
+	debug.SetMemoryLimit(128 << 20)
 
 	version = o.Version
 	server.Version = o.Version

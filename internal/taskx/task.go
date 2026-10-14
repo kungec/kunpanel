@@ -18,7 +18,6 @@ type Task struct {
 	EndedAt   time.Time `json:"ended_at,omitempty"`
 
 	buf *ringBuffer
-	tmu sync.Mutex // 保护 Status/EndedAt/Log
 }
 
 type ringBuffer struct {
@@ -77,15 +76,29 @@ func (m *Manager) Start(name string, fn func(w io.Writer) error) (*Task, error) 
 	m.tasks[t.ID] = t
 	go func() {
 		err := fn(t.buf)
-		t.Finish(err)
+		m.finish(t, err)
 	}()
 	return t, nil
 }
 
 // Finish 标记任务结束(加锁,避免与 Get/List 并发读写竞态)
-func (t *Task) Finish(err error) {
-	t.tmu.Lock()
-	defer t.tmu.Unlock()
+// bufString 快照读取滚动日志(nil 安全)
+func (t *Task) bufString() string {
+	if t.buf == nil {
+		return t.Log
+	}
+	return t.buf.String()
+}
+
+
+
+// Writer 返回任务日志写入器
+func (t *Task) Writer() io.Writer { return t.buf }
+
+// finish 标记任务结束(锁 m.mu,与 Get/List 的字段读取互斥)
+func (m *Manager) finish(t *Task, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if err != nil {
 		t.Status = "failed"
 		t.Error = err.Error()
@@ -93,11 +106,8 @@ func (t *Task) Finish(err error) {
 		t.Status = "success"
 	}
 	t.EndedAt = time.Now()
-	t.Log = t.buf.String()
+	t.Log = t.bufString()
 }
-
-// Writer 返回任务日志写入器
-func (t *Task) Writer() io.Writer { return t.buf }
 
 // cleanupFinished 清理 1 小时前完成的任务,防止 map 无限增长
 func (m *Manager) cleanupFinished() {
@@ -105,10 +115,7 @@ func (m *Manager) cleanupFinished() {
 	defer m.mu.Unlock()
 	now := time.Now()
 	for id, t := range m.tasks {
-		t.tmu.Lock()
-		done := t.Status != "running" && !t.EndedAt.IsZero() && now.Sub(t.EndedAt) > time.Hour
-		t.tmu.Unlock()
-		if done {
+		if t.Status != "running" && !t.EndedAt.IsZero() && now.Sub(t.EndedAt) > time.Hour {
 			delete(m.tasks, id)
 		}
 	}
@@ -121,11 +128,9 @@ func (m *Manager) Get(id string) (*Task, bool) {
 		m.mu.Unlock()
 		return nil, false
 	}
-	t.tmu.Lock()
+	t.Log = t.bufString()
 	snap := *t
 	snap.buf = nil
-	snap.Log = t.buf.String()
-	t.tmu.Unlock()
 	m.mu.Unlock()
 	return &snap, true
 }
@@ -135,11 +140,9 @@ func (m *Manager) List() []*Task {
 	defer m.mu.Unlock()
 	out := make([]*Task, 0, len(m.tasks))
 	for _, t := range m.tasks {
-		t.tmu.Lock()
+		t.Log = t.bufString()
 		snap := *t
 		snap.buf = nil
-		snap.Log = t.buf.String()
-		t.tmu.Unlock()
 		out = append(out, &snap)
 	}
 	return out

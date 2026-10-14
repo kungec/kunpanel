@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"kunpanel/internal/authx"
 	"kunpanel/internal/config"
@@ -55,9 +56,22 @@ func New(o Options) *http.Server {
 	s.registerAPI()
 	s.mux.Handle("/", s.spaHandler())
 
+	// 限流器 janitor:定期清理过期条目,长期运行防 map 缓慢增长
+	go func() {
+		for {
+			time.Sleep(10 * time.Minute)
+			s.limiter.Sweep()
+			UserLimiter.Sweep()
+		}
+	}()
+
 	return &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.Port),
 		Handler: withSecurityHeaders(s.withRecover(s.withOpLog(s.mux))),
+		// 慢速攻击防护:头读取限时 + 空闲连接回收。
+		// 不设 Read/WriteTimeout:终端 WS 升级后长连接与大文件下载需要不受限的读写
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 }
 

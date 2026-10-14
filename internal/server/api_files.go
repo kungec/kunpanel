@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -348,6 +349,22 @@ func (s *Server) handleFileRemoteDownload(w http.ResponseWriter, r *http.Request
 	if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
 		Fail(w, http.StatusBadRequest, "URL 必须以 http:// 或 https:// 开头")
 		return
+	}
+	// SSRF 防护:拒绝解析到环回/私网/链路本地的目标
+	if host := func() string {
+		if uu, err := url.Parse(u); err == nil {
+			return uu.Hostname()
+		}
+		return ""
+	}(); host != "" {
+		if ips, err := net.LookupIP(host); err == nil {
+			for _, ip := range ips {
+				if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+					Fail(w, http.StatusBadRequest, "拒绝下载: 目标指向内网地址("+ip.String()+")")
+					return
+				}
+			}
+		}
 	}
 	if len(u) > 1024 {
 		Fail(w, http.StatusBadRequest, "URL 过长")

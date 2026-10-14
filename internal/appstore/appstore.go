@@ -132,7 +132,7 @@ func builtinTemplates() []Template {
     container_name: kun-php
     restart: always
     ports:
-      - "%s:80"
+      - "172.17.0.1:%s:80"
     volumes:
       - %s:/var/www/html
 `, pval(p, "Version", "8.4"), pval(p, "Port", "8088"), rootsDir())
@@ -156,7 +156,7 @@ func builtinTemplates() []Template {
     container_name: kun-mysql
     restart: always
     ports:
-      - "%s:3306"
+      - "127.0.0.1:%s:3306"
     environment:
       MYSQL_ROOT_PASSWORD: "%s"
     volumes:
@@ -181,7 +181,7 @@ func builtinTemplates() []Template {
     container_name: kun-mariadb
     restart: always
     ports:
-      - "%s:3306"
+      - "127.0.0.1:%s:3306"
     environment:
       MARIADB_ROOT_PASSWORD: "%s"
     volumes:
@@ -206,7 +206,7 @@ func builtinTemplates() []Template {
     container_name: kun-postgresql
     restart: always
     ports:
-      - "%s:5432"
+      - "127.0.0.1:%s:5432"
     environment:
       POSTGRES_PASSWORD: "%s"
     volumes:
@@ -254,7 +254,7 @@ func builtinTemplates() []Template {
     container_name: kun-redis
     restart: always
     ports:
-      - "%s:6379"
+      - "127.0.0.1:%s:6379"
     command: redis-server --requirepass "%s" --appendonly yes
     volumes:
       - ./data:/data

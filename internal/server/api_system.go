@@ -312,8 +312,20 @@ func (s *Server) handleLogsExport(w http.ResponseWriter, r *http.Request) {
 			if i > 0 {
 				w.Write([]byte(","))
 			}
-			w.Write([]byte(`"` + strings.ReplaceAll(col, `"`, `""`) + `"`))
+			w.Write([]byte(`"` + csvSafe(strings.ReplaceAll(col, `"`, `""`)) + `"`))
 		}
 		w.Write([]byte("\n"))
 	}
+}
+
+// csvSafe 防 CSV 公式注入:Excel 会把 =+-@ 开头的单元格当公式执行
+func csvSafe(s string) string {
+	if s == "" {
+		return s
+	}
+	switch s[0] {
+	case '=', '+', '-', '@', '\t', '\r':
+		return "'" + s
+	}
+	return s
 }

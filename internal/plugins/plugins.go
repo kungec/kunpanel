@@ -145,7 +145,10 @@ func defaultRules() map[string][]string {
 			`('|%27)\s*(or|and)\s*['\d=]`,
 			`(or|and)\s+\d+\s*=\s*\d+`,
 			`information_schema`,
-			`sleep\s*\(\d+\)`,
+			`/\*!`,                    // MySQL 内联注释(/*!50000union*/ 类绕过)
+			`\(\s*select`,             // 子查询注入
+			`(or|and)\s+(substring|ascii|ord|mid|left|right|hex|if|elt)\s*\(`, // 盲注提取函数
+			`sleep\s*\(`,
 			`benchmark\s*\(`,
 			`load_file\s*\(`,
 			`into\s+(out|dump)file`,
@@ -244,6 +247,20 @@ func loadWafConfig() *wafConfigFile {
 			if _, ok := c.Rules["sensitive"]; !ok {
 				c.Rules["sensitive"] = def.Rules["sensitive"]
 				migrated = true
+			}
+			// 规则迁移(第三轮渗透修复):sql 组补内联注释/子查询/盲注函数检测,存量配置追加缺失项
+			{
+				want := []string{`/\*!`, `\(\s*select`, `(or|and)\s+(substring|ascii|ord|mid|left|right|hex|if|elt)\s*\(`}
+				have := map[string]bool{}
+				for _, p := range c.Rules["sql"] {
+					have[p] = true
+				}
+				for _, p := range want {
+					if !have[p] {
+						c.Rules["sql"] = append(c.Rules["sql"], p)
+						migrated = true
+					}
+				}
 			}
 			if c.CcMode == "" {
 				// Lua 里空串为真值,'' or "rate" 会返回 '',CC 模式判断全部错位

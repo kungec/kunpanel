@@ -88,6 +88,7 @@ docker run -d --name kunpanel -p 20000:20000 -v kunpanel-data:/opt/kunpanel/data
 - **终端 WebSocket**:一次性短时票据(30 秒有效)
 - **服务加固**:systemd `NoNewPrivileges` / `ProtectSystem=full` / `PrivateTmp` 等
 - **审计**:登录与全部变更操作留痕;安全回归测试 `go test ./internal/security/`
+- **端口暴露**:数据库类应用(MySQL/MariaDB/PostgreSQL/Redis)模板默认仅绑定本机回环,公网不可达;注意 Docker 发布的端口不受系统防火墙(ufw/firewalld)约束,如需对外请在面板防火墙页或 compose 中显式放行
 
 ## 已验证环境
 

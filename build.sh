@@ -21,6 +21,7 @@ TARGETS=(
 
 rm -rf "$OUT"
 mkdir -p "$OUT"
+OUT="$(cd "$OUT" && pwd)"   # 绝对路径:后续在子目录里 cd 后仍可用
 
 for target in "${TARGETS[@]}"; do
   GOOS="${target%/*}"

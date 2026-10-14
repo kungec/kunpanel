@@ -1,0 +1,22 @@
+# 构建产物
+/release/
+/kunpanel
+/kunpanel.exe
+*.tar.gz
+*.zip
+
+# 运行数据
+/data/
+*.log
+*.db
+*.db-shm
+*.db-wal
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 编辑器
+.idea/
+.vscode/
+*.swp

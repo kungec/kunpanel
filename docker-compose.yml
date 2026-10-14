@@ -1,0 +1,40 @@
+# 坤面板 KunPanel - Docker 一键部署
+#
+#   部署:   docker compose up -d
+#   查看初始密码: docker compose logs | grep 密码
+#               或: docker exec kunpanel cat /opt/kunpanel/data/initial_password.txt
+#
+#   或使用 docker run 一行部署:
+#   docker run -d --name kunpanel \
+#     -p 20000:20000 \
+#     -v /opt/kunpanel/data:/opt/kunpanel/data \
+#     -v /var/run/docker.sock:/var/run/docker.sock \
+#     --restart unless-stopped \
+#     kunpanel:latest
+services:
+  kunpanel:
+    image: kunpanel:latest
+    build: .
+    container_name: kunpanel
+    restart: unless-stopped
+    ports:
+      - "20000:20000"
+    environment:
+      - KP_DATA_DIR=/opt/kunpanel/data
+      # 首次初始化时可自定义端口/账号(配置生成后不再生效):
+      # - KP_PORT=20000
+      # - KP_USERNAME=admin
+      # - KP_PASSWORD=your_password
+    volumes:
+      # 持久化面板数据(网站/应用/配置)
+      - /opt/kunpanel/data:/opt/kunpanel/data
+      # 管理宿主机 Docker(容器/镜像/应用商店均依赖)
+      - /var/run/docker.sock:/var/run/docker.sock
+      # 可选:网站根目录与 nginx 配置(便于宿主机直接访问文件)
+      - /opt/kunpanel/data/websites:/opt/kunpanel/data/websites
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:20000/api/v1/auth/captcha"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

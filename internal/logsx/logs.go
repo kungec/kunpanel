@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"kunpanel/internal/config"
+	"kunpanel/internal/util"
 )
 
 // Entry 一条日志
@@ -45,7 +46,7 @@ func appendEntry(kind string, e Entry) {
 	// 超过 5MB 截断保留一半
 	if fi, _ := f.Stat(); fi != nil && fi.Size() > 5<<20 {
 		data, _ := os.ReadFile(file(kind))
-		_ = os.WriteFile(file(kind), data[len(data)/2:], 0o600)
+		_ = util.AtomicWrite(file(kind), data[len(data)/2:], 0o600)
 	}
 }
 
@@ -74,7 +75,7 @@ func Clear(kind string) error {
 	if err := os.MkdirAll(logsDir(), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(file(kind), []byte{}, 0o600)
+	return util.AtomicWrite(file(kind), []byte{}, 0o600)
 }
 
 // Read 读取最近 n 条日志(倒序)

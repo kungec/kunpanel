@@ -49,11 +49,11 @@ func (s *Server) handlePanelSSLSave(w http.ResponseWriter, r *http.Request) {
 			Fail(w, http.StatusBadRequest, "PEM 格式错误")
 			return
 		}
-		if err := os.WriteFile(panelSSLCert(), []byte(req.Cert+"\n"), 0o644); err != nil {
+		if err := util.AtomicWrite(panelSSLCert(), []byte(req.Cert+"\n"), 0o644); err != nil {
 			Fail(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		if err := os.WriteFile(panelSSLKey(), []byte(req.Key+"\n"), 0o600); err != nil {
+		if err := util.AtomicWrite(panelSSLKey(), []byte(req.Key+"\n"), 0o600); err != nil {
 			Fail(w, http.StatusInternalServerError, err.Error())
 			return
 		}

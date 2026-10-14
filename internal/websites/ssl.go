@@ -100,10 +100,10 @@ func UploadCert(name, certPEM, keyPEM string) (CertInfo, error) {
 	}
 	id := "cert_" + fmt.Sprintf("%d", time.Now().UnixNano()/1000000)
 	_ = os.MkdirAll(sslDir(), 0o755)
-	if err := os.WriteFile(certCrtPath(id), []byte(certPEM+"\n"), 0o644); err != nil {
+	if err := util.AtomicWrite(certCrtPath(id), []byte(certPEM+"\n"), 0o644); err != nil {
 		return CertInfo{}, err
 	}
-	if err := os.WriteFile(certKeyPath(id), []byte(keyPEM+"\n"), 0o600); err != nil {
+	if err := util.AtomicWrite(certKeyPath(id), []byte(keyPEM+"\n"), 0o600); err != nil {
 		return CertInfo{}, err
 	}
 
@@ -201,7 +201,7 @@ func saveCertMeta(c CertInfo) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(certMetaPath(c.ID), b, 0o600)
+	return util.AtomicWrite(certMetaPath(c.ID), b, 0o600)
 }
 
 // EnsureSslDir 确保证书目录存在(挂载用)

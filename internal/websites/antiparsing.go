@@ -5,6 +5,8 @@ package websites
 import (
 	"os"
 	"path/filepath"
+
+	"kunpanel/internal/util"
 )
 
 func antiParsingFlag() string { return filepath.Join(baseDir(), "anti_parsing") }
@@ -18,7 +20,7 @@ func AntiParsingEnabled() bool {
 // 关闭则恢复默认欢迎页
 func ApplyAntiParsing(enabled bool) error {
 	if enabled {
-		if err := os.WriteFile(antiParsingFlag(), []byte("1"), 0o644); err != nil {
+		if err := util.AtomicWrite(antiParsingFlag(), []byte("1"), 0o644); err != nil {
 			return err
 		}
 	} else {
@@ -31,7 +33,7 @@ func ApplyAntiParsing(enabled bool) error {
 	} else {
 		content = "# 坤面板生成:默认站点\nserver {\n    listen 80 default_server;\n    server_name _;\n    root /var/www/default;\n    index index.html;\n    location / { try_files $uri $uri/ =404; }\n}\n"
 	}
-	if err := os.WriteFile(conf, []byte(content), 0o644); err != nil {
+	if err := util.AtomicWrite(conf, []byte(content), 0o644); err != nil {
 		return err
 	}
 	return Reload()

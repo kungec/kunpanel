@@ -10,6 +10,7 @@ import (
 
 	"kunpanel/internal/config"
 	"kunpanel/internal/system"
+	"kunpanel/internal/util"
 )
 
 // Point 一个采样点
@@ -102,7 +103,7 @@ func saveToDisk() {
 		return
 	}
 	b, _ := json.Marshal(points)
-	_ = os.WriteFile(dataFile(), b, 0o600)
+	_ = util.AtomicWrite(dataFile(), b, 0o600)
 }
 
 func loadFromDisk() {

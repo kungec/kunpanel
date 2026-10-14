@@ -106,7 +106,7 @@ func apply(settings map[string]string) error {
 		for k, v := range settings {
 			sb.WriteString(k + " " + v + "\n")
 		}
-		if err := os.WriteFile(ourDropin, []byte("# 由坤面板生成\n"+sb.String()), 0o644); err != nil {
+		if err := util.AtomicWrite(ourDropin, []byte("# 由坤面板生成\n"+sb.String()), 0o644); err != nil {
 			return err
 		}
 	} else {
@@ -124,7 +124,7 @@ func apply(settings map[string]string) error {
 			sb.WriteString(k + " " + v + "\n")
 		}
 		conf = sb.String() + conf
-		if err := os.WriteFile(mainConf, []byte(conf), 0o600); err != nil {
+		if err := util.AtomicWrite(mainConf, []byte(conf), 0o600); err != nil {
 			return err
 		}
 	}
@@ -148,7 +148,7 @@ func rollback(backup string) {
 	if err != nil {
 		return
 	}
-	_ = os.WriteFile(mainConf, b, 0o600)
+	_ = util.AtomicWrite(mainConf, b, 0o600)
 	_ = os.Remove(ourDropin)
 	_, _ = util.RunWithTimeout(10*time.Second, sshdBin(), "-t")
 }
@@ -295,5 +295,5 @@ func RemoveKey(index int) error {
 	if len(keys) > 0 {
 		content = strings.Join(keys, "\n") + "\n"
 	}
-	return os.WriteFile(authKeysFile(), []byte(content), 0o600)
+	return util.AtomicWrite(authKeysFile(), []byte(content), 0o600)
 }

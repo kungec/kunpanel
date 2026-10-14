@@ -2,8 +2,12 @@ package server
 
 import (
 	"runtime/debug"
+	"bytes"
 	"compress/gzip"
+
 	"crypto/sha1"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -35,6 +39,8 @@ type Server struct {
 	mux         *http.ServeMux
 	limiter     *authx.Limiter
 	webFS       fs.FS
+	assetVer    string // 静态资源内容哈希(自动 cache-bust,替代手工 ?v= 递增)
+	cspScript   string // script-src 值(按 index.html 内联脚本动态计算哈希)
 }
 
 // Options 服务构建参数
@@ -53,6 +59,7 @@ func New(o Options) *http.Server {
 		limiter:     authx.NewLimiter(),
 		webFS:       o.WebFS,
 	}
+	s.initAssetVer()
 	s.registerAPI()
 	s.mux.Handle("/", s.spaHandler())
 
@@ -67,7 +74,7 @@ func New(o Options) *http.Server {
 
 	return &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.Port),
-		Handler: withSecurityHeaders(s.withRecover(s.withOpLog(s.mux))),
+		Handler: s.withSecurityHeaders(s.withRecover(s.withOpLog(s.mux))),
 		// 慢速攻击防护:头读取限时 + 空闲连接回收。
 		// 不设 Read/WriteTimeout:终端 WS 升级后长连接与大文件下载需要不受限的读写
 		ReadHeaderTimeout: 10 * time.Second,
@@ -192,8 +199,11 @@ func ClientIP(r *http.Request) string {
 	return host
 }
 
-// withSecurityHeaders 附加基础安全响应头
-func withSecurityHeaders(next http.Handler) http.Handler {
+// withSecurityHeaders 附加基础安全响应头。
+// script-src 用 index.html 内联脚本的动态哈希替代 'unsafe-inline':
+// 前端无任何内联事件处理器(全 JS 绑定),哈希收紧后功能不变而 XSS 面大幅缩小。
+// style-src 保留 'unsafe-inline':前端大量使用 style="" 行内样式。
+func (s *Server) withSecurityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("X-Frame-Options", "DENY")
@@ -201,10 +211,9 @@ func withSecurityHeaders(next http.Handler) http.Handler {
 		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		h.Set("X-XSS-Protection", "0")
 		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-		h.Set("Content-Security-Policy",
-			"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "+
-				"img-src 'self' data: blob:; connect-src 'self' ws: wss:; font-src 'self' data:; "+
-				"object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
+		h.Set("Content-Security-Policy", s.cspScript+
+			" style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws: wss:; "+
+			"font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
 		next.ServeHTTP(w, r)
 	})
 }
@@ -254,6 +263,9 @@ func (s *Server) spaHandler() http.Handler {
 				http.Error(w, "read error", http.StatusInternalServerError)
 				return
 			}
+			if p == "index.html" {
+				b = s.injectAssetVer(b)
+			}
 			etag := staticETag(p, b)
 			w.Header().Set("ETag", `"`+etag+`"`)
 			if p == "index.html" {
@@ -275,7 +287,7 @@ func (s *Server) spaHandler() http.Handler {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write(index)
+		_, _ = w.Write(s.injectAssetVer(index))
 	})
 }
 
@@ -354,4 +366,55 @@ func (s *Server) hasAccess(r *http.Request) bool {
 		}
 	}
 	return authx.VerifyToken(cfg.JWTSecret, BearerToken(r), cfg.Username)
+}
+
+// initAssetVer 启动时对内嵌静态资源整体计算内容哈希,
+// 作为前端 ?v= 版本号注入 index.html —— 彻底替代手工递增版本号(历史上多次因忘 bump 导致缓存不刷新)
+func (s *Server) initAssetVer() {
+	h := sha256.New()
+	var index []byte
+	err := fs.WalkDir(s.webFS, ".", func(path string, d fs.DirEntry, err error) error {
+		if path == "index.html" {
+			if b, e := fs.ReadFile(s.webFS, path); e == nil {
+				index = b
+			}
+		}
+		if err != nil || d.IsDir() {
+			return err
+		}
+		b, err := fs.ReadFile(s.webFS, path)
+		if err != nil {
+			return err
+		}
+		h.Write([]byte(path))
+		h.Write(b)
+		return nil
+	})
+	if err != nil {
+		s.assetVer = fmt.Sprintf("%x", time.Now().Unix())
+		s.cspScript = "default-src 'self'; script-src 'self';"
+		return
+	}
+	s.assetVer = fmt.Sprintf("%x", h.Sum(nil))[:10]
+
+	// 内联 <script> 逐块计算 sha256 → CSP 白名单(带 src= 的外链脚本跳过)。
+	// 注意 Go RE2 不支持负向先行断言,外链判断在循环内做
+	hashes := ""
+	re := regexp.MustCompile(`(?s)<script([^>]*)>(.*?)</script>`)
+	for _, m := range re.FindAllSubmatch(index, -1) {
+		if bytes.Contains(m[1], []byte("src=")) {
+			continue
+		}
+		sum := sha256.Sum256(m[2])
+		hashes += fmt.Sprintf(" 'sha256-%s'", base64.StdEncoding.EncodeToString(sum[:]))
+	}
+	if hashes == "" {
+		hashes = " 'unsafe-inline'"
+	}
+	s.cspScript = fmt.Sprintf("default-src 'self'; script-src 'self'%s;", hashes)
+}
+
+// injectAssetVer 把 index.html 里的 __ASSET_VER__ 占位符替换为资源哈希
+func (s *Server) injectAssetVer(b []byte) []byte {
+	return bytes.ReplaceAll(b, []byte("__ASSET_VER__"), []byte(s.assetVer))
 }

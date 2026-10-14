@@ -218,7 +218,7 @@ func save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(storeFile(), b, 0o600)
+	return util.AtomicWrite(storeFile(), b, 0o600)
 }
 
 // List 全部任务
@@ -390,7 +390,7 @@ func ClearLog(id string) error {
 		return fmt.Errorf("任务不存在")
 	}
 	_ = os.MkdirAll(dataDir(), 0o755)
-	return os.WriteFile(logFile(id), []byte{}, 0o644)
+	return util.AtomicWrite(logFile(id), []byte{}, 0o644)
 }
 
 // ReadLog 读取任务最近日志
@@ -600,7 +600,7 @@ func doLogrotate(j Job) (string, error) {
 		tmp := filepath.Join(archiveDir, gw+"_"+f)
 		if b, _ := dockerx.ExecIn(gw, "base64", "-w0", "/var/log/nginx/"+f); b != "" {
 			if dec, de := base64.StdEncoding.DecodeString(strings.TrimSpace(b)); de == nil {
-				_ = os.WriteFile(tmp, dec, 0o644)
+				_ = util.AtomicWrite(tmp, dec, 0o644)
 				moved = append(moved, f)
 			}
 			_, _ = dockerx.ExecIn(gw, "rm", "-f", "/var/log/nginx/"+f)
@@ -690,7 +690,7 @@ func appendLog(id, out string, err error) {
 	if len(b) > 2<<20 {
 		b = b[len(b)-512*1024:]
 	}
-	_ = os.WriteFile(logFile(id), b, 0o644)
+	_ = util.AtomicWrite(logFile(id), b, 0o644)
 }
 
 // StartScheduler 启动调度循环(每 30s 检查一次到期任务)

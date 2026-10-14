@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"kunpanel/internal/config"
+	"kunpanel/internal/util"
 )
 
 // Monitor 拨测目标
@@ -81,11 +82,11 @@ func load() {
 func save() error {
 	_ = os.MkdirAll(dataDir(), 0o755)
 	b, _ := json.MarshalIndent(monitors, "", "  ")
-	if err := os.WriteFile(storeFile(), b, 0o600); err != nil {
+	if err := util.AtomicWrite(storeFile(), b, 0o600); err != nil {
 		return err
 	}
 	hb, _ := json.Marshal(history)
-	return os.WriteFile(histFile(), hb, 0o600)
+	return util.AtomicWrite(histFile(), hb, 0o600)
 }
 
 // Notifier 由 alertx 注入:状态变化时推送(id, name, up, detail)

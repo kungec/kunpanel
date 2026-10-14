@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"kunpanel/internal/appstore"
+	"kunpanel/internal/util"
 )
 
 func authDir() string { return filepath.Join(baseDir(), "auth") }
@@ -85,7 +86,7 @@ func SetSiteAuth(id string, enabled bool, user, password string) error {
 				mu.Unlock()
 				return err
 			}
-			if err := os.WriteFile(htpasswdPath(id), []byte(htpasswdSHA(user, password)+"\n"), 0o644); err != nil {
+			if err := util.AtomicWrite(htpasswdPath(id), []byte(htpasswdSHA(user, password)+"\n"), 0o644); err != nil {
 				mu.Unlock()
 				return err
 			}
@@ -260,7 +261,7 @@ map $request_uri $kun_browser_cache {
 	if err == nil && string(cur) == content {
 		return nil
 	}
-	if err := os.WriteFile(conf, []byte(content), 0o644); err != nil {
+	if err := util.AtomicWrite(conf, []byte(content), 0o644); err != nil {
 		return err
 	}
 	return nil

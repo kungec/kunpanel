@@ -239,7 +239,7 @@ func Create(o CreateOpts) (*Site, error) {
 		}
 		index := filepath.Join(s.Root, "index.html")
 		if !fileExists(index) {
-			_ = os.WriteFile(index, []byte(fmt.Sprintf(`<!DOCTYPE html>
+			_ = util.AtomicWrite(index, []byte(fmt.Sprintf(`<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>%s</title></head>
 <body style="font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:90vh">
 <h1>%s 部署成功 — 由坤面板驱动</h1>
@@ -311,12 +311,12 @@ func SaveSiteConf(id, content string) error {
 	}
 	path := filepath.Join(confDir(), id+".conf")
 	old, _ := os.ReadFile(path)
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := util.AtomicWrite(path, []byte(content), 0o644); err != nil {
 		return err
 	}
 	if err := Reload(); err != nil {
 		// 校验失败还原
-		_ = os.WriteFile(path, old, 0o644)
+		_ = util.AtomicWrite(path, old, 0o644)
 		_ = Reload()
 		return fmt.Errorf("配置校验失败已还原: %v", err)
 	}
@@ -586,7 +586,7 @@ server {
 }
 `, s.Domain, challengeLoc))
 	}
-	return os.WriteFile(path, []byte(b.String()), 0o644)
+	return util.AtomicWrite(path, []byte(b.String()), 0o644)
 }
 
 // Reload 平滑重载 nginx(容器或宿主机)
@@ -729,17 +729,17 @@ func SetRewrite(id, content string) error {
 	if err := os.MkdirAll(rewriteDir(), 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(RewritePath(id), []byte(content), 0o644); err != nil {
+	if err := util.AtomicWrite(RewritePath(id), []byte(content), 0o644); err != nil {
 		return err
 	}
 	// 校验:写入失败自动回滚
 	if err := writeConf(&cp); err != nil {
-		_ = os.WriteFile(RewritePath(id), []byte(old), 0o644)
+		_ = util.AtomicWrite(RewritePath(id), []byte(old), 0o644)
 		_ = writeConf(&cp)
 		return fmt.Errorf("规则校验失败,已回滚: %v", err)
 	}
 	if err := Reload(); err != nil {
-		_ = os.WriteFile(RewritePath(id), []byte(old), 0o644)
+		_ = util.AtomicWrite(RewritePath(id), []byte(old), 0o644)
 		_ = writeConf(&cp)
 		_ = Reload()
 		return fmt.Errorf("重载失败,已回滚: %v", err)

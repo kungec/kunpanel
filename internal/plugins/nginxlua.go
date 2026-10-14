@@ -69,7 +69,7 @@ func UpgradeNginxForWaf(w io.Writer) error {
 	}
 	df := filepath.Join(buildDir, "Dockerfile")
 	if old, e := os.ReadFile(df); e != nil || string(old) != nginxLuaDockerfile {
-		if err := os.WriteFile(df, []byte(nginxLuaDockerfile), 0o644); err != nil {
+		if err := util.AtomicWrite(df, []byte(nginxLuaDockerfile), 0o644); err != nil {
 			return err
 		}
 	}
@@ -95,7 +95,7 @@ func UpgradeNginxForWaf(w io.Writer) error {
 		return fmt.Errorf("nginx compose 中未找到 image 行,请卸载后重新安装 Nginx")
 	}
 	if content != string(b) {
-		if err := os.WriteFile(composeFile, []byte(content), 0o644); err != nil {
+		if err := util.AtomicWrite(composeFile, []byte(content), 0o644); err != nil {
 			return err
 		}
 	}

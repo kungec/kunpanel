@@ -4,6 +4,8 @@ package websites
 import (
 	"os"
 	"path/filepath"
+
+	"kunpanel/internal/util"
 )
 
 func gzipFlag() string { return filepath.Join(baseDir(), "gzip_on") }
@@ -25,10 +27,10 @@ func GzipEnabled() bool {
 // ApplyGzip 开启/关闭全站 Gzip 并重载
 func ApplyGzip(enabled bool) error {
 	if enabled {
-		if err := os.WriteFile(gzipFlag(), []byte("1"), 0o644); err != nil {
+		if err := util.AtomicWrite(gzipFlag(), []byte("1"), 0o644); err != nil {
 			return err
 		}
-		if err := os.WriteFile(gzipConf(), []byte(gzipContent), 0o644); err != nil {
+		if err := util.AtomicWrite(gzipConf(), []byte(gzipContent), 0o644); err != nil {
 			return err
 		}
 	} else {

@@ -22,6 +22,7 @@ import (
 	"golang.org/x/crypto/acme"
 
 	"kunpanel/internal/taskx"
+	"kunpanel/internal/util"
 )
 
 // ACME 目录(个人版面板固定官方源;staging 供测试避免触发正式环境限频)
@@ -58,7 +59,7 @@ func saveACMEAccount(a *ACMEAccount) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(acmeAccountPath(), b, 0o600)
+	return util.AtomicWrite(acmeAccountPath(), b, 0o600)
 }
 
 // GetACMEConfig 返回账户配置(隐藏私钥)
@@ -215,7 +216,7 @@ func IssueCertForSite(siteID string, staging bool, w io.Writer) (string, error) 
 			return "", err
 		}
 		tokenFile := filepath.Join(chDir, chal.Token)
-		if err := os.WriteFile(tokenFile, []byte(keyAuth), 0o644); err != nil {
+		if err := util.AtomicWrite(tokenFile, []byte(keyAuth), 0o644); err != nil {
 			return "", err
 		}
 		fmt.Fprintf(w, ">> 验证文件已写入: %s\n", "/.well-known/acme-challenge/"+chal.Token)
@@ -268,10 +269,10 @@ func IssueCertForSite(siteID string, staging bool, w io.Writer) (string, error) 
 	}
 	certID := "cert_" + fmt.Sprintf("%d", time.Now().UnixNano()/1000000)
 	_ = os.MkdirAll(sslDir(), 0o755)
-	if err := os.WriteFile(certCrtPath(certID), []byte(chain.String()), 0o644); err != nil {
+	if err := util.AtomicWrite(certCrtPath(certID), []byte(chain.String()), 0o644); err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(certKeyPath(certID), []byte(string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}))), 0o600); err != nil {
+	if err := util.AtomicWrite(certKeyPath(certID), []byte(string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}))), 0o600); err != nil {
 		return "", err
 	}
 	// 解析叶证书有效期
@@ -358,7 +359,7 @@ func renewCertInPlace(id string, w io.Writer) error {
 		if err := os.MkdirAll(chDir, 0o755); err != nil {
 			return err
 		}
-		if err := os.WriteFile(filepath.Join(chDir, chal.Token), []byte(keyAuth), 0o644); err != nil {
+		if err := util.AtomicWrite(filepath.Join(chDir, chal.Token), []byte(keyAuth), 0o644); err != nil {
 			return err
 		}
 		if _, err := client.Accept(ctx, chal); err != nil {
@@ -399,10 +400,10 @@ func renewCertInPlace(id string, w io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(certCrtPath(id), []byte(chain.String()), 0o644); err != nil {
+	if err := util.AtomicWrite(certCrtPath(id), []byte(chain.String()), 0o644); err != nil {
 		return err
 	}
-	if err := os.WriteFile(certKeyPath(id), []byte(string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}))), 0o600); err != nil {
+	if err := util.AtomicWrite(certKeyPath(id), []byte(string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}))), 0o600); err != nil {
 		return err
 	}
 	expire, days := parseCertExpiry(der[0])

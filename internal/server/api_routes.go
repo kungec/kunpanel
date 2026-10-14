@@ -18,6 +18,7 @@ func (s *Server) registerAPI() {
 
 	// 概览 / 系统
 	m.Handle("GET /api/v1/dashboard", wrap(http.HandlerFunc(s.handleDashboard)))
+	m.Handle("GET /api/v1/system/quick", wrap(http.HandlerFunc(s.handleSystemQuick)))
 	m.Handle("GET /api/v1/settings", wrap(http.HandlerFunc(s.handleGetSettings)))
 	m.Handle("POST /api/v1/settings", wrap(http.HandlerFunc(s.handleSaveSettings)))
 	m.Handle("POST /api/v1/settings/password", wrap(http.HandlerFunc(s.handleChangePassword)))

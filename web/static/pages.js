@@ -2672,7 +2672,9 @@ PAGES.plugins = {
       '<div class="settings-section"><div class="settings-section-title">搜索引擎蜘蛛白名单<span class="help" style="margin:0">启用的爬虫完全跳过检测:CC 人机验证、临时封禁都不会针对它们,保护 SEO 收录</span></div>' +
       '<div class="settings-row"><label style="min-width:170px">启用蜘蛛白名单</label><label class="radio-line"><input type="checkbox" id="spider-enable" ' + (st.spider_white_enable ? "checked" : "") + "> 启用</label></div>" +
       '<div class="settings-row"><label style="align-items:flex-start">UA 特征(正则)<div class="settings-hint" style="margin:0">每行一条,匹配 User-Agent 即放行</div></label>' +
-      '<textarea class="textarea mono" id="spider-list" rows="4" style="max-width:520px;font-size:12px">' + esc((st.spider_white || []).join("\n")) + "</textarea></div></div>" +
+      '<textarea class="textarea mono" id="spider-list" rows="4" style="max-width:520px;font-size:12px">' + esc((st.spider_white || []).join("\n")) + "</textarea>" +
+      '<div class="settings-row"><label style="min-width:170px">严格反向 DNS 验证</label><label class="radio-line"><input type="checkbox" id="spider-dns" ' + (st.spider_verify_dns ? "checked" : "") + "> 启用</label>" +
+      '<span class="settings-hint" style="margin:0">防伪造 Googlebot UA 整体绕过 WAF:PTR 反查 + 正向确认必须匹配客户端 IP,验证失败按普通请求检测(开启后蜘蛛首次访问可能因 DNS 查询略慢)</span></div></div>' +
       '<div class="settings-section"><div class="settings-section-title">危险 HTTP 方法拦截<span class="help" style="margin:0">命中返回 405,可防 TRACK/TRACE 跟踪探测;REST 接口需要 PUT/DELETE 时自行增删</span></div>' +
       '<div class="settings-row"><label style="min-width:170px">启用方法拦截</label><label class="radio-line"><input type="checkbox" id="method-enable" ' + (st.method_block_enable ? "checked" : "") + "> 启用</label></div>" +
       '<div class="settings-row"><label style="align-items:flex-start">拦截的方法<div class="settings-hint" style="margin:0">每行一个,大写,如 TRACE</div></label>' +
@@ -2695,6 +2697,7 @@ PAGES.plugins = {
     qs("#waf-enable", body).onchange = function() { self.st.enabled = this.checked; };
     qs("#waf-save-global", body).onclick = function() {
       self.st.spider_white_enable = qs("#spider-enable", body).checked;
+      self.st.spider_verify_dns = qs("#spider-dns", body).checked;
       self.st.spider_white = qs("#spider-list", body).value.split("\n").map(function(x) { return x.trim(); }).filter(Boolean);
       self.st.method_block_enable = qs("#method-enable", body).checked;
       self.st.method_block_list = qs("#method-list", body).value.split("\n").map(function(x) { return x.trim(); }).filter(Boolean);
@@ -4340,6 +4343,7 @@ PAGES.firewall = {
   async render(el) {
     el.innerHTML = '<div class="card"><div class="card-title">系统防火墙' +
       '<button class="btn btn-sm btn-plain" id="fw-refresh">' + I("refresh") + " 刷新</button></div>" +
+      '<div class="help" style="margin:-6px 0 12px;padding:8px 12px;background:var(--warning-light,#fff7e6);border:1px solid var(--warning,#fbbf24);border-radius:8px">⚠ Docker 发布的端口(应用商店应用、容器 -p 映射)不经过本页规则,直接在 iptables DOCKER 链放行——如需限制外部访问,请在应用的 compose 中改绑 127.0.0.1 或使用宿主防火墙工具直接操作 DOCKER 链</div>' +
       '<div id="fw-body">' + skeletonTable(6, 4) + "</div></div>";
     var self = this;
     qs("#fw-refresh", el).onclick = function() { self.fetch(el); };

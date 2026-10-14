@@ -88,11 +88,21 @@ func Info() map[string]any {
 	if out, err := util.RunWithTimeout(8*time.Second, "docker", "images", "-q"); err == nil {
 		res["images"] = len(nonEmptyLines(out))
 	}
-	if out, err := util.RunWithTimeout(8*time.Second, "docker", "ps", "-aq"); err == nil {
-		res["containers"] = len(nonEmptyLines(out))
-	}
-	if out, err := util.RunWithTimeout(8*time.Second, "docker", "ps", "-q"); err == nil {
-		res["runningCount"] = len(nonEmptyLines(out))
+	// 一次 ps -a 同时取容器总数与运行数(原为两次调用)
+	if out, err := util.RunWithTimeout(8*time.Second, "docker", "ps", "-a", "--format", "{{.State}}"); err == nil {
+		lines := strings.Split(strings.TrimSpace(out), "\n")
+		total, running := 0, 0
+		for _, ln := range lines {
+			if strings.TrimSpace(ln) == "" {
+				continue
+			}
+			total++
+			if strings.HasPrefix(ln, "running") {
+				running++
+			}
+		}
+		res["containers"] = total
+		res["runningCount"] = running
 	}
 	infoCache = res
 	infoAt = time.Now()

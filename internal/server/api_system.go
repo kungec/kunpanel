@@ -30,6 +30,16 @@ func atoiDefault(s string, def int) int {
 	return def
 }
 
+// handleSystemQuick 轻量系统快照(顶栏监控芯片专用:不触发 docker 子进程)
+func (s *Server) handleSystemQuick(w http.ResponseWriter, r *http.Request) {
+	snap := system.Get()
+	cfg := config.M.Get()
+	OK(w, map[string]any{
+		"system":       snap,
+		"panel_name":   cfg.PanelName,
+	})
+}
+
 // handleDashboard 概览数据
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	snap := system.Get()

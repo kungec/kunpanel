@@ -117,6 +117,9 @@ type WafSettings struct {
 	// 蜘蛛白名单:启用的搜索引擎爬虫完全跳过检测(CC 验证也不会拦)
 	SpiderWhiteEnable bool      `json:"spider_white_enable"`
 	SpiderWhite       []string  `json:"spider_white"`
+	// SpiderVerifyDNS 严格模式:UA 命中蜘蛛白名单后,再做反向 DNS + 正向确认,
+	// 防止攻击者伪造 Googlebot UA 整体绕过 WAF(第三轮审计遗留建议)。默认关闭。
+	SpiderVerifyDNS bool `json:"spider_verify_dns"`
 	// 危险 HTTP 方法拦截
 	MethodBlockEnable bool     `json:"method_block_enable"`
 	MethodBlockList   []string `json:"method_block_list"`

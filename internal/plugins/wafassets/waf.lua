@@ -291,8 +291,48 @@ local ua = ngx.var.http_user_agent or ""
 if in_list(ip, conf.ip_white) then return end
 if in_list(uri, conf.url_white) then return end
 
+-- 蜘蛛反向 DNS 验证:PTR 记录 → 正向解析 → 必须包含客户端 IP。
+-- 结果按 IP 缓存 1 小时,避免每请求 DNS 查询。查询失败按"未验证"处理(不放行)。
+local spider_cache = {}
+local function spider_dns_verified(ip)
+    local now = ngx.now()
+    local c = spider_cache[ip]
+    if c and (now - c[2]) < 3600 then return c[1] end
+    local ok = false
+    local okload, dns = pcall(require, "resty.dns.resolver")
+    if okload and dns then
+        local res, rerr = dns:new({
+            nameservers = { { "127.0.0.11", 53 }, { "8.8.8.8", 53 } },
+            timeout = 1500, retrans = 2,
+        })
+        if res and not rerr then
+            local p1, p2, p3, p4 = ip:match("^(%d+)%.(%d+)%.(%d+)%.(%d+)$")
+            if p1 then
+                local ptr_answers = res:query(p4 .. "." .. p3 .. "." .. p2 .. "." .. p1 .. ".in-addr.arpa", { qtype = dns.TYPE_PTR })
+                if ptr_answers and not ptr_answers.errcode then
+                    local host = ptr_answers[1] and ptr_answers[1].ptr
+                    if host then
+                        local fwd = res:query(host, { qtype = dns.TYPE_A })
+                        if fwd and not fwd.errcode then
+                            for _, ans in ipairs(fwd) do
+                                if ans.address == ip then ok = true break end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    spider_cache[ip] = { ok, now }
+    return ok
+end
+
 -- 搜索引擎蜘蛛白名单:爬虫完全跳过检测(CC 人机验证/封禁均不涉及)
-if conf.spider_white_enable and in_list(ua, conf.spider_white) then return end
+-- 严格模式(spider_verify_dns):UA 命中后做反向 DNS + 正向确认,
+-- 验证失败的伪装蜘蛛(伪造 Googlebot UA)回落到正常检测
+if conf.spider_white_enable and in_list(ua, conf.spider_white) then
+    if not conf.spider_verify_dns or spider_dns_verified(ip) then return end
+end
 
 -- 验证码模式:处理挑战表单回跳(答对颁发 Cookie)
 if conf.cc_enable and (conf.cc_mode or "rate") == "captcha" and ngx.var.arg___kcc_ans then

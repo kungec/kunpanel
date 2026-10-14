@@ -304,7 +304,9 @@ const App = {
     };
     qs("#btn-tasks", app).onclick = () => taskCenter();
     refreshTasksBadge();
-    setInterval(refreshTasksBadge, 10000);
+    setInterval(refreshTasksBadge, 30000);
+    // 回到前台立即刷新一次,避免后台节流期间的陈旧角标
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) { refreshTasksBadge(); refreshNotifyBadge(); } });
 
     // 面板更新检测:服务端版本与页面启动时不同(说明部署了新版)则提示刷新,避免旧标签页一直跑旧 JS
     const verPoll = async () => {
@@ -423,7 +425,7 @@ const App = {
       // 概览页有自己的 timer 在拉 /dashboard,避免同一时刻双倍请求
       if (location.hash === "#/" || location.hash === "#/dashboard") return;
       try {
-        const d = await api("/dashboard");
+        const d = await api("/system/quick");
         const s = d.system;
         const cpu = qs("#mc-cpu"), mem = qs("#mc-mem");
         if (!cpu) { this.stopMonitor(); return; }
@@ -432,8 +434,8 @@ const App = {
         const rx = qs("#mc-rx"), tx = qs("#mc-tx");
         if (rx) rx.textContent = fmtSpeed(s.net_rx_speed || 0);
         if (tx) tx.textContent = fmtSpeed(s.net_tx_speed || 0);
-        if (d.panel && d.panel.panelName) {
-          this.panelName = d.panel.panelName;
+        if (d.panel_name) {
+          this.panelName = d.panel_name;
           const lt = qs(".logo-text");
           if (lt && lt.textContent !== d.panel.panelName) lt.textContent = d.panel.panelName;
         }

@@ -3,7 +3,17 @@
 > 轻量级服务器运维管理面板 —— Go 语言单二进制实现,内嵌全部前端资源,开箱即用。
 > A lightweight server management panel in a single Go binary (inspired by 1Panel / 宝塔).
 
-![Version](https://img.shields.io/badge/version-v2.46.4-blue) ![Go](https://img.shields.io/badge/Go-1.23+-00ADD8) ![License](https://img.shields.io/badge/license-MIT-green) ![Platform](https://img.shields.io/badge/platform-linux%20%7C%20windows-lightgrey)
+![Version](https://img.shields.io/badge/version-v2.46.4-blue) ![Go](https://img.shields.io/badge/Go-1.23+-00ADD8) ![License](https://img.shields.io/badge/license-MIT-green) ![Platform](https://img.shields.io/badge/platform-linux%20%7C%20windows-lightgrey) ![QQ群](https://img.shields.io/badge/QQ%E7%BE%A4-307386089-red)
+
+
+<div align="center">
+
+**🎉 特别感谢 [跨境VPS](https://www.kjvps.com) 提供服务器资源赞助**
+*专注家宽住宅 IP 云服务器 · 原生 IP / 大带宽 / 高防*
+
+💬 交流 QQ 群:**307386089**(反馈 bug / 功能建议 / 交流运维经验)
+
+</div>
 
 ## 一键安装
 
@@ -42,6 +52,16 @@ bash install.sh --uninstall              # 卸载
 docker build -t kunpanel:latest .
 docker run -d --name kunpanel -p 20000:20000 -v kunpanel-data:/opt/kunpanel/data -v /var/run/docker.sock:/var/run/docker.sock kunpanel:latest
 ```
+
+## 界面预览
+
+| 概览 | 应用商店 |
+|---|---|
+| ![概览](docs/screenshots/dashboard.png) | ![应用商店](docs/screenshots/store.png) |
+| **网站管理** | **文件管理** |
+| ![网站](docs/screenshots/websites.png) | ![文件](docs/screenshots/files.png) |
+| **安全中心(WAF)** | **监控中心** |
+| ![安全](docs/screenshots/security.png) | ![监控](docs/screenshots/monitor.png) |
 
 ## 功能全景
 

@@ -37,6 +37,10 @@ func (s *Server) handleDockerInstall(w http.ResponseWriter, r *http.Request) {
 		Mirror string `json:"mirror"` // aliyun / 空
 	}
 	_ = readJSON(r, &req)
+	if _, engineOK := dockerx.Installed(); engineOK {
+		Fail(w, http.StatusConflict, "Docker 已安装且引擎运行中,无需重复安装")
+		return
+	}
 	t, err := taskx.M.Start("docker-install", func(w io.Writer) error {
 		return dockerx.InstallEngine(req.Mirror, w)
 	})

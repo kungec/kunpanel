@@ -4656,7 +4656,7 @@ PAGES.docker = {
         '<button class="btn btn-primary" id="dk-install">' + I("download") + " 一键安装 Docker</button></div></div>";
       qs("#dk-install", el).onclick = function() {
         api("/docker/install", { method: "POST", body: { mirror: qs("#dk-mirror", el).value } }).then(function(d) {
-          taskModal(d.data.id, function(st) { if (st === "success") self.render(el); });
+          taskModal(d.id, function(st) { if (st === "success") self.render(el); });
         }).catch(function(e) { toast(e.message, "error", 5000); });
       };
       return;
@@ -4834,7 +4834,7 @@ PAGES.docker = {
           image: image, name: name, ports: ports, volumes: vols, env: {}, restart: qs("#dkc-restart", m.el).value,
         }});
         m.close();
-        taskModal(d.data.id, function(st) { if (st === "success") toast("容器已创建并启动"); PAGES.docker.renderTab(body); });
+        taskModal(d.id, function(st) { if (st === "success") toast("容器已创建并启动"); PAGES.docker.renderTab(body); });
       } catch (e) { toast(e.message, "error"); }
     };
   },

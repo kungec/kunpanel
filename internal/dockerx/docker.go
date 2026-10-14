@@ -79,8 +79,14 @@ func Info() map[string]any {
 	cliOK, engineOK := Installed()
 	res["installed"] = cliOK
 	if !engineOK {
-		infoCache = res
-		infoAt = time.Now()
+		// CLI 在但引擎检查失败(如负载下子进程超时):只短缓存 3s,避免"未安装"假状态持续 30s
+		if !cliOK {
+			infoCache = res
+			infoAt = time.Now()
+		} else {
+			infoCache = res
+			infoAt = time.Now().Add(-27 * time.Second)
+		}
 		return res
 	}
 	res["running"] = true

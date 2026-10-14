@@ -20,6 +20,7 @@ import (
 	"kunpanel/internal/appstore"
 	"kunpanel/internal/config"
 	"kunpanel/internal/websites"
+	"kunpanel/internal/util"
 )
 
 //go:embed wafassets/waf.lua wafassets/kunwaf.conf
@@ -295,7 +296,7 @@ func saveWafConfig(c *wafConfigFile) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(wafSettingsPath(), b, 0o644)
+	return util.AtomicWrite(wafSettingsPath(), b, 0o644)
 }
 
 // GetWafSettings 读取设置(不含规则)

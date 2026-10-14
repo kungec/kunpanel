@@ -323,6 +323,12 @@ local function spider_dns_verified(ip)
             end
         end
     end
+    if true then
+        -- 防缓存无限增长:超过 2000 条清空重建(宽松限位,分布式多 IP 场景兜底)
+        local n = 0
+        for _ in pairs(spider_cache) do n = n + 1 end
+        if n > 2000 then spider_cache = {} end
+    end
     spider_cache[ip] = { ok, now }
     return ok
 end

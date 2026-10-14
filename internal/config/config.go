@@ -163,7 +163,7 @@ func (m *Manager) Save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(m.path, b, 0o600)
+	return util.AtomicWrite(m.path, b, 0o600)
 }
 
 func (m *Manager) Get() Config {
@@ -180,7 +180,7 @@ func (m *Manager) Update(fn func(c *Config)) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(m.path, b, 0o600)
+	return util.AtomicWrite(m.path, b, 0o600)
 }
 
 func (m *Manager) CheckPassword(pwd string) bool {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"kunpanel/internal/config"
+	"kunpanel/internal/util"
 )
 
 const maxKeep = 200
@@ -116,5 +117,5 @@ func save(list []Item) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(storePath(), b, 0o600)
+	return util.AtomicWrite(storePath(), b, 0o600)
 }

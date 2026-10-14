@@ -102,7 +102,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func readJSON(r *http.Request, v any) error {
 	defer r.Body.Close()
-	dec := json.NewDecoder(io.LimitReader(r.Body, 64<<20))
+	dec := json.NewDecoder(io.LimitReader(r.Body, 16<<20))
 	return dec.Decode(v)
 }
 

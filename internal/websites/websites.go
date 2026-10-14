@@ -109,7 +109,7 @@ func save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(storeFile(), b, 0o600)
+	return util.AtomicWrite(storeFile(), b, 0o600)
 }
 
 // ReloadMode 说明当前 nginx 的应用方式

@@ -44,7 +44,7 @@ for d in "$OUT"/pkg_*; do
     (cd "$OUT" && cp "${name}.zip" "kunpanel_windows_${arch}.zip")
   else
     cp scripts/install.sh "$d/"
-    tar -czf "$OUT/${name}.tar.gz" -C "$OUT" "$(basename "$d")"
+    COPYFILE_DISABLE=1 tar --no-xattrs -czf "$OUT/${name}.tar.gz" -C "$OUT" "$(basename "$d")"
     (cd "$OUT" && cp "${name}.tar.gz" "kunpanel_${os}_${arch}.tar.gz")
   fi
   rm -rf "$d"

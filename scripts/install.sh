@@ -12,7 +12,7 @@
 #                    --with-docker            同时安装 Docker 引擎
 #                    --mirror aliyun          Docker 使用阿里云镜像源
 #                    --proxy https://gh-proxy.com/   GitHub 下载加速
-#                    --version v1.0.0         指定版本
+#                    --version v2.46.4        指定版本(默认 latest 取最新)
 #                    --offline /path/kunpanel.tar.gz   离线安装
 #                    --uninstall              卸载
 # ============================================================================
@@ -208,7 +208,8 @@ RestrictSUIDSGID=true
 WantedBy=multi-user.target
 EOF
   systemctl daemon-reload
-  systemctl enable --now $KP_SERVICE
+  systemctl enable $KP_SERVICE >/dev/null 2>&1 || true
+  systemctl restart $KP_SERVICE || systemctl start $KP_SERVICE
   ok "已注册 systemd 服务: systemctl {start|stop|restart|status} $KP_SERVICE"
 }
 

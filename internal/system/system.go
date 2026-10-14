@@ -76,7 +76,6 @@ var (
 	staticHost   host.InfoStat
 	staticCPU    []cpu.InfoStat
 	staticCores  int
-	partAt       time.Time
 	partDisks    []DiskInfo
 	sampleRounds int
 )
@@ -226,7 +225,6 @@ func collect() Snapshot {
 	sampleRounds++
 	if sampleRounds%15 == 1 || partDisks == nil {
 		partDisks = collectDisks()
-		partAt = time.Now()
 	}
 	if du, err := disk.Usage(rootPath()); err == nil {
 		s.Disks = append(s.Disks, DiskInfo{

@@ -805,14 +805,14 @@ func seedDefaultSite() {
 h1{font-size:22px;color:#303133}p{color:#909399;font-size:14px}</style></head>
 <body><div class="box"><h1>Nginx 已由坤面板部署成功</h1>
 <p>在【网站】页面创建站点,或通过【文件】管理 /opt/kunpanel/data/websites/roots 下的网页文件</p></div></body></html>`
-	def := fmt.Sprintf(`server {
+	def := `server {
     listen 80 default_server;
     server_name _;
     root /var/www/default;
     index index.html;
     location / { try_files $uri $uri/ =404; }
 }
-`)
+`
 	_ = os.WriteFile(filepath.Join(rootsDir(), "default", "index.html"), []byte(welcome), 0o644)
 	_ = os.WriteFile(filepath.Join(confDir(), "default.conf"), []byte(def), 0o644)
 }

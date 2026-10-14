@@ -52,9 +52,7 @@ func ListServices() ([]ServiceUnit, error) {
 			continue
 		}
 		name := fields[0]
-		if strings.HasSuffix(name, ".service") {
-			name = strings.TrimSuffix(name, ".service")
-		}
+		name = strings.TrimSuffix(name, ".service")
 		list = append(list, ServiceUnit{
 			Name:   name,
 			Active: fields[2],

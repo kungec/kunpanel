@@ -35,7 +35,6 @@ type Options struct {
 	WebFS      fs.FS
 }
 
-var version = "dev"
 
 // Run 面板主入口:加载配置 -> 启动调度器 -> 监听 HTTP
 func Run(o Options) error {
@@ -44,7 +43,6 @@ func Run(o Options) error {
 	// 软内存上限:异常泄漏时激进 GC 而非无限增长(非硬限制,不 panic)
 	debug.SetMemoryLimit(128 << 20)
 
-	version = o.Version
 	server.Version = o.Version
 
 	if _, err := config.Load(); err != nil {

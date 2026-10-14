@@ -2,6 +2,7 @@ package captcha
 
 import (
 	"bytes"
+	crand "crypto/rand"
 	"encoding/base64"
 	"fmt"
 	"image"
@@ -88,7 +89,9 @@ func (s *Store) New() (string, string) {
 
 	code := make([]byte, 4)
 	for i := range code {
-		code[i] = charset[randInt(0, len(charset)-1)]
+		// 验证码字符必须用加密随机数:math/rand 状态可被观察输出推演,
+		// 进而批量预测后续验证码(第三轮深度审计)
+		code[i] = charset[cryptoInt(len(charset))]
 	}
 	id := randomID()
 	s.items[id] = item{answer: string(code), exp: now.Add(s.ttl)}
@@ -231,17 +234,6 @@ func distort(img *image.RGBA, amp, period float64) {
 }
 
 
-var palette = []color.RGBA{
-	{0, 102, 255, 255}, {103, 194, 58, 255}, {230, 162, 60, 255},
-	{245, 108, 108, 255}, {124, 58, 237, 255}, {14, 165, 233, 255},
-	{217, 119, 6, 255}, {51, 65, 85, 255},
-}
-
-func randColor(minAlpha uint8) color.RGBA {
-	c := palette[randInt(0, len(palette)-1)]
-	return c
-}
-
 func abs(n int) int {
 	if n < 0 {
 		return -n
@@ -249,6 +241,7 @@ func abs(n int) int {
 	return n
 }
 
+// randInt 仅用于噪线/字符抖动等装饰性绘制(非安全用途)
 func randInt(min, max int) int {
 	if max <= min {
 		return min
@@ -256,8 +249,23 @@ func randInt(min, max int) int {
 	return min + rand.Intn(max-min+1)
 }
 
+// cryptoInt 加密安全的 [0,max) 随机整数(拒绝采样避免模偏差)
+func cryptoInt(max int) int {
+	if max <= 0 {
+		return 0
+	}
+	b := make([]byte, 1)
+	for {
+		_, _ = crand.Read(b)
+		v := int(b[0])
+		if lim := 256 - 256%max; v < lim {
+			return v % max
+		}
+	}
+}
+
 func randomID() string {
 	b := make([]byte, 12)
-	_, _ = rand.Read(b)
+	_, _ = crand.Read(b)
 	return fmt.Sprintf("%x", b)
 }

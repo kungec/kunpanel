@@ -505,9 +505,7 @@ func UninstallWaf(w io.Writer) error {
 }
 
 // ensureWafMount 老版本 OpenResty 的 compose 可能没有 waf 目录挂载,补上并重建容器
-func ensureWafMount(w io.Writer) error {
-	return appstore.EnsureNginxMounts("openresty", w)
-}// EnsureNginxMounts 确保面板管理的 nginx/openresty 容器挂载了 WAF 与 SSL 目录,
+// EnsureNginxMounts 确保面板管理的 nginx/openresty 容器挂载了 WAF 与 SSL 目录,
 // 缺失时(旧版本安装的实例)自动补挂载并重建容器
 
 func copyAsset(name, dst string) error {

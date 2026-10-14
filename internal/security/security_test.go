@@ -138,9 +138,9 @@ func TestPasswordHashing(t *testing.T) {
 	if !util.ConstantTimeEq(h1, h2) || util.ConstantTimeEq(h1, "xx") {
 		t.Fatal("ConstantTimeEq 行为异常")
 	}
-	// 旧版 sha256 兼容路径仍可用
-	if util.Hash("pw", "s") != util.Hash("pw", "s") {
-		t.Fatal("legacy hash 异常")
+	// 旧版 sha256 兼容路径:输出格式锁定(golden 值,防格式漂移破坏兼容)
+	if got := util.Hash("pw", "s"); got != "31642d14ee83ae98af5b1db2816650121808ade58590b74a897169cfb1d88e8a" {
+		t.Fatalf("legacy hash 格式漂移: %s", got)
 	}
 }
 

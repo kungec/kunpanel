@@ -30,15 +30,10 @@ type Settings struct {
 	SMTPSettings
 }
 
-type alertFile struct {
-	Settings
-}
-
 var (
-	mu          sync.Mutex
-	over        = map[string]int{}   // 指标 -> 连续超阈值次数
-	alerted     = map[string]bool{}  // 指标 -> 本次 episode 是否已告警
-	stopCh      chan struct{}
+	mu      sync.Mutex
+	over    = map[string]int{}  // 指标 -> 连续超阈值次数
+	alerted = map[string]bool{} // 指标 -> 本次 episode 是否已告警
 )
 
 func confPath() string { return filepath.Join(config.DataDir(), "alert.json") }

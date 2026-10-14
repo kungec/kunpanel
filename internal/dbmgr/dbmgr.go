@@ -424,10 +424,6 @@ func ValidIdentifier(s string) bool {
 	return true
 }
 
-func itoa(n int) string {
-	return fmt.Sprintf("%d", n)
-}
-
 // ChangeRootPassword 修改 MySQL/MariaDB root 密码:
 // 1. 用旧密码执行 ALTER USER(root@% 与 root@localhost)
 // 2. 同步更新面板实例记录,否则后续管理操作会因旧密码失败

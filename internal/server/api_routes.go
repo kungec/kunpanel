@@ -47,6 +47,10 @@ func (s *Server) registerAPI() {
 	m.Handle("GET /api/v1/tasks", wrap(http.HandlerFunc(s.handleTaskList)))
 	m.Handle("GET /api/v1/tasks/{id}", wrap(http.HandlerFunc(s.handleTaskGet)))
 
+	// 面板在线更新(对接 GitHub Releases)
+	m.Handle("GET /api/v1/panel/update", wrap(http.HandlerFunc(s.handlePanelUpdateCheck)))
+	m.Handle("POST /api/v1/panel/update/apply", wrap(http.HandlerFunc(s.handlePanelUpdateApply)))
+
 	// 应用商店
 	m.Handle("GET /api/v1/apps/templates", wrap(http.HandlerFunc(s.handleAppTemplates)))
 	m.Handle("GET /api/v1/apps/hub-tags", wrap(http.HandlerFunc(s.handleAppHubTags)))

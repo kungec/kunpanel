@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -17,6 +18,7 @@ import (
 	"kunpanel/internal/config"
 	"kunpanel/internal/dockerx"
 	"kunpanel/internal/logsx"
+	"kunpanel/internal/panelupdate"
 	"kunpanel/internal/system"
 	"kunpanel/internal/taskx"
 )
@@ -287,6 +289,58 @@ func (s *Server) handleLogsClear(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	OK(w, nil)
+}
+
+// handlePanelUpdateCheck 检查 GitHub 最新版本(force=1 跳过缓存强制拉取)
+func (s *Server) handlePanelUpdateCheck(w http.ResponseWriter, r *http.Request) {
+	var info *panelupdate.Info
+	var err error
+	if r.URL.Query().Get("force") == "1" {
+		info, err = panelupdate.Check()
+	} else {
+		info = panelupdate.Cached()
+		if info == nil {
+			info, err = panelupdate.Check()
+		}
+	}
+	if err != nil {
+		// 有缓存就带错误提示返回缓存,否则报错
+		if info = panelupdate.Cached(); info != nil {
+			OK(w, info)
+			return
+		}
+		Fail(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	OK(w, info)
+}
+
+// handlePanelUpdateApply 一键在线更新:下载对应平台安装包 → 替换二进制 → 自动重启
+func (s *Server) handlePanelUpdateApply(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Tag string `json:"tag"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		Fail(w, http.StatusBadRequest, "参数错误")
+		return
+	}
+	req.Tag = strings.TrimSpace(req.Tag)
+	if _, ok := panelupdate.Semver(req.Tag); !ok {
+		Fail(w, http.StatusBadRequest, "非法版本号")
+		return
+	}
+	if latest := panelupdate.Cached(); latest != nil && req.Tag != latest.Latest {
+		Fail(w, http.StatusBadRequest, "目标版本与检查结果不一致,请重新检查更新")
+		return
+	}
+	t, err := taskx.M.Start("panel-update", func(w io.Writer) error {
+		return panelupdate.Apply(req.Tag, w)
+	})
+	if err != nil {
+		Fail(w, http.StatusConflict, err.Error())
+		return
+	}
+	OK(w, t)
 }
 
 // handleLogsExport 导出登录/操作日志为 CSV

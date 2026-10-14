@@ -3418,6 +3418,15 @@ PAGES.settings = {
     function renderAbout() {
       body.innerHTML =
         '<div class="settings-section">' +
+        '<div class="settings-section-title">面板更新</div>' +
+        '<div class="settings-hint" style="margin-bottom:10px">对接 GitHub Releases,自动检查新版本;一键更新会下载安装包并自动重启面板(旧版备份为 .bak)</div>' +
+        '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
+        '<span class="help" style="margin:0" id="upd-state">当前版本 ' + esc(s.version) + '</span>' +
+        '<button class="btn btn-sm btn-plain" id="s-upd-check">' + I("refresh") + ' 检查更新</button>' +
+        '<button class="btn btn-sm btn-primary" id="s-upd-apply" style="display:none">' + I("download") + ' 一键更新</button>' +
+        '</div>' +
+        '<pre class="am-raw" id="upd-notes" style="display:none;max-height:200px;overflow:auto;white-space:pre-wrap;word-break:break-word;margin-top:10px"></pre></div>' +
+        '<div class="settings-section">' +
         '<div class="settings-section-title">关于面板</div>' +
         '<div class="desc-grid">' +
         '<div class="desc-item"><span class="k">面板名称</span><span class="v">' + esc(s.panel_name) + '</span></div>' +
@@ -3431,6 +3440,45 @@ PAGES.settings = {
         '<div class="settings-section-title">重启面板</div>' +
         '<div class="settings-hint" style="margin-bottom:8px">重启期间面板将短暂不可访问</div>' +
         '<button class="btn btn-danger-plain btn-sm" id="s-restart">' + I("restart") + ' 重启面板</button></div>';
+
+      var updTarget = "";
+      qs("#s-upd-check", body).onclick = async function() {
+        var btn = this;
+        btn.disabled = true;
+        qs("#upd-state", body).textContent = "正在连接 GitHub 检查 ...";
+        try {
+          var d = await api("/panel/update?force=1");
+          if (d.has_update) {
+            updTarget = d.latest;
+            qs("#upd-state", body).innerHTML = '发现新版本 <b class="mono">' + esc(d.latest) + '</b>(当前 ' + esc(d.current) + ',发布于 ' + esc((d.published_at || "").slice(0, 10)) + ')';
+            qs("#s-upd-apply", body).style.display = "";
+            var notes = qs("#upd-notes", body);
+            notes.style.display = "";
+            notes.textContent = (d.name ? d.name + "\n\n" : "") + (d.notes || "(无更新说明)");
+          } else {
+            qs("#upd-state", body).textContent = "当前已是最新版本 " + d.latest + "(检查于 " + (d.checked_at || "") + ")";
+            qs("#s-upd-apply", body).style.display = "none";
+            qs("#upd-notes", body).style.display = "none";
+          }
+        } catch (e) {
+          qs("#upd-state", body).textContent = "检查失败: " + e.message;
+          toast("检查更新失败: " + e.message, "error");
+        }
+        btn.disabled = false;
+      };
+      qs("#s-upd-apply", body).onclick = async function() {
+        if (!updTarget) return;
+        if (!(await confirmDlg("确定更新到 " + updTarget + " 吗?更新过程中面板会自动重启,期间短暂不可访问。"))) return;
+        try {
+          var d = await api("/panel/update/apply", { method: "POST", body: { tag: updTarget } });
+          taskModal(d.id, function(status) {
+            if (status === "success") {
+              toast("更新完成,页面即将刷新 ...", "success", 6000);
+              setTimeout(function() { location.reload(); }, 4000);
+            }
+          });
+        } catch (e) { toast(e.message, "error"); }
+      };
 
       body.querySelector("#s-restart").onclick = function() {
         confirmDlg("确定重启面板服务吗?").then(function(ok) {

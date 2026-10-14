@@ -19,6 +19,7 @@ import (
 	"kunpanel/internal/config"
 	"kunpanel/internal/cronx"
 	"kunpanel/internal/monhist"
+	"kunpanel/internal/panelupdate"
 	"kunpanel/internal/plugins"
 	"kunpanel/internal/server"
 	"kunpanel/internal/system"
@@ -103,6 +104,10 @@ func Run(o Options) error {
 	}
 
 	srv := server.New(server.Options{Version: o.Version, WebFS: webSub})
+
+	// 面板在线更新:定时检查 GitHub 新版本,发现即写消息中心
+	panelupdate.SetCurrent(o.Version)
+	panelupdate.Start(stop)
 
 	// 拼全面板地址(含随机入口;"-" 表示已关闭)
 	path := "/"

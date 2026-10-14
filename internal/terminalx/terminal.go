@@ -1,6 +1,7 @@
 package terminalx
 
 import (
+	"net/url"
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
@@ -30,7 +31,19 @@ type wsMessage struct {
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  4096,
 	WriteBufferSize: 4096,
-	CheckOrigin:     func(r *http.Request) bool { return true },
+	// 同源校验:携带 Origin 头的浏览器请求必须同源(防跨站终端劫持);
+	// 无 Origin 的非浏览器客户端(ssh 终端工具)放行,连接本身仍需一次性票据
+	CheckOrigin: func(r *http.Request) bool {
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return true
+		}
+		u, err := url.Parse(origin)
+		if err != nil {
+			return false
+		}
+		return u.Host == r.Host
+	},
 }
 
 // 一次性连接票据:面板签发(30 秒有效、用后即焚),WS 地址不再携带长期令牌

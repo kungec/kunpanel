@@ -31,6 +31,8 @@ ENV KP_DATA_DIR=/opt/kunpanel/data
 ENV GIN_MODE=release
 WORKDIR /opt/kunpanel
 
+ENV KP_PORT=20000
+ENV GIN_MODE=release
 EXPOSE 20000
 VOLUME ["/opt/kunpanel/data"]
 

@@ -41,6 +41,10 @@ func (s *Server) handleRemoteTest(w http.ResponseWriter, r *http.Request) {
 		Fail(w, http.StatusBadRequest, "参数错误")
 		return
 	}
+	if c.Password == "" {
+		c.Password = remotex.LoadPlain().Password
+		c.HostKeyFingerprint = remotex.LoadPlain().HostKeyFingerprint
+	}
 	if err := remotex.Test(c); err != nil {
 		Fail(w, http.StatusBadRequest, err.Error())
 		return
@@ -60,7 +64,7 @@ func (s *Server) handlePanelBackupRemote(w http.ResponseWriter, r *http.Request)
 		defer os.Remove(tmp)
 		fmt.Fprintln(w, "[1/2] 备份包已生成:", filepath.Base(tmp))
 		fmt.Fprintln(w, "[2/2] 上传到远程 ...")
-		remote, err := remotex.Upload(remotex.Get(), tmp)
+		remote, err := remotex.Upload(remotex.LoadPlain(), tmp)
 		if err != nil {
 			return err
 		}

@@ -21,6 +21,7 @@ services:
       - "20000:20000"
     environment:
       - KP_DATA_DIR=/opt/kunpanel/data
+      - KP_PORT=20000
       # 首次初始化时可自定义端口/账号(配置生成后不再生效):
       # - KP_PORT=20000
       # - KP_USERNAME=admin

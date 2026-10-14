@@ -336,9 +336,10 @@ func untar(src, dest string) error {
 				return err
 			}
 			out.Close()
-		case tar.TypeSymlink:
-			_ = os.MkdirAll(filepath.Dir(target), 0o755)
-			_ = os.Symlink(hdr.Linkname, target)
+		case tar.TypeSymlink, tar.TypeLink:
+			// 安全:拒绝符号/硬链接条目——后续普通文件可跟随链接写出目标目录,
+			// 形成任意文件覆盖(第三轮渗透审计 P1)。网站备份不含合法链接,直接跳过。
+			continue
 		}
 	}
 	return nil

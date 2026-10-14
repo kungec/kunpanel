@@ -214,7 +214,7 @@ func (s *Server) handleContainerInfoDocker(w http.ResponseWriter, r *http.Reques
 		"name":           raw.Name,
 		"image":          raw.Config.Image,
 		"status":         raw.State.Status,
-		"started_at":     raw.State.StartedAt[:19],
+		"started_at":     strClip(raw.State.StartedAt, 19),
 		"restarts":       raw.State.RestartCount,
 		"restart_policy": raw.HostConfig.RestartPolicy.Name,
 		"cpu_limit":      cpuLimit,
@@ -306,4 +306,12 @@ func (s *Server) handleContainerLogClear(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	OK(w, nil)
+}
+
+// strClip 安全截断字符串(空值/过短不 panic)
+func strClip(s string, n int) string {
+	if len(s) > n {
+		return s[:n]
+	}
+	return s
 }

@@ -153,6 +153,19 @@ else
   info "下载坤面板 $KP_VERSION (linux_${ARCH}) ..."
   info "地址: $DL_URL"
   curl -fSL --connect-timeout 15 --retry 3 -o "$TMP_TGZ" "$DL_URL" || fail "下载失败,请检查网络或使用 --proxy 加速"
+  # SHA-256 校验(供应链完整性;--no-verify 或离线模式跳过)
+  if [[ "${KP_NO_VERIFY:-}" != "1" ]]; then
+    SUM_URL="${DL_URL%/*}/SHA256SUMS"
+    [[ "$SUM_URL" == *"/latest/download/"* ]] && SUM_URL="https://github.com/kungec/kunpanel/releases/latest/download/SHA256SUMS"
+    TMP_SUM=$(mktemp)
+    if curl -fsSL --connect-timeout 15 --retry 2 -o "$TMP_SUM" "${KP_PROXY:+$KP_PROXY}$SUM_URL" 2>/dev/null; then
+      EXPECT=$(grep " kunpanel_linux_${ARCH}.tar.gz$" "$TMP_SUM" | awk '{print $1}')
+      ACTUAL=$(sha256sum "$TMP_TGZ" | awk '{print $1}')
+      if [[ -n "$EXPECT" && "$EXPECT" != "$ACTUAL" ]]; then rm -f "$TMP_SUM"; fail "SHA-256 校验失败,安装包可能被篡改"; fi
+      [[ -n "$EXPECT" ]] && ok "SHA-256 校验通过"
+    fi
+    rm -f "$TMP_SUM"
+  fi
 fi
 
 info "解压并安装到 $KP_DIR/bin ..."
@@ -199,6 +212,7 @@ Environment=GIN_MODE=release
 # 安全加固
 NoNewPrivileges=true
 ProtectSystem=full
+ReadWritePaths=/etc/ssh
 PrivateTmp=true
 ProtectKernelTunables=true
 ProtectControlGroups=true

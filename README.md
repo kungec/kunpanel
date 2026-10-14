@@ -89,6 +89,8 @@ docker run -d --name kunpanel -p 20000:20000 -v kunpanel-data:/opt/kunpanel/data
 - **服务加固**:systemd `NoNewPrivileges` / `ProtectSystem=full` / `PrivateTmp` 等
 - **审计**:登录与全部变更操作留痕;安全回归测试 `go test ./internal/security/`
 - **端口暴露**:数据库类应用(MySQL/MariaDB/PostgreSQL/Redis)模板默认仅绑定本机回环,公网不可达;注意 Docker 发布的端口不受系统防火墙(ufw/firewalld)约束,如需对外请在面板防火墙页或 compose 中显式放行
+- **Docker Socket**:容器部署挂载 `/var/run/docker.sock` 等同于授予宿主 root 级权限(应用商店/容器管理的固有依赖);生产环境建议使用 rootless Docker 或 Socket 代理缩小爆炸半径
+- **默认明文 HTTP**:面板默认监听 `0.0.0.0` 的 HTTP,靠随机端口 + 随机安全入口 + 验证码限流防护;公网/不可信网络部署强烈建议在 面板设置→安全 启用 HTTPS,或置于反代之后
 
 ## 已验证环境
 

@@ -66,7 +66,7 @@ func Start(stop <-chan struct{}) {
 func sample() {
 	snap := system.Get()
 	p := Point{
-		Time:  time.Now().Format("15:04"),
+		Time:  time.Now().Format("2006-01-02 15:04"),
 		CPU:   snap.CPUUsageP,
 		Mem:   snap.MemUsageP,
 		NetRx: snap.NetRxSpeed,

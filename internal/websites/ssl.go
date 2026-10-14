@@ -2,6 +2,7 @@
 package websites
 
 import (
+	"math"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -216,7 +217,12 @@ func StartCertWatch(stop <-chan struct{}, notify func(msg string)) {
 		lastAlertDate := ""
 		check := func() {
 			for _, c := range ListCerts() {
-				if c.Expire == "" || c.Days > 30 {
+				// 剩余天数按当前到期日实时计算(Days 仅签发时写入,不随时间流逝更新)
+				days := c.Days
+				if t, e := time.Parse("2006-01-02", c.Expire); e == nil {
+					days = int(math.Ceil(time.Until(t).Hours() / 24))
+				}
+				if c.Expire == "" || days > 30 {
 					continue
 				}
 				today := time.Now().Format("2006-01-02")
@@ -224,7 +230,7 @@ func StartCertWatch(stop <-chan struct{}, notify func(msg string)) {
 					continue
 				}
 				lastAlertDate = today
-				msg := fmt.Sprintf("【证书到期提醒】%s 将于 %s 到期(剩余 %d 天),请及时续期", c.Name, c.Expire, c.Days)
+				msg := fmt.Sprintf("【证书到期提醒】%s 将于 %s 到期(剩余 %d 天),请及时续期", c.Name, c.Expire, days)
 				notify(msg)
 			}
 		}

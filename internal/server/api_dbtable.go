@@ -1,8 +1,8 @@
 package server
 
 import (
-	"net/http"
 	"fmt"
+	"net/http"
 
 	"kunpanel/internal/dbmgr"
 )
@@ -22,6 +22,10 @@ func (s *Server) handleDbTables(w http.ResponseWriter, r *http.Request) {
 	} else {
 		sql = "SHOW TABLES"
 		if db != "" {
+			if !dbmgr.ValidIdentifier(db) {
+				Fail(w, http.StatusBadRequest, "非法库名")
+				return
+			}
 			sql = "SHOW TABLES FROM `" + db + "`"
 		}
 	}

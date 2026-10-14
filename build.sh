@@ -37,14 +37,15 @@ for d in "$OUT"/pkg_*; do
   os="${base#pkg_}"; os="${os%-*}"
   arch="${base##*-}"
   name="kunpanel_${VERSION}_${os}_${arch}"
+  # 归档扁平化:二进制/脚本在顶层(install.sh 按 /opt/kunpanel/bin/kunpanel 直接解压)
   if [[ "$os" == "windows" ]]; then
     cp scripts/install.ps1 scripts/install.bat "$d/"
-    (cd "$OUT" && zip -qr "${name}.zip" "$(basename "$d")")
+    (cd "$d" && zip -qr "$OUT/${name}.zip" .)
     # 无版本命名副本:供 GitHub releases/latest/download 直链
     (cd "$OUT" && cp "${name}.zip" "kunpanel_windows_${arch}.zip")
   else
     cp scripts/install.sh "$d/"
-    COPYFILE_DISABLE=1 tar --no-xattrs -czf "$OUT/${name}.tar.gz" -C "$OUT" "$(basename "$d")"
+    COPYFILE_DISABLE=1 tar --no-xattrs -czf "$OUT/${name}.tar.gz" -C "$d" .
     (cd "$OUT" && cp "${name}.tar.gz" "kunpanel_${os}_${arch}.tar.gz")
   fi
   rm -rf "$d"
@@ -53,4 +54,4 @@ done
 echo "==> 完成,产物清单:"
 ls -lh "$OUT" | grep -v '^total' | awk '{print "  " $NF "  (" $5 ")"}'
 echo "==> 校验和:"
-( cd "$OUT" && shasum -a 256 ./*.tar.gz ./*.zip 2>/dev/null || true )
+( cd "$OUT" && rm -f SHA256SUMS && shasum -a 256 ./kunpanel_*.tar.gz ./kunpanel_*.zip > SHA256SUMS && cat SHA256SUMS )

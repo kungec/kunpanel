@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"path/filepath"
 	"sync"
 	"time"
@@ -20,16 +21,30 @@ type Config struct {
 	Host     string `json:"host"`
 	Port     int    `json:"port"`
 	User     string `json:"user"`
-	Password string `json:"password"`
+	Password string `json:"password,omitempty"` // Get 返回时脱敏为空
 	Dir      string `json:"dir"`
+	// HostKeyFingerprint 可选:SHA256 主机指纹(ssh.FingerprintSHA256 格式)。
+	// 非空时强制校验,防中间机窃取备份凭据;为空时兼容自建服务器/家宽 NAS 场景。
+	HostKeyFingerprint string `json:"host_key_fingerprint,omitempty"`
+	PasswordSet        bool   `json:"password_set"` // Get 返回:密码是否已配置
 }
+
+// LoadPlain 读取含密码的完整配置(仅上传/测试连接等内部用途)
+func LoadPlain() Config { return load() }
 
 func cfgPath() string { return filepath.Join(config.DataDir(), "remote_backup.json") }
 
 var mu sync.Mutex
 
-// Get 读取配置(密码明文存于数据目录,与面板自身的凭据同级保护)
+// Get 读取配置(密码脱敏:只返回是否已配置,不回传明文)
 func Get() Config {
+	c := load()
+	c.Password = ""
+	c.PasswordSet = load().Password != ""
+	return c
+}
+
+func load() Config {
 	mu.Lock()
 	defer mu.Unlock()
 	b, err := os.ReadFile(cfgPath())
@@ -46,13 +61,17 @@ func Get() Config {
 	return Config{}
 }
 
-// Save 保存配置
+// Save 保存配置(Password 为空表示沿用已存密码)
 func Save(c Config) error {
 	mu.Lock()
 	defer mu.Unlock()
 	if c.Port <= 0 {
 		c.Port = 22
 	}
+	if c.Password == "" {
+		c.Password = load().Password
+	}
+	c.PasswordSet = c.Password != ""
 	b, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
@@ -69,11 +88,21 @@ func connect(c Config) (*sftp.Client, error) {
 	if port <= 0 {
 		port = 22
 	}
+	hostKeyCb := ssh.InsecureIgnoreHostKey()
+	if fp := strings.TrimSpace(c.HostKeyFingerprint); fp != "" {
+		// 配置了指纹则强制校验,防中间人窃取备份凭据
+		hostKeyCb = func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+			actual := ssh.FingerprintSHA256(key)
+			if actual != fp {
+				return fmt.Errorf("主机指纹不匹配: 期望 %s,实际 %s", fp, actual)
+			}
+			return nil
+		}
+	}
 	sshCfg := &ssh.ClientConfig{
-		User: c.User,
-		Auth: []ssh.AuthMethod{ssh.Password(c.Password)},
-		// 面板备份目标多为自建服务器/家宽 NAS,不强制校验主机指纹
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		User:            c.User,
+		Auth:            []ssh.AuthMethod{ssh.Password(c.Password)},
+		HostKeyCallback: hostKeyCb,
 		Timeout:         12 * time.Second,
 	}
 	client, err := ssh.Dial("tcp", net.JoinHostPort(c.Host, fmt.Sprintf("%d", port)), sshCfg)

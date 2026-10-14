@@ -19,7 +19,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"kunpanel/internal/authx"
 	"kunpanel/internal/config"
@@ -34,7 +33,6 @@ var Version = "dev"
 type Server struct {
 	mux         *http.ServeMux
 	limiter     *authx.Limiter
-	userLimiter *authx.Limiter
 	webFS       fs.FS
 }
 
@@ -52,7 +50,6 @@ func New(o Options) *http.Server {
 	s := &Server{
 		mux:         http.NewServeMux(),
 		limiter:     authx.NewLimiter(),
-		userLimiter: authx.NewLimiterOpt(20, 15*time.Minute),
 		webFS:       o.WebFS,
 	}
 	s.registerAPI()
@@ -109,18 +106,30 @@ func (s *Server) withRecover(next http.Handler) http.Handler {
 	})
 }
 
-// withOpLog 记录变更类 API 的操作日志
+// statusWriter 捕获真实 HTTP 状态码供审计日志使用
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusWriter) WriteHeader(code int) {
+	w.status = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
+// withOpLog 记录变更类 API 的操作日志(记录真实状态码,失败操作不再显示为成功)
 func (s *Server) withOpLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") && r.Method != http.MethodGet && r.Method != http.MethodHead {
 			ip := ClientIP(r)
-			next.ServeHTTP(w, r)
+			sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+			next.ServeHTTP(sw, r)
 			// 日志清理动作自身不再写入操作日志,否则清空后立刻出现一条
 			// "清空"记录,看起来像清理无效
 			if strings.HasSuffix(r.URL.Path, "/clear") && strings.Contains(r.URL.Path, "/logs") {
 				return
 			}
-			logsx.AppendOp(ip, r.Method, r.URL.Path, "", http.StatusOK)
+			logsx.AppendOp(ip, r.Method, r.URL.Path, "", sw.status)
 			return
 		}
 		next.ServeHTTP(w, r)

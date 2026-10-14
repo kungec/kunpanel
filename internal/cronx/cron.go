@@ -498,7 +498,7 @@ func doDBBackup(j Job) (string, error) {
 		}
 	}
 	if j.Remote {
-		cfg := remotex.Get()
+		cfg := remotex.LoadPlain()
 		if cfg.Host != "" {
 			remote, uerr := remotex.Upload(cfg, file)
 			if uerr != nil {
@@ -539,7 +539,7 @@ func doPanelBackup(j Job) (string, error) {
 		}
 	}
 	if j.Remote {
-		cfg := remotex.Get()
+		cfg := remotex.LoadPlain()
 		if cfg.Host != "" {
 			remote, uerr := remotex.Upload(cfg, dst)
 			if uerr != nil {
@@ -663,7 +663,7 @@ func doBackup(j Job) (string, error) {
 		}
 	}
 	if j.Remote {
-		cfg := remotex.Get()
+		cfg := remotex.LoadPlain()
 		if cfg.Host != "" {
 			remote, uerr := remotex.Upload(cfg, dst)
 			if uerr != nil {

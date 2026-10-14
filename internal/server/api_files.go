@@ -394,9 +394,8 @@ func (s *Server) handleFileRemoteDownload(w http.ResponseWriter, r *http.Request
 		fmt.Fprintln(w, "下载: "+u)
 		fmt.Fprintln(w, "保存到: "+dst)
 		fmt.Fprintln(w, "(大文件耗时较长,可切后台运行)")
-		// --max-filesize 2GB 防止把磁盘塞满;-L 跟随重定向
-		err := util.RunWithTimeoutWriter(30*time.Minute, w, "curl", "-L", "--fail", "--max-filesize", "2147483648", "--connect-timeout", "15", "--max-time", "1800", "-o", dst, u)
-		if err != nil {
+		// Go 下载器:每一跳重定向都重新校验私网地址(curl -L 无法校验重定向目标)
+		if err := util.SecureDownload(u, dst, w, 30*time.Minute, 2<<30); err != nil {
 			_ = os.Remove(dst)
 			return fmt.Errorf("下载失败: %v", err)
 		}

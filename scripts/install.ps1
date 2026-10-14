@@ -36,8 +36,14 @@ function Write-Fail($msg)  { Write-Host "[失败] $msg" -ForegroundColor Red; ex
 $currentUser = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $currentUser.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
   Write-Info "需要管理员权限,正在提权 ..."
-  $args = $MyInvocation.MyCommand.Definition
-  Start-Process powershell -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$args`" $(if($Uninstall){"-Uninstall"}) -Version $Version -Port $Port"
+  $script = $MyInvocation.MyCommand.Definition
+  # 完整透传所有参数(此前提权后丢失 Entrance/Proxy/LocalFile)
+  $passthru = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$script`"", "-Version", $Version, "-Port", $Port)
+  if ($Entrance) { $passthru += @("-Entrance", $Entrance) }
+  if ($Proxy) { $passthru += @("-Proxy", "`"$Proxy`"") }
+  if ($LocalFile) { $passthru += @("-LocalFile", "`"$LocalFile`"") }
+  if ($Uninstall) { $passthru += "-Uninstall" }
+  Start-Process powershell -Verb RunAs -ArgumentList ($passthru -join " ")
   exit 0
 }
 

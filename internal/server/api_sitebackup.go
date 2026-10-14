@@ -234,40 +234,42 @@ func (s *Server) handleSiteBackupRestore(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	t, err := taskx.M.Start("site-restore-"+id, func(w io.Writer) error {
-		fmt.Fprintln(w, "清空站点目录并恢复备份 ...")
-		if err := os.RemoveAll(site.Root); err != nil {
-			return err
-		}
-		if err := os.MkdirAll(site.Root, 0o755); err != nil {
-			return err
-		}
-		// 解压到临时目录:归档可能带站点目录前缀(compressToGz 以父目录打包),需归位
+		// 原子化恢复:先解压到临时目录并归位,全部成功后才替换原目录。
+		// 旧流程先删原目录再解压,归档损坏会留下空站点(第三轮审计 P1)。
 		tmpExtract := site.Root + ".restore_tmp"
 		_ = os.RemoveAll(tmpExtract)
 		if err := os.MkdirAll(tmpExtract, 0o755); err != nil {
 			return err
 		}
-		fmt.Fprintln(w, "解压归档 ...")
+		fmt.Fprintln(w, "解压归档到临时目录 ...")
 		if err := filemgr.Extract(src, tmpExtract); err != nil {
 			os.RemoveAll(tmpExtract)
-			return fmt.Errorf("解压失败: %v", err)
+			return fmt.Errorf("解压失败(原站点未受影响): %v", err)
 		}
+		// 归位:归档可能带站点目录前缀(compressToGz 以父目录打包)
 		entries, _ := os.ReadDir(tmpExtract)
 		if len(entries) == 1 && entries[0].IsDir() && entries[0].Name() == filepath.Base(site.Root) {
-			// 唯一顶层目录即站点根,整体上移
 			inner := filepath.Join(tmpExtract, entries[0].Name())
 			if subs, e := os.ReadDir(inner); e == nil {
 				for _, s2 := range subs {
-					os.Rename(filepath.Join(inner, s2.Name()), filepath.Join(site.Root, s2.Name()))
+					os.Rename(filepath.Join(inner, s2.Name()), filepath.Join(tmpExtract, s2.Name()))
 				}
 			}
-			os.RemoveAll(tmpExtract)
-		} else {
-			for _, s2 := range entries {
-				os.Rename(filepath.Join(tmpExtract, s2.Name()), filepath.Join(site.Root, s2.Name()))
-			}
-			_ = os.RemoveAll(tmpExtract)
+			_ = os.Remove(filepath.Join(tmpExtract, entries[0].Name()))
 		}
+		// 交换:原目录挪到 .restore_old,新内容就位,成功后清理备份
+		oldDir := site.Root + ".restore_old"
+		_ = os.RemoveAll(oldDir)
+		fmt.Fprintln(w, "替换站点目录 ...")
+		if err := os.Rename(site.Root, oldDir); err != nil {
+			os.RemoveAll(tmpExtract)
+			return fmt.Errorf("备份原目录失败: %v", err)
+		}
+		if err := os.Rename(tmpExtract, site.Root); err != nil {
+			_ = os.Rename(oldDir, site.Root) // 回滚
+			return fmt.Errorf("恢复失败(已回滚): %v", err)
+		}
+		_ = os.RemoveAll(oldDir)
 		fmt.Fprintln(w, "✅ 站点已恢复,建议检查网站内容后重新开放")
 		return nil
 	})

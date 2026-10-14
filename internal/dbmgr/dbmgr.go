@@ -527,7 +527,8 @@ func Import(key, database, file string) (string, error) {
 	case "mariadb":
 		inner = fmt.Sprintf(`mariadb -uroot -p"$MYSQL_ROOT_PASSWORD" %s`, shellQuote(database))
 	case "postgresql":
-		inner = fmt.Sprintf(`psql -U postgres -d %s -v ON_ERROR_STOP=0 -f %s`, shellQuote(database), shellQuote(pipe))
+		// psql 不带 -f 时从 stdin 读;宿主机路径在容器内不可见,必须走 docker exec -i stdin
+		inner = fmt.Sprintf(`psql -U postgres -d %s -v ON_ERROR_STOP=0`, shellQuote(database))
 	default:
 		return "", fmt.Errorf("不支持的数据库类型")
 	}

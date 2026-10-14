@@ -53,6 +53,12 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Fail(w, http.StatusTooManyRequests, "失败次数过多,请 "+wait.Round(time.Minute).String()+" 后再试")
 		return
 	}
+	// 1.5) 用户名维度锁定前移:即使攻击者永远不提交正确密码,也能按账号阻断分布式爆破
+	if blocked, _ := UserLimiter.Blocked(req.Username); blocked {
+		logsx.AppendLoginResult(ip, false, "账号尝试过多被锁定")
+		Fail(w, http.StatusTooManyRequests, "该账号失败次数过多,请稍后再试")
+		return
+	}
 
 	// 2) 验证码(一次性,失败后需刷新)
 	if !CaptchaStore.Verify(req.CaptchaID, req.CaptchaCode) {
@@ -69,14 +75,8 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Fail(w, http.StatusBadRequest, "用户名或密码错误")
 		return
 	}
-	if blocked, _ := UserLimiter.Blocked(req.Username); blocked {
-		logsx.AppendLoginResult(ip, false, "账号尝试过多被锁定")
-		Fail(w, http.StatusTooManyRequests, "该账号失败次数过多,请稍后再试")
-		return
-	}
-
-	// 4) 用户名维度限流计数(登录成功即清零)
-	s.userLimiter.Reset(req.Username)
+	// 4) 用户名维度限流计数(登录成功即清零;与 Fail/Blocked 同一实例)
+	UserLimiter.Reset(req.Username)
 
 	// 5) 旧版口令哈希透明升级为 PBKDF2
 	config.M.UpgradePasswordHash(req.Password)
@@ -122,7 +122,7 @@ func (s *Server) handleOtpVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// OTP 临时令牌必须有效(用户名绑定 + 5 分钟内)
-	if !authx.VerifyToken(cfg.JWTSecret, req.OtpToken, cfg.Username) {
+	if !authx.VerifyToken(cfg.JWTSecret, req.OtpToken, "otp:"+cfg.Username) {
 		Fail(w, http.StatusBadRequest, "验证已过期,请重新登录")
 		return
 	}

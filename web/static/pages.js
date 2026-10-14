@@ -2935,7 +2935,16 @@ PAGES.logs = {
       '<div class="tabs"><div class="tab ' + (this.tab === "login" ? "active" : "") + '" data-tab="login">登录日志</div><div class="tab ' + (this.tab === "operation" ? "active" : "") + '" data-tab="operation">操作日志</div></div><div id="log-table">' + skeletonTable(5, 4) + "</div></div>";
     qsa(".tab", el).forEach((t) => (t.onclick = () => { this.tab = t.dataset.tab; this.render(el); }));
     qs("#log-export", el).onclick = function() {
-      window.open("/api/v1/logs/" + self.tab + "/export?token=" + encodeURIComponent(localStorage.getItem(TOKEN_KEY)), "_blank");
+      fetch("/api/v1/logs/" + self.tab + "/export", { headers: { "Authorization": "Bearer " + localStorage.getItem(TOKEN_KEY) } })
+        .then(function(r) { return r.blob().then(function(b) { return { ok: r.ok, blob: b }; }); })
+        .then(function(d) {
+          if (!d.ok) { toast("导出失败", "error"); return; }
+          var a = document.createElement("a");
+          a.href = URL.createObjectURL(d.blob);
+          a.download = self.tab + "_log.csv";
+          a.click();
+          setTimeout(function() { URL.revokeObjectURL(a.href); }, 5000);
+        });
     };
     qs("#log-clear", el).onclick = async function() {
       var kind = self.tab === "operation" ? "operation" : "login";
@@ -3047,7 +3056,7 @@ PAGES.ssh = {
     return '<div class="table-wrap"><table class="table"><thead><tr><th style="width:50px">#</th><th>公钥</th><th style="width:80px">操作</th></tr></thead><tbody>' +
       keys.map(function(k, i) {
         var parts = k.split(" ");
-        var brief = (parts[0] || "") + " " + (parts[1] ? parts[1].slice(0, 24) + "..." : "") + (parts[2] ? " (" + esc(parts[2]) + ")" : "");
+        var brief = esc(parts[0] || "") + " " + (parts[1] ? esc(parts[1].slice(0, 24)) + "..." : "") + (parts[2] ? " (" + esc(parts[2]) + ")" : "");
         return '<tr><td>' + (i + 1) + '</td><td class="mono fm-ellipsis" title="' + esc(k) + '">' + brief + '</td>' +
           '<td><button class="btn btn-xs btn-danger-plain" data-key-del="' + (i + 1) + '">删除</button></td></tr>';
       }).join("") + "</tbody></table></div>";
@@ -3086,8 +3095,6 @@ PAGES.settings = {
     el.innerHTML = navHTML;
 
     var body = qs("#settings-body", el);
-    var avatarToken = encodeURIComponent(localStorage.getItem(TOKEN_KEY) || "");
-    var avatarImg = '<img class="avatar-img" src="/api/v1/avatar?token=' + avatarToken + '&t=' + Date.now() + '" onerror="this.remove()">';
 
     qsa(".set-nav-item", el).forEach(function(n) {
       n.onclick = function() {

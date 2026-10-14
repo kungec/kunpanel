@@ -40,3 +40,16 @@ func TestVerifyTOTPSecretAt(t *testing.T) {
 		t.Fatal("长度错误不应通过")
 	}
 }
+
+// 回归(第三轮审计 P0):OTP 临时令牌主体必须是 "otp:用户名",
+// 既有严格主体绑定,也不能被当作普通会话令牌通过校验
+func TestOTPTokenSubjectBinding(t *testing.T) {
+	secret := "test-jwt-secret"
+	tok := NewToken(secret, "otp:admin", 5*time.Minute)
+	if !VerifyToken(secret, tok, "otp:admin") {
+		t.Fatal("otp 令牌应能以 otp:admin 主体通过校验")
+	}
+	if VerifyToken(secret, tok, "admin") {
+		t.Fatal("otp 令牌不得通过普通用户名主体校验(曾导致 2FA 永远失败)")
+	}
+}

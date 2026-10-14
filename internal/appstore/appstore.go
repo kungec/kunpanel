@@ -445,7 +445,7 @@ func saveInstances(list []Instance) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(storeFile(), b, 0o600)
+	return util.AtomicWrite(storeFile(), b, 0o600)
 }
 
 // GetTemplate 按 key 找模板
@@ -566,7 +566,7 @@ func Install(key string, params map[string]string) error {
 	}
 
 	content := tpl.ComposeFrom(params)
-	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte(content), 0o644); err != nil {
+	if err := util.AtomicWriteString(filepath.Join(dir, "docker-compose.yml"), content, 0o644); err != nil {
 		return err
 	}
 
@@ -705,7 +705,7 @@ func ReRenderCompose(key string) error {
 	dir := InstanceDir(key)
 	_ = os.MkdirAll(dir, 0o755)
 	content := tpl.ComposeFrom(sanitizeParams(tpl, inst.Params))
-	return os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte(content), 0o644)
+	return util.AtomicWriteString(filepath.Join(dir, "docker-compose.yml"), content, 0o644)
 }
 
 // forceRemoveContainers 兜底:compose 文件损坏无法 down 时,按名称前缀强删容器
@@ -852,7 +852,7 @@ func EnsureNginxMounts(key string, w io.Writer) error {
 	if !changed {
 		return nil
 	}
-	if err := os.WriteFile(composeFile, []byte(content), 0o644); err != nil {
+	if err := util.AtomicWriteString(composeFile, content, 0o644); err != nil {
 		return err
 	}
 	if w != nil {
@@ -894,7 +894,7 @@ func EnsurePhpMounts(w io.Writer) error {
 	lineEnd := strings.Index(content[idx:], "\n")
 	insert := "\n      - " + rootsDir() + ":/var/www/html"
 	content = content[:idx+lineEnd] + insert + content[idx+lineEnd:]
-	if err := os.WriteFile(composeFile, []byte(content), 0o644); err != nil {
+	if err := util.AtomicWriteString(composeFile, content, 0o644); err != nil {
 		return err
 	}
 	if w != nil {

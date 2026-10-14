@@ -14,6 +14,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"kunpanel/internal/config"
+	"kunpanel/internal/util"
 )
 
 // Config SFTP 远程备份目标
@@ -76,7 +77,7 @@ func Save(c Config) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(cfgPath(), b, 0o600)
+	return util.AtomicWrite(cfgPath(), b, 0o600)
 }
 
 // connect 建立 SFTP 客户端

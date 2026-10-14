@@ -98,7 +98,7 @@ func apply(settings map[string]string) error {
 		return err
 	}
 	backup := fmt.Sprintf("%s.bak.%s", mainConf, time.Now().Format("20060102150405"))
-	_ = os.WriteFile(backup, b, 0o600)
+	_ = util.AtomicWrite(backup, b, 0o600)
 
 	if hasIncludeDir() {
 		// 放到 sshd_config.d,文件名 00- 保证最先被 Include(sshd 首个值生效)

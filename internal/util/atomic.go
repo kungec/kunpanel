@@ -39,3 +39,8 @@ func AtomicWrite(path string, data []byte, perm os.FileMode) error {
 	tmpName = "" // 已 rename,defer 不再删除
 	return nil
 }
+
+// AtomicWriteString 原子写字符串内容
+func AtomicWriteString(path string, data string, perm os.FileMode) error {
+	return AtomicWrite(path, []byte(data), perm)
+}

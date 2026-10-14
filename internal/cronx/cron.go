@@ -709,6 +709,10 @@ func StartScheduler(stop <-chan struct{}) {
 	}()
 }
 
+// runningJobs 运行中任务集合(防长任务超时间隔后叠加并发实例)
+var runningMu sync.Mutex
+var runningJobs = map[string]bool{}
+
 func checkDue(now time.Time) {
 	prev := now.Add(-30 * time.Second).Truncate(time.Minute)
 	for _, j := range List() {
@@ -717,7 +721,21 @@ func checkDue(now time.Time) {
 		}
 		if Match(j.Spec, prev) {
 			job := j
-			go func() { _ = RunJob(job) }()
+			runningMu.Lock()
+			if runningJobs[job.Name] {
+				runningMu.Unlock()
+				continue
+			}
+			runningJobs[job.Name] = true
+			runningMu.Unlock()
+			go func() {
+				defer func() {
+					runningMu.Lock()
+					delete(runningJobs, job.Name)
+					runningMu.Unlock()
+				}()
+				_ = RunJob(job)
+			}()
 		}
 	}
 }

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"kunpanel/internal/util"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -81,7 +83,8 @@ func Read(path string) (string, error) {
 }
 
 func Write(path, content string) error {
-	return os.WriteFile(path, []byte(content), 0o644)
+	// 原子写:编辑器保存中途崩溃不会截断用户文件
+	return util.AtomicWriteString(path, content, 0o644)
 }
 
 func Mkdir(path string) error {

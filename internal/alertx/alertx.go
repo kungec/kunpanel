@@ -85,7 +85,7 @@ func Save(s Settings) error {
 		s.Duration = 30
 	}
 	b, _ := json.MarshalIndent(s, "", "  ")
-	return os.WriteFile(confPath(), b, 0o600)
+	return util.AtomicWrite(confPath(), b, 0o600)
 }
 
 // Start 启动后台检测循环(每 30 秒)

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"kunpanel/internal/dockerx"
+	"kunpanel/internal/util"
 )
 
 func customTplPath() string { return filepath.Join(dataRoot(), "custom_templates.json") }
@@ -41,7 +42,7 @@ func saveCustomTemplates(list []Template) error {
 		return err
 	}
 	_ = os.MkdirAll(dataRoot(), 0o755)
-	return os.WriteFile(customTplPath(), b, 0o600)
+	return util.AtomicWrite(customTplPath(), b, 0o600)
 }
 
 // AddCustomTemplate 新增自定义应用(校验 compose 可被 docker 解析)

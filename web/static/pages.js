@@ -565,7 +565,11 @@ PAGES.websites = {
     qs('[data-act="yes"]', m.el).onclick = () => persist(qs("#ssl-cert", m.el).value, qs("#ssl-redirect", m.el).checked);
   },
   /* 编辑站点弹窗(代理目标 / 端口 / 备注) */
-  editDialog(s, el) {
+  async editDialog(s, el) {
+    if (!Array.isArray(window.__wafSiteOff)) {
+      try { window.__wafSiteOff = (await api("/waf/site-off")).site_off || []; }
+      catch (e) { window.__wafSiteOff = []; }
+    }
     const m = modal({
       title: "编辑站点 · " + s.alias, width: 520,
       body: `
@@ -574,6 +578,8 @@ PAGES.websites = {
         ${s.type === "proxy" ? '<div class="form-item required"><label>代理目标</label><input class="input" id="w-edit-proxy" value="' + esc(s.proxy_to || "") + '" placeholder="如: http://127.0.0.1:8080"></div>' : ""}
         <div class="form-item"><label>监听端口</label><input class="input" id="w-edit-port" type="number" value="${s.port || 80}"></div>
         <div class="form-item"><label>备注</label><input class="input" id="w-edit-remark" value="${esc(s.remark || "")}" placeholder="站点用途说明"></div>
+        <div class="settings-section-title">WAF 防护<span class="help" style="margin:0">全站 WAF 开关在 安全→WAF 防火墙;此处控制单站</span></div>
+        <div class="form-item"><label class="radio-line"><input type="checkbox" id="w-waf-on" ${window.__wafSiteOff && window.__wafSiteOff.includes(s.domain) ? "" : "checked"}> 启用 WAF 防护(纯 API/内网站点可关闭)</label></div>
         <div class="settings-section-title">密码访问(HTTP Basic Auth)</div>
         <div class="form-item"><label class="radio-line"><input type="checkbox" id="w-auth-on" ${s.auth_enabled ? "checked" : ""}> 启用后访问站点需输入账号密码</label></div>
         <div id="w-auth-fields" style="${s.auth_enabled ? "" : "display:none"}">
@@ -591,6 +597,17 @@ PAGES.websites = {
           port: Number(qs("#w-edit-port", m.el).value) || 80,
           remark: qs("#w-edit-remark", m.el).value.trim(),
         }});
+        // WAF 单站开关(与当前 site_off 状态有差异才调用)
+        const wafOn = qs("#w-waf-on", m.el).checked;
+        const wasOff = (window.__wafSiteOff || []).includes(s.domain);
+        if (wafOn === wasOff) {
+          /* 状态一致,不动 */
+        } else {
+          try {
+            await api("/waf/site-toggle", { method: "POST", body: { host: s.domain, enabled: wafOn } });
+            window.__wafSiteOff = wafOn ? (window.__wafSiteOff || []).filter((h) => h !== s.domain) : [...(window.__wafSiteOff || []), s.domain];
+          } catch (e) { toast("WAF 开关保存失败: " + e.message, "error"); }
+        }
         // 密码访问单独保存
         const authOn = qs("#w-auth-on", m.el).checked;
         if (authOn !== !!s.auth_enabled || (authOn && qs("#w-auth-pass", m.el).value)) {
@@ -2715,6 +2732,11 @@ PAGES.plugins = {
       '<div class="settings-section"><div class="settings-section-title">增强防护</div>' +
       '<div class="settings-row"><label style="min-width:170px">拦截空 UA 请求<div class="settings-hint" style="margin:0">正规浏览器必有 User-Agent;空 UA 多为脚本工具与扫描器</div></label><label class="radio-line"><input type="checkbox" id="emptyua-block" ' + (st.empty_ua_block ? "checked" : "") + "> 启用</label></div>" +
       '<div class="settings-row"><label style="min-width:170px">拦截 HTTP/1.0 请求<div class="settings-hint" style="margin:0">现代浏览器均使用 HTTP/1.1+,HTTP/1.0 请求多为攻击工具</div></label><label class="radio-line"><input type="checkbox" id="http10-block" ' + (st.http10_block ? "checked" : "") + "> 启用</label></div></div>" +
+      '<div class="settings-section"><div class="settings-section-title">自动封禁<span class="help" style="margin:0">24 小时内违规次数达阈值的 IP 自动加入持久黑名单(与手工黑名单分列,每日自动巡检 + 可手动立即扫描;上限 500)</span></div>' +
+      '<div class="settings-row"><label style="min-width:170px">启用自动封禁</label><label class="radio-line"><input type="checkbox" id="autoban-enable" ' + (st.auto_ban_enable ? "checked" : "") + "> 启用</label>" +
+      '<input class="input" id="autoban-threshold" type="number" value="' + (st.auto_ban_threshold || 50) + '" style="max-width:120px" title="24 小时违规次数阈值"><span class="help" style="margin:0">次(24h)</span>' +
+      '<button class="btn btn-sm btn-plain" id="autoban-clear">清空清单</button></div>' +
+      '<div class="settings-row"><label>自动黑名单</label><div class="help" style="margin:0" id="autoban-list">加载中…</div></div></div>' +
       '<div class="settings-section"><div class="settings-section-title">搜索引擎蜘蛛白名单<span class="help" style="margin:0">启用的爬虫完全跳过检测:CC 人机验证、临时封禁都不会针对它们,保护 SEO 收录</span></div>' +
       '<div class="settings-row"><label style="min-width:170px">启用蜘蛛白名单</label><label class="radio-line"><input type="checkbox" id="spider-enable" ' + (st.spider_white_enable ? "checked" : "") + "> 启用</label></div>" +
       '<div class="settings-row"><label style="align-items:flex-start">UA 特征(正则)<div class="settings-hint" style="margin:0">每行一条,匹配 User-Agent 即放行</div></label>' +
@@ -2755,6 +2777,22 @@ PAGES.plugins = {
       self.st.method_block_enable = qs("#method-enable", body).checked;
       self.st.empty_ua_block = qs("#emptyua-block", body).checked;
       self.st.http10_block = qs("#http10-block", body).checked;
+      // 自动封禁清单加载/清空
+      (async function() {
+        try {
+          var d = await api("/waf/auto-ban");
+          var el2 = qs("#autoban-list", body);
+          if (el2) el2.textContent = (d.list && d.list.length) ? d.list.slice(0, 20).join(", ") + (d.list.length > 20 ? " …共 " + d.list.length + " 个" : "") : "暂无";
+        } catch (e) {}
+      })();
+      var abClear = qs("#autoban-clear", body);
+      if (abClear) abClear.onclick = async function() {
+        if (!(await confirmDlg("确定清空自动封禁清单吗?", { danger: true }))) return;
+        try { await api("/waf/auto-ban/clear", { method: "POST", body: {} }); toast("已清空"); var el3 = qs("#autoban-list", body); if (el3) el3.textContent = "暂无"; }
+        catch (e) { toast(e.message, "error"); }
+      };
+      self.st.auto_ban_enable = qs("#autoban-enable", body).checked;
+      self.st.auto_ban_threshold = Number(qs("#autoban-threshold", body).value) || 50;
       self.st.method_block_list = qs("#method-list", body).value.split("\n").map(function(x) { return x.trim(); }).filter(Boolean);
       self.save(body);
     };
@@ -2877,17 +2915,33 @@ PAGES.plugins = {
       });
       if (!all.length) { box.innerHTML = emptyState("shield", "暂无拦截记录", "攻击发生时会实时记录在这里"); return; }
       if (!list.length) { box.innerHTML = emptyState("search", "无匹配记录", "调整类型或 IP 关键字试试"); return; }
-      box.innerHTML = '<div class="table-wrap"><table class="table waf-log-table"><thead><tr><th style="width:170px">时间</th><th style="width:150px">IP</th><th style="width:150px">类型</th><th style="width:40%">URI</th><th>详情</th></tr></thead><tbody>' +
+      box.innerHTML = '<div class="table-wrap"><table class="table waf-log-table"><thead><tr><th style="width:170px">时间</th><th style="width:150px">IP</th><th style="width:150px">类型</th><th style="width:40%">URI</th><th>详情</th><th style="width:90px">操作</th></tr></thead><tbody>' +
         list.map(function(e) {
           return '<tr><td class="waf-nowrap">' + esc(e.time) + '</td><td class="mono waf-nowrap">' + esc(e.ip) + '</td><td><span class="tag tag-danger">' + esc(e.label || e.rule) + '</span></td>' +
             '<td class="mono fm-ellipsis" style="max-width:260px" title="' + esc(e.method + " " + e.uri) + '">' + esc(e.method + " " + e.uri) + '</td>' +
-            '<td class="fm-ellipsis" style="max-width:200px" title="' + esc(e.detail || "") + '">' + esc(e.detail || "-") + "</td></tr>";
+            '<td class="fm-ellipsis" style="max-width:200px" title="' + esc(e.detail || "") + '">' + esc(e.detail || "-") + '</td>' +
+            '<td style="width:90px"><button class="btn btn-xs btn-danger-plain" data-waf-ban="' + esc(e.ip) + '">封禁</button></td></tr>';
         }).join("") + "</tbody></table></div>";
     };
     load();
     var typeSel = qs("#waf-log-type", body), ipInput = qs("#waf-log-ip", body);
     if (typeSel) typeSel.onchange = draw;
     if (ipInput) ipInput.oninput = draw;
+    qsa("[data-waf-ban]", body).forEach(function(b) {
+      b.onclick = async function() {
+        var ip = b.getAttribute("data-waf-ban");
+        if (!(await confirmDlg("将 IP <b class=mono>" + esc(ip) + "</b> 加入 WAF IP 黑名单?<br><span style='font-size:12px;color:var(--text-3)'>加入后该 IP 的所有请求直接 403;若误封自己的出口 IP 将无法访问面板(可在黑名单中移除)。</span>", { danger: true }))) return;
+        try {
+          var st = (await api("/waf")).settings;
+          var bl = st.ip_black || [];
+          if (bl.indexOf(ip) >= 0) { toast("该 IP 已在黑名单中"); return; }
+          bl.push(ip);
+          st.ip_black = bl;
+          await api("/waf/settings", { method: "POST", body: st });
+          toast("IP " + ip + " 已加入黑名单");
+        } catch (e) { toast(e.message, "error"); }
+      };
+    });
     qs("#waf-log-clear", body).onclick = async function() {
       if (!(await confirmDlg("确定清空全部拦截日志吗?", { danger: true }))) return;
       try { await api("/waf/logs/clear", { method: "POST", body: {} }); toast("日志已清空"); load(); }

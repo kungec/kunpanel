@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"time"
 
 	"kunpanel/internal/fwmgmt"
 	"kunpanel/internal/nettools"
 	"kunpanel/internal/procmgr"
 	"kunpanel/internal/taskx"
+	"kunpanel/internal/plugins"
 )
 
 // ---------- 网络工具箱 ----------
@@ -164,6 +166,97 @@ func (s *Server) handleFwToggle(w http.ResponseWriter, r *http.Request) {
 	// firewalld start 后需稍等状态就绪
 	time.Sleep(500 * time.Millisecond)
 	OK(w, fwmgmt.Detect())
+}
+
+// handleWafSiteOff 当前关闭 WAF 的站点列表
+func (s *Server) handleWafSiteOff(w http.ResponseWriter, r *http.Request) {
+	st := plugins.GetWafSettings()
+	if st.SiteOff == nil {
+		st.SiteOff = []string{}
+	}
+	OK(w, map[string]any{"site_off": st.SiteOff})
+}
+
+// handleWafSiteToggle 站点级 WAF 开关切换
+func (s *Server) handleWafSiteToggle(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Host    string `json:"host"`
+		Enabled bool   `json:"enabled"`
+	}
+	if err := readJSON(r, &req); err != nil || req.Host == "" {
+		Fail(w, http.StatusBadRequest, "参数错误")
+		return
+	}
+	st := plugins.GetWafSettings()
+	off := map[string]bool{}
+	for _, h := range st.SiteOff {
+		off[h] = true
+	}
+	if req.Enabled {
+		delete(off, req.Host)
+	} else {
+		off[req.Host] = true
+	}
+	st.SiteOff = nil
+	for h := range off {
+		st.SiteOff = append(st.SiteOff, h)
+	}
+	sort.Strings(st.SiteOff)
+	if err := plugins.SaveWafSettings(st); err != nil {
+		Fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	OK(w, map[string]any{"host": req.Host, "enabled": req.Enabled})
+}
+
+// handleWafAutoBanStatus 自动封禁状态(阈值/当前清单)
+func (s *Server) handleWafAutoBanStatus(w http.ResponseWriter, r *http.Request) {
+	st := plugins.GetWafSettings()
+	OK(w, map[string]any{
+		"enable":    st.AutoBanEnable,
+		"threshold": st.AutoBanThreshold,
+		"list":      st.AutoBlackList,
+	})
+}
+
+// handleWafAutoBanRun 手动执行一次自动封禁扫描;body 可带 {threshold} 一并保存
+func (s *Server) handleWafAutoBanRun(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Threshold int `json:"threshold"`
+	}
+	_ = readJSON(r, &req)
+	st := plugins.GetWafSettings()
+	if req.Threshold > 0 {
+		st.AutoBanEnable = true
+		st.AutoBanThreshold = req.Threshold
+		if err := plugins.SaveWafSettings(st); err != nil {
+			Fail(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	if !st.AutoBanEnable {
+		Fail(w, http.StatusBadRequest, "自动封禁未启用")
+		return
+	}
+	added, list := plugins.AutoBlacklistRun(st.AutoBanThreshold)
+	st2 := plugins.GetWafSettings()
+	st2.AutoBlackList = list
+	if err := plugins.SaveWafSettings(st2); err != nil {
+		Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	OK(w, map[string]any{"added": added, "list": list})
+}
+
+// handleWafAutoBanClear 清空自动封禁清单
+func (s *Server) handleWafAutoBanClear(w http.ResponseWriter, r *http.Request) {
+	st := plugins.GetWafSettings()
+	st.AutoBlackList = []string{}
+	if err := plugins.SaveWafSettings(st); err != nil {
+		Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	OK(w, nil)
 }
 
 // handleFwDockerPorts 容器端口管控:列出发布端口与封禁状态

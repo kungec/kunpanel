@@ -263,4 +263,9 @@ func (s *Server) registerAPI() {
 	m.Handle("POST /api/v1/firewall/docker-block", wrap(http.HandlerFunc(s.handleFwDockerBlock)))
 	m.Handle("GET /api/v1/firewall/ping", wrap(http.HandlerFunc(s.handleFwPingStatus)))
 	m.Handle("POST /api/v1/firewall/ping", wrap(http.HandlerFunc(s.handleFwPing)))
+	m.Handle("GET /api/v1/waf/site-off", wrap(http.HandlerFunc(s.handleWafSiteOff)))
+	m.Handle("POST /api/v1/waf/site-toggle", wrap(http.HandlerFunc(s.handleWafSiteToggle)))
+	m.Handle("GET /api/v1/waf/auto-ban", wrap(http.HandlerFunc(s.handleWafAutoBanStatus)))
+	m.Handle("POST /api/v1/waf/auto-ban/run", wrap(http.HandlerFunc(s.handleWafAutoBanRun)))
+	m.Handle("POST /api/v1/waf/auto-ban/clear", wrap(http.HandlerFunc(s.handleWafAutoBanClear)))
 }

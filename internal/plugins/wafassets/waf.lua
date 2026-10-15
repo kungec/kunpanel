@@ -375,6 +375,24 @@ local mode = conf.mode or "block"
 local ip = ngx.var.remote_addr
 local uri = ngx.var.request_uri
 local ua = ngx.var.http_user_agent or ""
+local host = ngx.var.host
+
+-- 站点级 WAF 开关:site_off 列表中的 host 不启用 WAF(纯 API/内网站点)
+for _, off in ipairs(conf.site_off or {}) do
+    if off == host then return end
+end
+
+-- 自动封禁黑名单:面板按违规频次自动维护,与手工 ip_black 分列
+local auto_black = conf.auto_black_list
+if type(auto_black) == "table" then
+    for _, ab in ipairs(auto_black) do
+        if ab == ip then
+            write_log("ip_ban", "auto blacklist")
+            ngx.status = 403; ngx.header.content_type = "text/plain"; ngx.say("403 Forbidden")
+            return ngx.exit(403)
+        end
+    end
+end
 
 -- 白名单优先
 if ip_in_list(ip, conf.ip_white) then return end

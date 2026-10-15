@@ -3,6 +3,7 @@
 package plugins
 
 import (
+	"net"
 	"crypto/rand"
 	"embed"
 	"encoding/hex"
@@ -129,6 +130,12 @@ type WafSettings struct {
 	// 增强防护:空 UA 拦截(常见脚本工具特征)/ HTTP/1.0 请求拦截(扫描器常用)
 	EmptyUaBlock bool `json:"empty_ua_block"`
 	Http10Block  bool `json:"http10_block"`
+	// 站点级 WAF 开关:这些 host 不启用 WAF(纯 API/内网站点)
+	SiteOff []string `json:"site_off"`
+	// 自动封禁:24 小时内违规次数达阈值的 IP 自动加入持久黑名单(区别于手工维护的 ip_black)
+	AutoBanEnable    bool     `json:"auto_ban_enable"`
+	AutoBanThreshold int      `json:"auto_ban_threshold"` // 24h 违规次数阈值
+	AutoBlackList    []string `json:"auto_black_list"`    // 自动封禁的 IP(由面板维护,UI 只读)
 }
 
 // DefaultRuleGroups 默认规则组(全部启用)
@@ -341,6 +348,12 @@ func saveWafConfig(c *wafConfigFile) error {
 	}
 	if c.CustomRules == nil {
 		c.CustomRules = []CustomRule{}
+	}
+	if c.SiteOff == nil {
+		c.SiteOff = []string{}
+	}
+	if c.AutoBlackList == nil {
+		c.AutoBlackList = []string{}
 	}
 	if c.RuleGroups == nil {
 		c.RuleGroups = DefaultRuleGroups()
@@ -702,6 +715,64 @@ func tail(s string) string {
 // ValidateRulePublic 供测试与外部调用的单条规则校验入口
 func ValidateRulePublic(pat string) error {
 	return validateRuleRegex(pat)
+}
+
+// AutoBlacklistRun 自动封禁:扫描最近 24h 拦截日志,违规达阈值的 IP 加入自动黑名单。
+// 返回本次新增的 IP 列表。autoBlackList 总量上限 500(超出时保留计数最高的)。
+func AutoBlacklistRun(threshold int) (added []string, list []string) {
+	if threshold <= 0 {
+		threshold = 50
+	}
+	st := GetWafSettings()
+	list = st.AutoBlackList
+	if list == nil {
+		list = []string{}
+	}
+	inList := func(ip string) bool {
+		for _, x := range list {
+			if x == ip {
+				return true
+			}
+		}
+		return false
+	}
+	entries, err := WafLogs(2000)
+	if err != nil {
+		return nil, list
+	}
+	cut := time.Now().Add(-24 * time.Hour)
+	ipCnt := map[string]int{}
+	for _, e := range entries {
+		t, e2 := time.Parse("2006-01-02 15:04:05", e.Time)
+		if e2 != nil || t.Before(cut) {
+			continue
+		}
+		// 排除内网/环回地址:docker 网关、健康检查等内部流量不可自动拉黑(防误伤)
+		if ip := net.ParseIP(e.IP); e.IP == "" || ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
+			continue
+		}
+		ipCnt[e.IP]++
+	}
+	type pair struct {
+		ip string
+		n  int
+	}
+	var cands []pair
+	for ip, n := range ipCnt {
+		if n >= threshold && !inList(ip) {
+			cands = append(cands, pair{ip, n})
+		}
+	}
+	sort.Slice(cands, func(i, j int) bool { return cands[i].n > cands[j].n })
+	for _, c := range cands {
+		list = append(list, c.ip)
+		added = append(added, c.ip)
+	}
+	// 上限保护:超过 500 时按加入顺序保留前 500
+	if len(list) > 500 {
+		list = list[:500]
+	}
+	return added, list
 }
 
 // WafDigest 24 小时威胁摘要(供消息中心每日推送)

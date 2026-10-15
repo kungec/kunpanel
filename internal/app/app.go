@@ -39,6 +39,13 @@ type Options struct {
 
 
 // Run 面板主入口:加载配置 -> 启动调度器 -> 监听 HTTP
+// recoverPanic 在 goroutine 中捕获 panic(防止单个后台任务崩溃导致整个面板退出)
+func recoverPanic(name string) {
+	if r := recover(); r != nil {
+		log.Printf("[panic-recovery] %s: %v\n%s", name, r, debug.Stack())
+	}
+}
+
 func Run(o Options) error {
 	// GC 调优:面板内存占用 <50MB,降低 GC 频率减少 CPU 开销
 	debug.SetGCPercent(200)
@@ -61,6 +68,7 @@ func Run(o Options) error {
 
 	// 升级后把全部站点配置迁移到当前格式(如新增的 ACME 挑战 location)
 	go func() {
+		defer recoverPanic("site-conf-migrate")
 		time.Sleep(10 * time.Second)
 		if err := websites.RewriteAllConfs(); err != nil {
 			log.Printf("站点配置迁移失败: %v", err)
@@ -88,6 +96,7 @@ func Run(o Options) error {
 
 	// SSL 证书到期巡检(使用告警设置中的 Webhook)
 	go func() {
+		defer recoverPanic("ssl-watch")
 		time.Sleep(2 * time.Minute)
 		websites.EnsureSslDir()
 		notify := func(msg string) {
@@ -109,6 +118,7 @@ func Run(o Options) error {
 
 	// WAF 每日威胁摘要:每 24 小时汇总拦截数据写入消息中心
 	go func() {
+		defer recoverPanic("waf-digest")
 		time.Sleep(6 * time.Hour)
 		t := time.NewTicker(24 * time.Hour)
 		defer t.Stop()
@@ -129,6 +139,7 @@ func Run(o Options) error {
 
 	// 容器端口封禁规则重放(DOCKER-USER 重启后丢失;需 docker 就绪,稍延迟)
 	go func() {
+		defer recoverPanic("docker-reapply")
 		time.Sleep(15 * time.Second)
 		fwmgmt.DockerReapply()
 	}()

@@ -65,7 +65,7 @@ func Get() Settings {
 // Save 保存配置
 func Save(s Settings) error {
 	if s.Webhook != "" && !strings.HasPrefix(s.Webhook, "http://") && !strings.HasPrefix(s.Webhook, "https://") {
-		return fmt.Errorf("Webhook 地址必须以 http:// 或 https:// 开头")
+		return fmt.Errorf("webhook 地址必须以 http:// 或 https:// 开头")
 	}
 	if s.DiskThres < 1 || s.DiskThres > 100 {
 		s.DiskThres = 90

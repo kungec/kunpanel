@@ -97,7 +97,13 @@ func (s *Server) handleAppAction(w http.ResponseWriter, r *http.Request) {
 	// start/stop/restart 通常很快,直接同步执行
 	switch action {
 	case "start":
-		err := appstore.Apply(key, "start", nil)
+		// 容器已被删除(如手动 docker rm、异常清理)时,启动自动转为重建:
+		// compose 与数据目录仍在,up -d 后数据不丢
+		act := "start"
+		if !dockerx.ContainerExists("kun-" + key) {
+			act = "up -d"
+		}
+		err := appstore.Apply(key, act, nil)
 		if err != nil {
 			Fail(w, http.StatusInternalServerError, err.Error())
 			return

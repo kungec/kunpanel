@@ -561,20 +561,20 @@ func List() ([]Instance, error) {
 	list := loadInstances()
 	cliOK, _ := dockerx.Installed()
 	// 一次 docker ps 批量取全部容器状态(此前逐实例起子进程,引擎繁忙时列表被拖到秒级以上)
-	var states map[string]bool
+	// 三态:running / exited / missing(记录存在但容器已被删除,如手动 docker rm)
+	var states map[string]string
 	if cliOK && len(list) > 0 {
-		names := make([]string, len(list))
-		for i := range list {
-			names[i] = "kun-" + list[i].Key
-		}
-		states = dockerx.RunningStates(names...)
+		states = dockerx.ContainerStates()
 	}
 	for i := range list {
-		list[i].Status = "unknown"
 		if !cliOK {
+			list[i].Status = "unknown"
 			continue
 		}
-		if states != nil && states["kun-"+list[i].Key] {
+		st, ok := states["kun-"+list[i].Key]
+		if !ok {
+			list[i].Status = "missing"
+		} else if st == "running" {
 			list[i].Status = "running"
 		} else {
 			list[i].Status = "exited"

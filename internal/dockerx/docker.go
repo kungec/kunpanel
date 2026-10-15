@@ -78,27 +78,37 @@ func installedReal() (cliOK, engineOK bool) {
 	return
 }
 
-// RunningStates 一次 docker ps 批量返回容器运行状态(name→running),替代逐容器
-// 起子进程的 ContainerRunning 循环。查询不存在的容器返回 false。
-func RunningStates(names ...string) map[string]bool {
-	res := make(map[string]bool, len(names))
-	for _, n := range names {
-		res[n] = false
-	}
+// ContainerStates 一次 docker ps -a 返回全部容器状态(name → docker 状态字符串,
+// 如 running/exited/paused)。不在结果中 = 容器不存在(被删除)。
+func ContainerStates() map[string]string {
+	res := map[string]string{}
 	out, err := util.RunWithTimeout(10*time.Second, "docker", "ps", "-a", "--format", "{{.Names}}\t{{.State}}")
 	if err != nil {
 		return res
 	}
-	want := make(map[string]bool, len(names))
-	for _, n := range names {
-		want[n] = true
-	}
 	for _, line := range strings.Split(out, "\n") {
 		parts := strings.SplitN(strings.TrimSpace(line), "\t", 2)
-		if len(parts) != 2 || !want[parts[0]] {
+		if len(parts) != 2 {
 			continue
 		}
-		res[parts[0]] = parts[1] == "running"
+		res[parts[0]] = parts[1]
+	}
+	return res
+}
+
+// ContainerExists 容器是否存在(含已停止)
+func ContainerExists(name string) bool {
+	_, ok := ContainerStates()[name]
+	return ok
+}
+
+// RunningStates 批量返回容器运行状态(name→running)。查询不存在的容器返回 false;
+// 需要区分"已停止"与"已被删除"时请用 ContainerStates。
+func RunningStates(names ...string) map[string]bool {
+	res := make(map[string]bool, len(names))
+	states := ContainerStates()
+	for _, n := range names {
+		res[n] = states[n] == "running"
 	}
 	return res
 }

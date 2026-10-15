@@ -1367,7 +1367,9 @@ PAGES.apps = {
           var tpl = templates.find(function(x) { return x.key === r.key; }) || {};
           var statusTag = r.status === "running"
             ? '<span class="tag tag-success"><span class="dot on"></span>运行中</span>'
-            : '<span class="tag tag-info"><span class="dot off"></span>未运行</span>';
+            : (r.status === "missing"
+              ? '<span class="tag tag-danger" title="安装记录还在,但容器已不存在(可能被手动删除)。点「重建」可按原配置恢复,数据目录保留">容器已删除</span>'
+              : '<span class="tag tag-info"><span class="dot off"></span>未运行</span>');
           var ver = r.params && r.params.Version ? '<span class="tag tag-info" style="margin-left:6px">' + esc(r.params.Version) + '</span>' : "";
           html += '<tr><td><b>' + esc(r.name) + '</b>' + ver + '<span data-upd-badge="' + r.key + '" style="margin-left:6px"></span></td><td><span class="mono">' + esc(r.key) + '</span></td>';
           html += '<td>' + statusTag + '</td>';
@@ -1376,11 +1378,12 @@ PAGES.apps = {
           html += '<td><div style="display:flex;gap:4px;flex-wrap:wrap">';
           if (canManage) html += '<button class="btn btn-sm btn-primary" data-app-mgr="' + r.key + '">管理</button>';
           html += '<button class="btn btn-sm btn-plain" data-app-cfg="' + r.key + '" data-app-name="' + esc(r.name) + '">配置</button>';
-          var actNames = { start: "启动", stop: "停止", restart: "重启" };
           var running = r.status === "running";
+          var missing = r.status === "missing";
+          var actNames = { start: missing ? "重建" : "启动", stop: "停止", restart: "重启" };
           ["start","stop","restart"].forEach(function(a) {
-            // 状态感知:运行中禁用启动,未运行禁用停止
-            var dis = (a === "start" && running) || (a === "stop" && !running);
+            // 状态感知:运行中禁用启动;容器已删除时禁用停止/重启,「重建」按原配置重新创建容器
+            var dis = (a === "start" && running) || (a !== "start" && missing) || (a === "stop" && !running);
             html += '<button class="btn btn-sm btn-plain" data-app-act="' + a + '" data-app-key="' + r.key + '"' + (dis ? " disabled" : "") + ">" + actNames[a] + '</button>';
           });
           html += '<button class="btn btn-sm btn-danger-plain" data-app-act="uninstall" data-app-key="' + r.key + '">卸载</button></div></td></tr>';

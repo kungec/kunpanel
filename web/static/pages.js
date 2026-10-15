@@ -3586,6 +3586,7 @@ PAGES.settings = {
       qs("#s-upd-check", body).onclick = async function() {
         var btn = this;
         btn.disabled = true;
+        btn.innerHTML = '<span class="spinner" style="width:12px;height:12px;border-width:2px;display:inline-block;vertical-align:middle;margin-right:4px"></span> 检查中…';
         qs("#upd-state", body).textContent = "正在连接 GitHub 检查 ...";
         try {
           var d = await api("/panel/update?force=1");
@@ -3605,6 +3606,8 @@ PAGES.settings = {
           qs("#upd-state", body).textContent = "检查失败: " + e.message;
           toast("检查更新失败: " + e.message, "error");
         }
+        var sv = qs("#s-upd-check", body);
+        if (sv) { sv.disabled = false; sv.innerHTML = I("refresh") + " 检查更新"; }
         btn.disabled = false;
       };
       qs("#s-upd-apply", body).onclick = async function() {
@@ -4967,9 +4970,16 @@ PAGES.docker = {
         '<option value="">官方源</option><option value="aliyun">阿里云镜像</option></select>' +
         '<button class="btn btn-primary" id="dk-install">' + I("download") + " 一键安装 Docker</button></div></div>";
       qs("#dk-install", el).onclick = function() {
+        var btn = this;
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px;display:inline-block;vertical-align:middle;margin-right:6px"></span> 正在安装…';
         api("/docker/install", { method: "POST", body: { mirror: qs("#dk-mirror", el).value } }).then(function(d) {
           taskModal(d.id, function(st) { if (st === "success") self.render(el); });
-        }).catch(function(e) { toast(e.message, "error", 5000); });
+        }).catch(function(e) {
+          btn.disabled = false;
+          btn.innerHTML = I("download") + " 一键安装 Docker";
+          toast(e.message, "error", 8000);
+        });
       };
       return;
     }

@@ -1219,3 +1219,12 @@ tr.fm-selected { background: var(--primary-light); }
 .CodeMirror-dialog { z-index: 2410 !important; }
 .cm-matchhighlight { background: var(--primary-light); }
 .CodeMirror-activeline-background { background: color-mix(in srgb, var(--primary) 6%, transparent); }
+
+/* 按钮内联 spinner */
+.spinner {
+  border: 2px solid rgba(255,255,255,.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin .6s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }

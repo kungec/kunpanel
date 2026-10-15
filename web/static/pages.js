@@ -922,7 +922,7 @@ PAGES.websites = {
       const dl = document.createElement("button");
       dl.className = "btn btn-plain";
       dl.style.marginRight = "auto";
-      dl.innerHTML = '${I("download")} 下载证书';
+      dl.innerHTML = I("download") + " 下载证书";
       dl.onclick = () => window.open("/api/v1/ssl/certs/" + site.ssl_cert_id + "/download?token=" + encodeURIComponent(localStorage.getItem(TOKEN_KEY)), "_blank");
       const foot = m.el.querySelector(".modal-footer");
       foot.insertBefore(dl, foot.firstChild);

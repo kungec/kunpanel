@@ -41,8 +41,34 @@ type NetResource struct {
 	Detail string `json:"detail"`
 }
 
-// Installed 检查 docker CLI 与引擎是否可用
+var (
+	instMu       sync.Mutex
+	instCachedOK bool
+	instCachedEn bool
+	instAt       time.Time
+)
+
+// Installed 检查 docker CLI 与引擎是否可用。结果短缓存:成功 15s、失败 3s
+// (失败短缓存避免引擎恢复前的"未安装"假状态持续过久)。无缓存时列表类
+// 接口每次请求都会拉起 docker info 子进程,引擎繁忙时请求被拖到秒级以上。
 func Installed() (cliOK, engineOK bool) {
+	instMu.Lock()
+	if time.Since(instAt) < 15*time.Second && (instCachedOK || time.Since(instAt) < 3*time.Second) {
+		defer instMu.Unlock()
+		return instCachedOK, instCachedEn
+	}
+	instMu.Unlock()
+
+	cliOK, engineOK = installedReal()
+
+	instMu.Lock()
+	instCachedOK, instCachedEn = cliOK, engineOK
+	instAt = time.Now()
+	instMu.Unlock()
+	return cliOK, engineOK
+}
+
+func installedReal() (cliOK, engineOK bool) {
 	if _, err := exec.LookPath("docker"); err != nil {
 		return false, false
 	}
@@ -50,6 +76,31 @@ func Installed() (cliOK, engineOK bool) {
 	out, err := util.RunWithTimeout(8*time.Second, "docker", "info", "--format", "{{.ServerVersion}}")
 	engineOK = err == nil && strings.TrimSpace(out) != ""
 	return
+}
+
+// RunningStates 一次 docker ps 批量返回容器运行状态(name→running),替代逐容器
+// 起子进程的 ContainerRunning 循环。查询不存在的容器返回 false。
+func RunningStates(names ...string) map[string]bool {
+	res := make(map[string]bool, len(names))
+	for _, n := range names {
+		res[n] = false
+	}
+	out, err := util.RunWithTimeout(10*time.Second, "docker", "ps", "-a", "--format", "{{.Names}}\t{{.State}}")
+	if err != nil {
+		return res
+	}
+	want := make(map[string]bool, len(names))
+	for _, n := range names {
+		want[n] = true
+	}
+	for _, line := range strings.Split(out, "\n") {
+		parts := strings.SplitN(strings.TrimSpace(line), "\t", 2)
+		if len(parts) != 2 || !want[parts[0]] {
+			continue
+		}
+		res[parts[0]] = parts[1] == "running"
+	}
+	return res
 }
 
 func Version() string {

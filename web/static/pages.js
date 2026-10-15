@@ -1398,27 +1398,26 @@ PAGES.apps = {
       body.querySelectorAll("[data-app-act]").forEach(function(b) {
         b.onclick = function() {
           var key = b.getAttribute("data-app-key"), act = b.getAttribute("data-app-act");
-          var H = { "Authorization": "Bearer " + localStorage.getItem(TOKEN_KEY), "Content-Type": "application/json" };
           if (act === "uninstall") {
             confirmDlg("卸载 <b>" + key + "</b>?容器将停止并移除(站点配置保留)。", { danger: true }).then(function(ok) {
               if (!ok) return;
-              fetch("/api/v1/apps/instances/" + key + "/uninstall", { method: "POST", headers: H, body: JSON.stringify({remove_data: false}) })
-                .then(function(r){ return r.json() })
+              b.disabled = true;
+              api("/apps/instances/" + key + "/uninstall", { method: "POST", body: { remove_data: false }, timeout: 0 })
                 .then(function(d) {
-                  if (d.code !== 0) { toast(d.message || "卸载失败", "error"); return; }
-                  if (d.data && d.data.task_id) {
-                    taskModal(d.data.task_id, function() { toast("卸载完成"); self.render(el); });
+                  if (d && d.task_id) {
+                    taskModal(d.task_id, function() { toast("卸载完成"); self.render(el); });
                   } else {
                     toast("卸载完成");
                     setTimeout(function(){ self.render(el); }, 1500);
                   }
-                });
+                })
+                .catch(function(e) { toast(e.message || "卸载失败", "error", 6000); b.disabled = false; });
             });
             return;
           }
-          fetch("/api/v1/apps/instances/" + key + "/" + act, { method: "POST", headers: H, body: "{}" })
-            .then(function(r){ return r.json() })
-            .then(function(d) { toast(d.message || "操作成功"); setTimeout(function(){ self.render(el); }, 1500); });
+          api("/apps/instances/" + key + "/" + act, { method: "POST", body: {} })
+            .then(function() { toast("操作成功"); setTimeout(function(){ self.render(el); }, 1500); })
+            .catch(function(e) { toast(e.message || "操作失败", "error", 6000); });
         };
       });
     }

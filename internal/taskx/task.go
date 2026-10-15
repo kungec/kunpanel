@@ -54,7 +54,9 @@ func NewManager() *Manager {
 	return &Manager{tasks: map[string]*Task{}}
 }
 
-// Start 启动一个具名后台任务;同名任务运行中则拒绝
+// Start 启动一个具名后台任务;同名任务运行中则拒绝。
+// 注意 sync.Mutex 不可重入:清理必须在拿锁之前完成(锁内调用 cleanupFinished
+// 会自我死锁,曾导致首次卸载后整个任务系统永久挂死)。
 func (m *Manager) Start(name string, fn func(w io.Writer) error) (*Task, error) {
 	m.cleanupFinished() // 清理 1 小时前完成的任务(自己加锁)
 	m.mu.Lock()
@@ -72,7 +74,6 @@ func (m *Manager) Start(name string, fn func(w io.Writer) error) (*Task, error) 
 		StartedAt: time.Now(),
 		buf:       &ringBuffer{max: 512 * 1024},
 	}
-	m.cleanupFinished()
 	m.tasks[t.ID] = t
 	go func() {
 		err := fn(t.buf)

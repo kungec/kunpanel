@@ -1465,11 +1465,12 @@ PAGES.apps = {
       exts = exts.filter(function(e2, i) { return exts.indexOf(e2) === i; });
       return '<div class="settings-section"><div class="settings-section-title">已加载扩展(' + exts.length + ')<span class="help" style="margin:0">带 × 的为面板安装,可卸载;其余为内置模块</span></div>' +
         '<div style="display:flex;flex-wrap:wrap;gap:6px">' + exts.map(function(e2) {
-          var low = e2.toLowerCase();
-          var canRemove = removable.some(function(r) { return r === low || low.indexOf(r) >= 0; });
-          if (canRemove) {
+          var low = e2.toLowerCase().replace(/\s+/g, "");
+          // 卸载必须传 removable 的原始键(= ini 文件名),不能传显示名(如 "Zend OPcache")
+          var matchR = removable.find(function(r) { return low === r || low === "zend" + r; }) || "";
+          if (matchR) {
             return '<span class="tag tag-info am-ext-chip">' + esc(e2) +
-              '<i class="am-ext-del" data-unload="' + esc(low) + '" title="卸载该扩展">&times;</i></span>';
+              '<i class="am-ext-del" data-unload="' + esc(matchR) + '" title="卸载该扩展">&times;</i></span>';
           }
           return '<span class="tag tag-info am-ext-chip">' + esc(e2) + "</span>";
         }).join("") + "</div></div>";

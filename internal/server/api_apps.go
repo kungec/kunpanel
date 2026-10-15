@@ -378,7 +378,8 @@ func (s *Server) handleAppRuntimeAction(w http.ResponseWriter, r *http.Request) 
 			fmt.Fprintln(w, "[3/3] 校验卸载结果 ...")
 			m, _ := dockerx.ExecIn(container, "php", "-m")
 			for _, line := range strings.Split(m, "\n") {
-				if strings.EqualFold(strings.TrimSpace(line), ext) {
+				norm := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(line), " ", ""))
+				if norm == ext || norm == "zend"+ext {
 					return fmt.Errorf("卸载后仍检测到 %s(可能为内置模块),请勿强行移除", ext)
 				}
 			}

@@ -1,6 +1,7 @@
 package appstore
 
 import (
+	"net/http"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -379,6 +380,58 @@ func builtinTemplates() []Template {
 			},
 			WebURL: func(p map[string]string) string { return fmt.Sprintf("http://<IP>:%s", pval(p, "Port", "8081")) },
 		},
+        {
+            Key: "kunfaka", Name: "坤发卡", Category: "建站", Icon: "store", Version: "latest",
+            Desc: "全自动发卡系统:7×24 无人值守,6 大支付通道(含 USDT 免挂),秒级自动发货,内置应用商店+5 套主题",
+            Params: []Param{
+                {Key: "Port", Label: "监听端口", Default: "8080"},
+                {Key: "DBRootPassword", Label: "MySQL root 密码", Default: "Kun@FK2026"},
+            },
+            ComposeFrom: func(p map[string]string) string {
+                port := pval(p, "Port", "8080")
+                return `services:
+  kunfaka:
+    image: kungec/kunfaka:latest
+    container_name: kun-kunfaka
+    restart: unless-stopped
+    ports:
+      - "` + port + `:80"
+    environment:
+      TZ: Asia/Shanghai
+    volumes:
+      - ./data:/var/www/html/data
+      - ./uploads:/var/www/html/uploads
+    depends_on:
+      - db
+  kunfaka-cron:
+    image: kungec/kunfaka:latest
+    container_name: kun-kunfaka-cron
+    restart: unless-stopped
+    command: ["sh", "-c", "while true; do php /var/www/html/cron.php; sleep 60; done"]
+    volumes:
+      - ./data:/var/www/html/data
+      - ./uploads:/var/www/html/uploads
+    depends_on:
+      - db
+  db:
+    image: mysql:8.0
+    container_name: kun-kunfaka-db
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: kunfaka
+      MYSQL_USER: kunfaka
+      MYSQL_PASSWORD: Kun@FK2026
+      MYSQL_ROOT_PASSWORD: ` + pval(p, "DBRootPassword", "Kun@FK2026") + `
+      TZ: Asia/Shanghai
+    volumes:
+      - ./db_data:/var/lib/mysql
+      - ./database.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+`
+            },
+            WebURL: func(p map[string]string) string {
+                return "http://<IP>:" + pval(p, "Port", "8080")
+            },
+        },
 		{
 			Key: "npm", Name: "Nginx Proxy Manager", Category: "Web服务器", Icon: "shuffle", Version: "latest",
 			Desc: "可视化反向代理管理,自动申请 SSL 证书",
@@ -570,6 +623,13 @@ func Install(key string, params map[string]string) error {
 		return err
 	}
 
+	// 坤发卡:下载 database.sql 供 MySQL 首次启动自动导入
+	if key == "kunfaka" {
+		if err := installKunfaka(dir, params); err != nil {
+			return fmt.Errorf("坤发卡初始化失败: %w", err)
+		}
+	}
+
 	list := loadInstances()
 	for i := range list {
 		if list[i].Key == key {
@@ -582,6 +642,35 @@ func Install(key string, params map[string]string) error {
 		Params: params, Dir: dir, CreatedAt: time.Now().Format("2006-01-02 15:04:05"),
 	})
 	return saveInstances(list)
+}
+
+// installKunfaka 下载 kunfaka 源码与 database.sql 并写入实例目录
+func installKunfaka(dir string, params map[string]string) error {
+	const repo = "https://raw.githubusercontent.com/kungec/kunfaka/main"
+	// 下载 database.sql(MySQL 首次启动自动导入)
+	sqlURL := repo + "/database.sql"
+	sqlData, err := downloadFile(sqlURL, 30*time.Second)
+	if err != nil {
+		return fmt.Errorf("下载 database.sql 失败: %w", err)
+	}
+	if err := util.AtomicWriteString(filepath.Join(dir, "database.sql"), string(sqlData), 0o644); err != nil {
+		return err
+	}
+	return nil
+}
+
+// downloadFile 下载文件(带超时与大小限制)
+func downloadFile(url string, timeout time.Duration) ([]byte, error) {
+	client := &http.Client{Timeout: timeout}
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 }
 
 // InstanceDir 返回实例目录

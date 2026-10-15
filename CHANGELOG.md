@@ -3,6 +3,19 @@
 所有重要变更都会记录在此文件中。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v2.58.0] - 2026-10-15
+
+### 新增(高级防渗透)
+- **HTTP 请求走私检测**:CL/TE 头冲突、重复 Content-Length、非法 Transfer-Encoding → 400
+- **蜜罐诱捕**:伪装路径命中即 24h 封禁 + 404 伪装页;面板可自定义路径列表
+- **Webshell 木马检测规则组**:12 条特征(eval(\$_POST)/反序列化/Runtime/IEX 等),默认启用
+- **拦截模式违规升级封禁**:连续命中达阈值自动临时封禁
+- **响应头泄露防护**:Server 头改写、X-Powered-By 隐藏
+
+### 修复
+- 蜜罐封禁在 banDict 声明前引用(静默不封禁)
+- cc_mode 白名单补 cf / slider
+
 ## [v2.57.1] - 2026-10-15
 
 ### 新增

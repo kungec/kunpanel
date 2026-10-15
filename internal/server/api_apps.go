@@ -296,6 +296,16 @@ func (s *Server) handleAppRuntimeAction(w http.ResponseWriter, r *http.Request) 
 			Fail(w, http.StatusBadRequest, "暂不支持该扩展: "+ext)
 			return
 		}
+		// 已加载守卫:避免重复安装产生混乱状态(opcache 在 PHP 8.4 php -m 显示为 "Zend OPcache")
+		if mout, err := dockerx.ExecIn(container, "php", "-m"); err == nil {
+			for _, line := range strings.Split(mout, "\n") {
+				norm := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(line), " ", ""))
+				if norm == ext || norm == "zend"+ext {
+					Fail(w, http.StatusConflict, "扩展 "+ext+" 已安装并加载,无需重复安装")
+					return
+				}
+			}
+		}
 		t, err := taskx.M.Start("php-ext-"+ext, func(w io.Writer) error {
 			fmt.Fprintln(w, "安装 PHP 扩展:", ext, "("+map[bool]string{true: "PECL", false: "源码内置"}[meta.Pecl]+")")
 			// 1) 系统依赖(镜像默认不含图形/压缩等开发库)

@@ -1461,6 +1461,8 @@ PAGES.apps = {
 
     function loadedChips(exts, removable) {
       removable = removable || [];
+      // PHP 8.4 的 opcache 在 php -m 固有输出两次,显示去重
+      exts = exts.filter(function(e2, i) { return exts.indexOf(e2) === i; });
       return '<div class="settings-section"><div class="settings-section-title">已加载扩展(' + exts.length + ')<span class="help" style="margin:0">带 × 的为面板安装,可卸载;其余为内置模块</span></div>' +
         '<div style="display:flex;flex-wrap:wrap;gap:6px">' + exts.map(function(e2) {
           var low = e2.toLowerCase();
@@ -1533,7 +1535,8 @@ PAGES.apps = {
       view.innerHTML = '<div class="boot-loading" style="height:60px"><div class="spinner"></div></div>';
       Promise.all([fetchRT(), api("/apps/instances/php/runtime/php-ext-catalog", { method: "POST", body: {} }).catch(function() { return {}; })])
         .then(function(rs) {
-          var loaded = (rs[0].extensions || []).map(function(x) { return x.toLowerCase(); });
+          // 归一化:php -m 的 "Zend OPcache" 对应目录键 "opcache"(去空格 + 可选 zend 前缀)
+          var loaded = (rs[0].extensions || []).map(function(x) { return x.toLowerCase().replace(/\s+/g, ""); });
           var cat = rs[1] || {};
           self._amCatalog = cat;
           // 分组:已加载在上,可安装按类目
@@ -1545,7 +1548,8 @@ PAGES.apps = {
             if (cats.indexOf(c) < 0) cats.push(c);
           });
           cats.forEach(function(c) {
-            var items = Object.keys(cat).filter(function(n) { return (cat[n].cat || "其他") === c && loaded.indexOf(n) < 0; });
+            var hasLoaded = function(n) { var k = n.toLowerCase(); return loaded.indexOf(k) >= 0 || loaded.indexOf("zend" + k) >= 0; };
+          var items = Object.keys(cat).filter(function(n) { return (cat[n].cat || "其他") === c && !hasLoaded(n); });
             if (!items.length) return;
             html += '<div class="am-cat">' + esc(c) + "</div>" +
               '<div class="am-ext-grid">' + items.map(function(n) {

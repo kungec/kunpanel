@@ -30,6 +30,7 @@ async function api(path, opts = {}) {
   }
   let json = null;
   try { json = await res.json(); } catch (e) { /* ignore */ }
+  checkPanelBuild(res);
   if (res.status === 401) {
     if (typeof App !== "undefined" && App.isLogged && App.isLogged()) {
       localStorage.removeItem(TOKEN_KEY);
@@ -42,6 +43,23 @@ async function api(path, opts = {}) {
     throw new Error((json && json.message) || ("请求失败 (" + res.status + ")"));
   }
   return raw ? json : json.data;
+}
+
+/* ---------- 面板升级提示 ---------- */
+/* 后端每个响应都带 X-Panel-Build(构建版本)。长驻标签页在面板升级后仍跑旧版前端,
+   若不提示,用户会把"新功能看不到"当成 bug。检测到不一致只提示一次,点击即刷新。 */
+let buildWarned = "";
+function checkPanelBuild(res) {
+  try {
+    const build = res.headers.get("X-Panel-Build");
+    if (!build) return;
+    const myScript = document.querySelector('script[src*="pages.js"]');
+    const m = myScript && /[?&]v=([0-9a-f]+)/.exec(myScript.src);
+    const mine = m ? m[1] : "";
+    if (!mine || mine === build || buildWarned === build) return;
+    buildWarned = build;
+    toast("面板已更新到新版本,点击刷新页面以启用新功能", "info", 15000, function() { location.reload(); });
+  } catch (e) { /* 忽略 */ }
 }
 
 /* ---------- 工具 ---------- */

@@ -211,6 +211,9 @@ func (s *Server) withSecurityHeaders(next http.Handler) http.Handler {
 		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		h.Set("X-XSS-Protection", "0")
 		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		// 构建版本号:前端比对自身加载的 ?v=,面板升级后提示刷新,
+		// 避免长驻标签页一直跑旧版前端(用户误报"功能缺失")
+		h.Set("X-Panel-Build", s.assetVer)
 		h.Set("Content-Security-Policy", s.cspScript+
 			" style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws: wss:; "+
 			"font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")

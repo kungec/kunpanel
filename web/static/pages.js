@@ -1323,6 +1323,7 @@ PAGES.apps = {
         html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-top:auto">';
         html += '<span class="tag tag-info">' + esc(t.version) + '</span>';
         // PHP 多版本:已装时仍可安装其他版本(卡片保留安装按钮)
+        var instMissing = !!inst && inst.status === "missing";
         var phpMulti = t.key === "php" && inst && !instMissing;
         if (t.key.indexOf("custom_") === 0) {
           html += '<span style="display:flex;gap:6px;align-items:center">' +

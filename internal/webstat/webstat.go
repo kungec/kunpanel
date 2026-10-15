@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"kunpanel/internal/util"
 	"os"
+	"path"
 	"regexp"
 	"runtime"
 	"sort"
@@ -156,9 +157,18 @@ func topNMap(m map[string]int, n int, _ interface{}) []Rank {
 // GetLogContent 从容器或宿主机读取 access 日志尾部内容
 func GetLogContent(container, logPath string, lines int) (string, error) {
 	if container != "" {
-		// 官方 openresty/nginx 镜像的 access.log 是指向 /dev/stdout 的符号链接,
-		// docker exec tail 它等于 tail 自己的 stdout,会永久挂死。
-		// 正确读取方式是 docker logs(日志驱动捕获的 stdout/stderr),并加超时兜底。
+		// 定制镜像(kunpanel/nginx-lua 等)的 access.log 是容器内真实文件,且各站点
+		// 还有独立的 *.access.log,docker logs 里完全没有这些内容(统计恒为 0);
+		// 官方镜像的 access.log 则是指向 /dev/stdout 的符号链接,docker exec tail 会
+		// 永久挂死。故只读「存在且非符号链接」的日志文件,读不到再回退 docker logs。
+		dir := path.Dir(logPath)
+		script := fmt.Sprintf(
+			`out=0; for f in %s %s/*.access.log; do if [ -f "$f" ] && [ ! -L "$f" ]; then tail -n %d "$f" && out=1; fi; done; exit $out`,
+			logPath, dir, lines)
+		if out, err := util.RunWithTimeout(12*time.Second, "docker", "exec", container, "sh", "-c", script); err == nil && strings.TrimSpace(out) != "" {
+			return out, nil
+		}
+		// 官方镜像回退:access.log → /dev/stdout,由日志驱动捕获在 docker logs
 		return util.RunWithTimeout(15*time.Second, "docker", "logs", "--tail", fmt.Sprint(lines), container)
 	}
 	f, err := os.Open(logPath)

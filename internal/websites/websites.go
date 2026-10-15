@@ -79,6 +79,7 @@ type Site struct {
 	CreatedAt      string `json:"created_at"`
 	Remark         string `json:"remark"`
 	PhpKey    string    `json:"php_key,omitempty"` // 使用的 PHP 实例键(php/php82...;空=默认)
+	FpmPass   string    `json:"fpm_pass,omitempty"` // phpfpm 站点:fastcgi 上游(unix:... 或 host:port)
 }
 
 // Upstream 反代负载均衡后端
@@ -174,12 +175,13 @@ func List() ([]Site, error) {
 // CreateOpts 创建站点参数
 type CreateOpts struct {
 	Domain   string
-	SiteType string // static / php / proxy
+	SiteType string // static / php / phpfpm / proxy
 	ProxyTo  string // proxy 类型必填
 	RootDir  string // 可选:自定义根目录(默认自动生成)
 	Remark   string
 	Port     int
 	PhpKey   string // php 类型:PHP 实例键(php/php82...;空=默认)
+	FpmPass  string // phpfpm 类型:fastcgi 上游(如 172.17.0.1:9072)
 }
 
 // Add 新建站点(兼容旧签名)
@@ -196,8 +198,11 @@ func Create(o CreateOpts) (*Site, error) {
 	if err := validateDomains(domain); err != nil {
 		return nil, err
 	}
-	if o.SiteType != "static" && o.SiteType != "proxy" && o.SiteType != "php" {
+	if o.SiteType != "static" && o.SiteType != "proxy" && o.SiteType != "php" && o.SiteType != "phpfpm" {
 		return nil, fmt.Errorf("不支持的站点类型")
+	}
+	if o.SiteType == "phpfpm" && strings.TrimSpace(o.FpmPass) == "" {
+		return nil, fmt.Errorf("phpfpm 站点必须提供 fastcgi 上游")
 	}
 	if o.SiteType == "proxy" && strings.TrimSpace(o.ProxyTo) == "" {
 		return nil, fmt.Errorf("代理目标不能为空")
@@ -221,6 +226,11 @@ func Create(o CreateOpts) (*Site, error) {
 		// PHP 站点:全部请求转发到所选 PHP 运行时实例,容器内按站点目录区分
 		s.PhpKey = normalizePHPKey(o.PhpKey)
 		s.ProxyTo = PhpUpstreamFor(s.PhpKey, id)
+	}
+	if o.SiteType == "phpfpm" {
+		// PHP-FPM 直连站点:root 保持宿主机原路径,fastcgi 直连宝塔 php-fpm
+		s.Type = "phpfpm"
+		s.FpmPass = strings.TrimSpace(o.FpmPass)
 	}
 	if o.SiteType == "proxy" {
 		s.ProxyTo = strings.TrimSpace(o.ProxyTo)
@@ -461,8 +471,9 @@ func writeConf(s *Site) error {
 	mode := DetectNginx()
 	root := s.Root
 	challengeRoot := s.Root
-	if mode.Mode == "container" {
+	if mode.Mode == "container" && s.Type != "phpfpm" {
 		// 容器内挂载路径:roots 目录 -> /var/www
+		// phpfpm 站点除外:root 为宿主机原路径(宝塔迁移),容器已挂载同路径
 		root = "/var/www/" + s.ID
 		challengeRoot = root
 	}
@@ -546,6 +557,31 @@ func writeConf(s *Site) error {
 		b.WriteString(fmt.Sprintf("    # 流量限制(由坤面板生成)\n    limit_rate %dk;\n\n", s.RateLimit))
 	}
 	switch s.Type {
+	case "phpfpm":
+		// PHP-FPM(fastcgi)直连:root 用宿主机原路径(容器内路径映射由面板处理),
+		// 宝塔迁移站点保持代码/目录/PHP 版本完全不变
+		idx := strings.TrimSpace(s.IndexFiles)
+		if idx == "" {
+			idx = "index.html index.htm index.php"
+		}
+		hostRoot := s.Root
+		fmt.Fprintf(&b, "    root %s;\n    index %s;\n\n", hostRoot, idx)
+		// fastcgi 参数内联(自包含):定制镜像不含 fastcgi.conf
+		b.WriteString(fmt.Sprintf(`    location ~ \.php$ {
+        fastcgi_pass %s;
+        fastcgi_index index.php;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        fastcgi_param QUERY_STRING $query_string;
+        fastcgi_param REQUEST_METHOD $request_method;
+        fastcgi_param CONTENT_TYPE $content_type;
+        fastcgi_param CONTENT_LENGTH $content_length;
+        fastcgi_param REQUEST_URI $request_uri;
+        fastcgi_param DOCUMENT_ROOT $document_root;
+        fastcgi_param SERVER_PROTOCOL $server_protocol;
+        fastcgi_param HTTPS $https if_not_empty;
+    }
+`, s.FpmPass))
+		b.WriteString("    location / {\n        try_files $uri $uri/ =404;\n    }\n")
 	case "static":
 		idx := strings.TrimSpace(s.IndexFiles)
 		if idx == "" {
@@ -873,4 +909,25 @@ func PHPSitesUsing(phpKey string) []string {
 		}
 	}
 	return out
+}
+
+// AppendRemark 追加站点备注(保留原内容)
+func AppendRemark(id, extra string) error {
+	mu.Lock()
+	load()
+	var site *Site
+	for i := range list {
+		if list[i].ID == id {
+			site = &list[i]
+			break
+		}
+	}
+	if site == nil {
+		mu.Unlock()
+		return fmt.Errorf("站点不存在")
+	}
+	site.Remark = strings.TrimSpace(strings.TrimSpace(site.Remark) + "; " + extra)
+	err := save()
+	mu.Unlock()
+	return err
 }

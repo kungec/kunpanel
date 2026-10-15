@@ -176,6 +176,7 @@ PAGES.dashboard = {
 PAGES.websites = {
   title: "网站",
   async render(el) {
+    var self = this;
     el.innerHTML = skeletonTable(4, 5);
     let data = [], nginx = { mode: "none" }, certs = [];
     try {
@@ -204,6 +205,7 @@ PAGES.websites = {
     el.innerHTML = nginxAlert + `
       <div class="card page-fade" style="animation-delay:.08s">
         <div class="card-title">网站列表<div style="display:flex;gap:8px;align-items:center">
+            <button class="btn btn-sm btn-plain" id="site-btmig" style="display:none">${I("shuffle")} 宝塔迁移</button>
             <button class="btn btn-sm btn-plain" id="site-global">${I("gear")} 全局设置</button>
             <button class="btn btn-sm btn-plain" id="site-logs">${I("logs")} 站点日志</button>
             <button class="btn btn-sm btn-plain" id="site-ssl">${I("key")} SSL 证书</button><button class="btn btn-sm btn-plain" id="site-stats">${I("pulse")} 访问统计</button><button class="btn btn-sm btn-primary" id="btn-add-site">${I("plus")} 创建网站</button></div></div>
@@ -240,6 +242,13 @@ PAGES.websites = {
     });
     // 全局设置弹窗
     qs("#site-global", el).onclick = () => this.globalDialog(el);
+    // 宝塔迁移入口(检测到宝塔环境才显示)
+    api("/migration/bt/scan").then(function(res) {
+        if (res && res.found) {
+            var b = qs("#site-btmig", el);
+            if (b) { b.style.display = ""; b.onclick = () => self.btMigrateDialog(res, el); }
+        }
+    }).catch(function() {});
     const site = (id) => data.find((x) => x.id === id);
     qsa("[data-del]", el).forEach((b) => (b.onclick = async () => {
       if (await confirmDlg("确定删除网站 <b>" + esc(site(b.dataset.del).domain) + "</b> 吗?<br>网站根目录数据将保留。")) {
@@ -359,6 +368,63 @@ PAGES.websites = {
     }
     load();
   },
+  /* 宝塔面板一键迁移向导 */
+  btMigrateDialog(scan, el) {
+    var rows = (scan.sites || []).map(function(s2) {
+      var typeTxt = s2.type === "php" ? "PHP " + (s2.php_ver || "") : s2.type === "proxy" ? "反向代理" : "静态";
+      var sslTxt = s2.ssl ? '<span class="tag tag-success">SSL</span>' : "";
+      return '<tr><td><label class="radio-line"><input type="checkbox" checked data-btsite="' + esc(s2.domain) + '"> <b>' + esc(s2.domain) + "</b></label></td>" +
+        '<td><span class="tag tag-info">' + typeTxt + "</span> " + sslTxt + "</td>" +
+        '<td class="mono fm-ellipsis" style="max-width:220px" title="' + esc(s2.root) + '">' + esc(s2.root) + "</td></tr>";
+    }).join("");
+    var dbRows = (scan.dbs || []).map(function(d0) { return "<tr><td class=mono>" + esc(d0.name) + "</td><td>" + esc(d0.ps || "-") + "</td></tr>"; }).join("");
+    var cronRows = (scan.crons || []).map(function(c0) { return "<tr><td>" + esc(c0.name) + "</td><td>" + esc(c0.cycle) + "</td></tr>"; }).join("");
+    var m = modal({
+      title: "宝塔面板一键迁移", width: 860,
+      body:
+        '<div class="alert alert-info page-fade"><span class="alert-ico">' + I("info") + "</span>" +
+        "将宝塔站点的<b>域名、证书、伪静态、PHP(FastCGI 直连宿主机 php-fpm,版本不变)</b>一键迁入坤面板;" +
+        "<b>数据库不迁移</b>(站点继续连接宿主机 MySQL,连接串无需改动);迁移后可一键切换流量,随时回滚。</div>" +
+        '<div class="settings-section"><div class="settings-section-title">站点(' + (scan.sites || []).length + ')<span class="help" style="margin:0">勾选要迁移的站点</span></div>' +
+        '<div class="table-wrap"><table class="table"><thead><tr><th>域名</th><th>类型</th><th>原目录</th></tr></thead><tbody>' + (rows || '<tr><td colspan=3 class=help>未检测到站点</td></tr>') + "</tbody></table></div></div>" +
+        '<div class="settings-section"><div class="settings-section-title">数据库(' + (scan.dbs || []).length + ')</div><div class="help" style="margin:0">数据库保留在宿主机 MySQL 中继续运行,站点连接串无需改动;<b>不在本次迁移范围</b></div>' +
+        (dbRows ? '<div class="table-wrap"><table class="table"><tbody>' + dbRows + "</tbody></table></div>" : "") + "</div>" +
+        '<div class="settings-section"><div class="settings-section-title">计划任务(' + (scan.crons || []).length + ')</div>' +
+        (cronRows ? '<div class="table-wrap"><table class="table"><tbody>' + cronRows + "</tbody></table></div>" : '<div class="help">无</div>') + "</div>" +
+        '<div id="btmig-warn"></div>',
+      footer: '<span class="help" style="margin-right:auto">可随时一键回滚到宝塔</span>' +
+        '<button class="btn btn-plain" data-act="no">取 消</button>' +
+        '<button class="btn btn-primary" data-act="go">开始迁移</button>',
+    });
+    var warnBox = qs("#btmig-warn", m.el);
+    if (warnBox && (scan.warnings || []).length) {
+      warnBox.innerHTML = '<div class="alert alert-warning"><span class="alert-ico">' + I("warn") + "</span>" + (scan.warnings || []).map(function(x) { return esc(x); }).join("<br>") + "</div>";
+    }
+    qs('[data-act="no"]', m.el).onclick = m.close;
+    qs('[data-act="go"]', m.el).onclick = async function() {
+      var sites = [];
+      qsa("[data-btsite]", m.el).forEach(function(cb) { if (cb.checked) sites.push(cb.getAttribute("data-btsite")); });
+      if (!sites.length) { toast("请至少勾选一个站点", "error"); return; }
+      if (!(await confirmDlg("开始迁移所选 <b>" + sites.length + "</b> 个站点?<br><span style='font-size:12px;color:var(--text-3)'>过程中原宝塔站点继续运行,不影响现网;完成后需确认切换流量。</span>"))) return;
+      m.close();
+      try {
+        var d = await api("/migration/bt/apply", { method: "POST", body: { sites: sites, import_certs: true, migrate_cron: true } });
+        taskModal(d.task_id, async function(st) {
+          if (st !== "success") return;
+          confirmDlg("迁移完成!<br><span style='font-size:12.5px'>现在将停止宝塔 Nginx,由坤面板接管 80/443 流量。<br>如遇问题可随时在网站页一键回滚到宝塔。</span>", { danger: true }).then(async function(ok) {
+            if (!ok) { toast("未切换流量。原宝塔 Nginx 仍在服务,可稍后在网站页执行切换", "info", 8000); self.render(el); return; }
+            try {
+              var d2 = await api("/migration/bt/switch", { method: "POST", body: {} });
+              taskModal(d2.task_id, function(st2) {
+                if (st2 === "success") { toast("流量已切换到坤面板", "success", 8000); self.render(el); }
+              });
+            } catch (e2) { toast(e2.message, "error", 8000); self.render(el); }
+          });
+        });
+      } catch (e) { toast(e.message, "error", 8000); }
+    };
+  },
+
   addDialog(el) {
     var self = this;
     var m = modal({

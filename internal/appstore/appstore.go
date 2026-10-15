@@ -1227,3 +1227,54 @@ func allocatePHPKey(version string) (string, error) {
 	return "php" + ver, nil
 }
 
+
+// EnsureBtRootMount 宝塔迁移:确保 Nginx 容器挂载宝塔站点目录 /www/wwwroot
+// (phpfpm 迁移站点 root 保持宿主机原路径,容器内同路径可直接服务)
+func EnsureBtRootMount(w io.Writer) error {
+	anyOK, anyErr := false, ""
+	for _, key := range []string{"nginx", "openresty"} {
+		dir := InstanceDir(key)
+		composeFile := filepath.Join(dir, "docker-compose.yml")
+		b, err := os.ReadFile(composeFile)
+		if err != nil {
+			continue // 未安装该网关
+		}
+		content := string(b)
+		if strings.Contains(content, ":/www/wwwroot") {
+			anyOK = true
+			continue // 已挂载
+		}
+		idx := strings.Index(content, "volumes:")
+		if idx < 0 {
+			continue
+		}
+		lineEnd := strings.Index(content[idx:], "\n")
+		content = content[:idx+lineEnd] + "\n      - /www/wwwroot:/www/wwwroot" + content[idx+lineEnd:]
+		if err := util.AtomicWriteString(composeFile, content, 0o644); err != nil {
+			return err
+		}
+		if w != nil {
+			fmt.Fprintf(w, "  [%s] 追加挂载 /www/wwwroot,重建容器 ...\n", key)
+		}
+		out, err := dockerx.Compose(dir, "up", "-d")
+		if w != nil {
+			fmt.Fprintln(w, out)
+		}
+		// 容错:某网关重建失败(如端口被另一网关占用)不中断,只要有一个网关挂载成功即可
+		if err != nil {
+			anyErr = fmt.Sprintf("[%s] %s", key, tailStr(out))
+			continue
+		}
+		for i := 0; i < 20; i++ {
+			if dockerx.ContainerRunning("kun-" + key) {
+				break
+			}
+			time.Sleep(time.Second)
+		}
+		anyOK = true
+	}
+	if !anyOK && anyErr != "" {
+		return fmt.Errorf("挂载宝塔站点目录失败: %s", anyErr)
+	}
+	return nil
+}

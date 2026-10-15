@@ -501,6 +501,42 @@ volumes:
 			},
 			WebURL: func(p map[string]string) string { return fmt.Sprintf("http://<IP>:%s", pval(p, "Port", "81")) },
 		},
+		{
+			Key: "caddy", Name: "Caddy 反向代理", Category: "Web服务器", Icon: "shuffle", Version: "latest",
+			Desc: "极简高性能反向代理与 Web 服务器:自动 HTTPS、配置即热加载;挂载宿主机目录即可服务静态站点,自带 API 网关能力",
+			Params: []Param{
+				{Key: "HttpPort", Label: "HTTP 端口", Default: "2019", Type: "port", Required: true,
+					Help: "对外 HTTP 端口(注意勿与 Nginx/OpenResty 的 80 冲突)"},
+				{Key: "AdminPort", Label: "管理端口", Default: "2020", Type: "port", Required: false,
+					Help: "Caddy Admin API 端口(仅本机使用)"},
+			},
+			ComposeFrom: func(p map[string]string) string {
+				httpPort := pval(p, "HttpPort", "2019")
+				adminPort := pval(p, "AdminPort", "2020")
+				return `services:
+  caddy:
+    image: caddy:latest
+    container_name: kun-caddy
+    restart: unless-stopped
+    ports:
+      - "` + httpPort + `:80"
+      - "` + adminPort + `:2019"
+    environment:
+      TZ: Asia/Shanghai
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - ./site:/srv
+      - ./data:/data
+      - ./config:/config
+    command: caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+networks:
+  kun-bridge:
+    name: bridge
+    external: true
+`
+			},
+			WebURL: func(p map[string]string) string { return fmt.Sprintf("http://<IP>:%s", pval(p, "HttpPort", "2019")) },
+		},
 	}
 }
 
@@ -697,6 +733,35 @@ func Install(key string, params map[string]string) error {
 		if err := installKunfaka(dir, params); err != nil {
 			return fmt.Errorf("坤发卡初始化失败: %w", err)
 		}
+	}
+
+	// Caddy:生成默认 Caddyfile(静态示例 + 反代示例模板)
+	if key == "caddy" {
+		caddyfile := `# 坤面板 Caddy 配置(修改后重启容器生效:应用商店 → Caddy → 重启)
+# 官方文档: https://caddyserver.com/docs/
+
+# 静态站点示例:浏览器访问 http://<服务器IP>:{http端口} 即打开 ./site 目录
+:80 {
+	root /srv
+	file_server
+}
+
+# —— 反向代理示例(去掉注释并按需修改)——
+# 把某域名反代到本机服务(如 3000 端口):
+# example.com {
+# 	reverse_proxy 172.17.0.1:3000
+# }
+#
+# 反代到面板的 PHP 容器:
+# app.example.com {
+# 	reverse_proxy kun-php:80
+# }
+#
+# 自动 HTTPS:域名换成真实域名(解析到本机)后,Caddy 自动向 Let's Encrypt
+# 申请并续期证书,无需任何配置。
+`
+		_ = os.MkdirAll(dir, 0o755)
+		_ = util.AtomicWriteString(filepath.Join(dir, "Caddyfile"), caddyfile, 0o644)
 	}
 
 	// NAT Cloud:下载源码和 schema.sql 供 MySQL 首次启动自动导入

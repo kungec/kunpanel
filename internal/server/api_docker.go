@@ -45,7 +45,12 @@ func (s *Server) handleDockerInstall(w http.ResponseWriter, r *http.Request) {
 		return dockerx.InstallEngine(req.Mirror, w)
 	})
 	if err != nil {
-		Fail(w, http.StatusConflict, err.Error())
+		msg := err.Error()
+		if strings.Contains(msg, "already exists") || strings.Contains(msg, "installed") {
+			Fail(w, http.StatusConflict, "Docker 已安装,无需重复安装;如面板未检测到,请重启面板后刷新页面")
+			return
+		}
+		Fail(w, http.StatusConflict, msg)
 		return
 	}
 	OK(w, t)

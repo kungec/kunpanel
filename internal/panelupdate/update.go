@@ -71,7 +71,7 @@ type release struct {
 
 // Check 拉取 GitHub 最新 release 并与当前版本比较
 func Check() (*Info, error) {
-	b, err := fetchJSON("https://api.github.com/repos/"+Repo+"/releases/latest", 12*time.Second)
+	b, err := fetchJSON("https://api.github.com/repos/"+Repo+"/releases/latest", 6*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("连接 GitHub 失败: %v", err)
 	}

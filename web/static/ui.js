@@ -245,7 +245,8 @@ function modal({ title, body, footer, width = 540, onClose }) {
     '<div class="modal-body">' + (body || "") + "</div>" +
     (footer ? '<div class="modal-footer">' + footer + "</div>" : "");
   mask.style.display = "flex";
-  const close = () => {
+  let vetoClose = null; // 返回 true 表示阻止本次关闭(未保存改动保护)
+  const doClose = () => {
     mask.classList.add("closing");
     setTimeout(() => {
       mask.style.display = "none";
@@ -255,10 +256,14 @@ function modal({ title, body, footer, width = 540, onClose }) {
     _modalStack = _modalStack.filter((m) => m !== close);
     if (onClose) onClose();
   };
+  const close = () => {
+    if (vetoClose && vetoClose()) return;
+    doClose();
+  };
   qs(".modal-close", box).onclick = close;
-  mask.onclick = (e) => { if (e.target === mask) close(); };
+  // 遮罩点击不再关闭:填一半的表单/编辑内容因误触丢失的代价远大于多点一次 ×
   _modalStack.push(close);
-  return { el: box, close };
+  return { el: box, close, doClose, setVeto: (fn) => (vetoClose = fn) };
 }
 function closeModal() { if (_modalStack.length) _modalStack[_modalStack.length - 1](); }
 
@@ -287,7 +292,7 @@ function openLayer({ title, body, footer, width = 480, onClose }) {
     if (onClose) onClose();
   };
   qs(".modal-close", mask).onclick = close;
-  mask.onclick = (e) => { if (e.target === mask) close(); };
+  // 遮罩点击不关闭(与 modal 一致,防误触丢数据)
   return { el: mask, close };
 }
 

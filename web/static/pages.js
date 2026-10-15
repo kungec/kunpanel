@@ -953,7 +953,19 @@ PAGES.websites = {
         '<div style="margin-top:10px"><button class="btn btn-primary btn-sm" id="ws-conf-save">' + I("edit") + " 保存并重载</button></div>";
       api("/websites/" + s.id + "/conf").then(function(d) {
         var ta = qs("#ws-conf", body);
-        if (ta) ta.value = d.content || "";
+        if (ta) {
+          ta.value = d.content || "";
+          var cm = cmUpgrade(ta, "nginx", { "Ctrl-S": function(c) { qs("#ws-conf-save", body).click(); } });
+          if (cm) {
+            m.setVeto(function() {
+              if (cm.isClean()) return false;
+              confirmDlg("配置文件有<b>未保存的修改</b>,确定放弃并关闭吗?", { danger: true }).then(function(ok) {
+                if (ok) { cm.markClean(); m.doClose(); }
+              });
+              return true;
+            });
+          }
+        }
       }).catch(function(e) {
         var ta = qs("#ws-conf", body);
         if (ta) ta.value = "加载失败: " + e.message;
@@ -961,6 +973,8 @@ PAGES.websites = {
       qs("#ws-conf-save", body).onclick = async function() {
         try {
           await api("/websites/" + s.id + "/conf", { method: "POST", body: { content: qs("#ws-conf", body).value } });
+          var cm2 = qs("#ws-conf", body)._cm;
+          if (cm2) cm2.markClean();
           toast("配置已保存并重载 Nginx");
         } catch (e) { toast(e.message, "error", 6000); }
       };
@@ -1306,7 +1320,16 @@ PAGES.apps = {
         footer: '<button class="btn btn-plain" data-act="no">取 消</button><button class="btn btn-primary" data-act="yes">保存到应用商店</button>',
       });
       qs('[data-act="no"]', m.el).onclick = m.close;
-      cmUpgrade(qs("#ca-compose", m.el), "yaml");
+      var cmC = cmUpgrade(qs("#ca-compose", m.el), "yaml");
+      if (cmC) {
+        m.setVeto(function() {
+          if (cmC.isClean()) return false;
+          confirmDlg("compose 配置有<b>未保存的修改</b>,确定放弃并关闭吗?", { danger: true }).then(function(ok) {
+            if (ok) { cmC.markClean(); m.doClose(); }
+          });
+          return true;
+        });
+      }
       qs('[data-act="yes"]', m.el).onclick = async function() {
         try {
           await api("/apps/custom", { method: "POST", body: {
@@ -1314,6 +1337,7 @@ PAGES.apps = {
             desc: qs("#ca-desc", m.el).value.trim(),
             compose: qs("#ca-compose", m.el).value,
           }});
+          if (cmC) cmC.markClean();
           toast("自定义应用已保存");
           m.close();
           self.render(el);
@@ -1820,9 +1844,23 @@ PAGES.apps = {
         '<button class="btn btn-primary" data-act="apply">保存并重建容器</button>',
     });
     qs('[data-act="no"]', m.el).onclick = m.close;
+    var cmY = cmUpgrade(qs("#ac-yaml", m.el), "yaml", {
+      "Ctrl-S": function() { var b = qs('[data-act="save"]', m.el); if (b) b.click(); },
+      "Cmd-S": function() { var b = qs('[data-act="save"]', m.el); if (b) b.click(); },
+    });
+    if (cmY) {
+      m.setVeto(function() {
+        if (cmY.isClean()) return false;
+        confirmDlg("compose 配置有<b>未保存的修改</b>,确定放弃并关闭吗?", { danger: true }).then(function(ok) {
+          if (ok) { cmY.markClean(); m.doClose(); }
+        });
+        return true;
+      });
+    }
     var save = async function() {
       try {
         await api("/apps/instances/" + key + "/compose", { method: "POST", body: { content: qs("#ac-yaml", m.el).value } });
+        if (cmY) cmY.markClean();
         return true;
       } catch (e) { toast(e.message, "error", 6000); return false; }
     };
@@ -4123,6 +4161,14 @@ PAGES.files = {
       });
       window.__cme = cm;
       qs("#fm-editor", m.el).style.display = "none"; // CM 已替代原生 textarea
+      // 未保存改动保护:尝试关闭时若编辑器是脏的,弹确认
+      m.setVeto(function() {
+        if (cm.isClean()) return false;
+        confirmDlg("编辑器有<b>未保存的修改</b>,确定放弃并关闭吗?", { danger: true }).then(function(ok) {
+          if (ok) { cm.markClean(); m.doClose(); }
+        });
+        return true;
+      });
       var updStatus = function() {
         var c = cm.getCursor();
         var st = qs("#cme-status", m.el);
@@ -5095,6 +5141,27 @@ PAGES.docker = {
   },
 };
 
+
+/* 把已有 textarea 升级为 CodeMirror(隐藏原节点并双向同步,现有保存逻辑无需改动) */
+function cmUpgrade(ta, mode, extra) {
+  if (typeof CodeMirror === "undefined" || !ta || ta._cm) return null;
+  var dark = document.documentElement.getAttribute("data-theme") === "dark";
+  var cm = CodeMirror(function(node) { ta.parentNode.insertBefore(node, ta); }, {
+    value: ta.value,
+    mode: mode,
+    theme: dark ? "material-darker" : "default",
+    lineNumbers: true,
+    styleActiveLine: true,
+    matchBrackets: true,
+    autoCloseBrackets: true,
+    indentUnit: 4,
+    extraKeys: extra || {},
+  });
+  ta.style.display = "none";
+  cm.on("change", function() { ta.value = cm.getValue(); });
+  ta._cm = cm;
+  return cm;
+}
 /* 按扩展名映射 CodeMirror 模式 */
 function cmModeOf(path) {
   var ext = (path.split(".").pop() || "").toLowerCase();

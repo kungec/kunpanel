@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="110" viewBox="0 0 720 110">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#7c2d12"/>
+      <stop offset=".5" stop-color="#ea580c"/>
+      <stop offset="1" stop-color="#f59e0b"/>
+    </linearGradient>
+    <linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity=".22"/>
+      <stop offset=".55" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="716" height="106" rx="16" fill="url(#bg)"/>
+  <rect x="2" y="2" width="716" height="52" rx="14" fill="url(#gloss)"/>
+  <rect x="2" y="2" width="716" height="106" rx="16" fill="none" stroke="#fed7aa" stroke-width="2" opacity=".8"/>
+  <g transform="translate(52,30)">
+    <circle cx="14" cy="14" r="10" fill="#fff" opacity=".16"/>
+    <path d="M14 2 a12 12 0 0 1 12 12 h-6 a6 6 0 0 0 -6 -6 z" fill="#fde68a"/>
+    <path d="M26 14 a12 12 0 0 1 -12 12 v-6 a6 6 0 0 0 6 -6 z" fill="#fff"/>
+    <circle cx="14" cy="14" r="4.5" fill="#7c2d12"/>
+  </g>
+  <text x="92" y="50" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif" font-size="25" font-weight="800" fill="#ffffff">跨境 VPS</text>
+  <text x="92" y="76" font-family="-apple-system,'PingFang SC',sans-serif" font-size="13" fill="#ffedd5">专注家宽住宅 IP 云服务器 · 原生 IP / 大带宽 / 高防</text>
+  <a href="https://www.kjvps.com" target="_blank">
+    <rect x="560" y="34" width="118" height="42" rx="21" fill="#ffffff" opacity=".92"/>
+    <text x="619" y="60" text-anchor="middle" font-family="-apple-system,'PingFang SC',sans-serif" font-size="14.5" font-weight="700" fill="#c2410c">www.kjvps.com</text>
+  </a>
+  <text x="400" y="26" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="12" fill="#ffedd5" opacity=".9">⚡ 坤面板官方赞助商 ⚡</text>
+</svg>

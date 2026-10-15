@@ -352,11 +352,30 @@ func loadWafConfig() *wafConfigFile {
 				c.SpiderWhiteEnable = true
 				migrated = true
 			}
-			if c.MethodBlockList == nil {
-				c.MethodBlockList = def.MethodBlockList
-				c.MethodBlockEnable = true
-				migrated = true
-			}
+		if c.MethodBlockList == nil {
+			c.MethodBlockList = def.MethodBlockList
+			c.MethodBlockEnable = true
+			migrated = true
+		}
+		// 数值缺省迁移(第六轮):目录扫描/自动封禁阈值。
+		// lua 端 tonumber(0) 为 0 而非 nil,`or 默认值` 不会触发:
+		// threshold=0 会让目录扫描判定恒真(首个 URI 即封)、封禁阈值恒真
+		if c.DirscanThreshold <= 0 {
+			c.DirscanThreshold = 30
+			migrated = true
+		}
+		if c.DirscanWindow <= 0 {
+			c.DirscanWindow = 60
+			migrated = true
+		}
+		if c.AutoBanThreshold <= 0 {
+			c.AutoBanThreshold = 50
+			migrated = true
+		}
+		if c.CcClearTTL <= 0 {
+			c.CcClearTTL = 3600
+			migrated = true
+		}
 			if migrated {
 				_ = saveWafConfig(&c)
 			}
@@ -418,6 +437,9 @@ func GetWafSettings() WafSettings {
 }
 
 var listEntryRe = regexp.MustCompile(`[\r\n\t\x00-\x1f]`)
+
+// methodNameRe 合法 HTTP 方法名(用于黑/白名单条目校验)
+var methodNameRe = regexp.MustCompile(`^[A-Z]{3,10}$`)
 
 // nestedQuantRe 拦截嵌套量词(如 (a+)+ ):RE2 可编译但 PCRE 回溯存在风险
 var nestedQuantRe = regexp.MustCompile(`[+*]\)[+{*]`)
@@ -502,7 +524,7 @@ func SaveWafSettings(s WafSettings) error {
 		if m == "" {
 			continue
 		}
-		if !regexp.MustCompile(`^[A-Z]{3,10}$`).MatchString(m) {
+		if !methodNameRe.MatchString(m) {
 			return fmt.Errorf("HTTP 方法不合法: %q", m)
 		}
 		methods = append(methods, m)
@@ -511,6 +533,84 @@ func SaveWafSettings(s WafSettings) error {
 		return fmt.Errorf("方法列表最多 20 条")
 	}
 	s.MethodBlockList = methods
+
+	// 方法白名单:同样仅允许大写字母方法名;列表为空时自动关闭开关
+	// (lua 端空列表直接放行,开着开关只会造成"已启用却没生效"的误解)
+	wl := make([]string, 0, len(s.MethodWlList))
+	for _, m := range s.MethodWlList {
+		m = strings.ToUpper(strings.TrimSpace(listEntryRe.ReplaceAllString(m, "")))
+		if m == "" {
+			continue
+		}
+		if !methodNameRe.MatchString(m) {
+			return fmt.Errorf("白名单方法不合法: %q", m)
+		}
+		wl = append(wl, m)
+	}
+	if len(wl) > 20 {
+		return fmt.Errorf("方法白名单最多 20 条")
+	}
+	s.MethodWlList = wl
+	if len(wl) == 0 {
+		s.MethodWlEnable = false
+	}
+
+	// 自动封禁阈值:归一到安全区间(0/负值会让封禁判定恒真,全量误封)
+	if s.AutoBanThreshold < 1 || s.AutoBanThreshold > 100000 {
+		s.AutoBanThreshold = 50
+	}
+	// 目录扫描防御参数归一(阈值过小会拦截正常浏览,窗口非法会破坏计数桶)
+	if s.DirscanThreshold < 2 || s.DirscanThreshold > 100000 {
+		s.DirscanThreshold = 30
+	}
+	if s.DirscanWindow < 10 || s.DirscanWindow > 86400 {
+		s.DirscanWindow = 60
+	}
+	// 敏感路径限速:条数上限 + 参数归一(path 进 lua 前缀匹配,清理控制字符)
+	if len(s.URLRateRules) > 50 {
+		return fmt.Errorf("敏感路径限速最多 50 条")
+	}
+	rules := make([]URLRateRule, 0, len(s.URLRateRules))
+	for _, r := range s.URLRateRules {
+		r.Path = strings.TrimSpace(listEntryRe.ReplaceAllString(r.Path, ""))
+		if r.Path == "" {
+			continue
+		}
+		if len(r.Path) > 200 {
+			return fmt.Errorf("限速路径过长: %q", r.Path)
+		}
+		if r.Limit < 1 || r.Limit > 100000 {
+			r.Limit = 10
+		}
+		if r.Window < 1 || r.Window > 86400 {
+			r.Window = 60
+		}
+		rules = append(rules, r)
+	}
+	s.URLRateRules = rules
+
+	// 蜜罐路径:前缀匹配用,须以 / 开头;空列表自动关闭
+	if len(s.HoneypotPaths) > 50 {
+		return fmt.Errorf("蜜罐路径最多 50 条")
+	}
+	paths := make([]string, 0, len(s.HoneypotPaths))
+	for _, p := range s.HoneypotPaths {
+		p = strings.TrimSpace(listEntryRe.ReplaceAllString(p, ""))
+		if p == "" {
+			continue
+		}
+		if !strings.HasPrefix(p, "/") {
+			return fmt.Errorf("蜜罐路径须以 / 开头: %q", p)
+		}
+		if len(p) > 200 {
+			return fmt.Errorf("蜜罐路径过长: %q", p)
+		}
+		paths = append(paths, p)
+	}
+	s.HoneypotPaths = paths
+	if len(paths) == 0 {
+		s.HoneypotEnable = false
+	}
 
 	if s.Mode != "block" && s.Mode != "alert" && s.Mode != "monitor" {
 		s.Mode = "block"

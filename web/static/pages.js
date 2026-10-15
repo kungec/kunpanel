@@ -2734,7 +2734,10 @@ PAGES.plugins = {
       '<div class="waf-rule-grid">' +
       '<div class="waf-rule-item"><label><b>拦截空 UA 请求</b><span class="settings-hint">正规浏览器必有 User-Agent,空 UA 多为脚本工具</span></label><span class="switch' + (st.empty_ua_block ? " on" : "") + '" id="sw-emptyua"></span></div>' +
       '<div class="waf-rule-item"><label><b>拦截 HTTP/1.0 请求</b><span class="settings-hint">现代浏览器均用 HTTP/1.1+,1.0 多为攻击工具</span></label><span class="switch' + (st.http10_block ? " on" : "") + '" id="sw-http10"></span></div>' +
-      "</div></div>" +
+      "</div>" +
+      '<div class="settings-row" style="margin-top:14px"><label style="align-items:flex-start;min-width:170px">蜜罐诱捕<div class="settings-hint" style="margin:0">访问伪装路径(假后台/备份文件)的 IP 立即封禁 24 小时并返回伪装 404<br>每行一条路径,须以 / 开头,最多 50 条,如 /admin.zip</div></label>' +
+      '<div style="flex:1;max-width:520px"><label style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><span class="switch' + (st.honeypot_enable ? " on" : "") + '" id="sw-honeypot"></span><span class="settings-hint" style="margin:0">启用蜜罐</span></label>' +
+      '<textarea class="textarea mono" id="honeypot-paths" rows="3" style="width:100%;font-size:12px" placeholder="/admin.zip\n/.env_bak\n/backup.sql">' + esc((st.honeypot_paths || []).join("\n")) + "</textarea></div></div></div>" +
       '<div class="waf-set-sec" data-sec="autoban"><div class="waf-sec-head">' + I("stop") + '自动封禁<span class="settings-hint" style="margin:0 0 0 4px">24h 内违规达阈值的 IP 自动进持久黑名单,每日巡检,上限 500</span></div>' +
       '<div class="waf-params-row"><label style="display:flex;align-items:center;gap:8px"><span class="switch' + (st.auto_ban_enable ? " on" : "") + '" id="sw-autoban"></span><span>启用</span></label>' +
       '<span class="waf-param">阈值 <input class="input" id="autoban-threshold" type="number" value="' + (st.auto_ban_threshold || 50) + '"> 次 / 24h</span>' +
@@ -2799,7 +2802,11 @@ PAGES.plugins = {
       };
     });
     qsa("[data-grp]", body).forEach(function(sw) {
-      sw.onclick = function() { sw.classList.toggle("on"); };
+      sw.onclick = function() {
+        sw.classList.toggle("on");
+        self.st.rule_groups = self.st.rule_groups || {};
+        self.st.rule_groups[sw.getAttribute("data-grp")] = sw.classList.contains("on");
+      };
     });
     qs("#waf-enable", body).onchange = function() { self.st.enabled = this.checked; };
     // 自动封禁清单:渲染时即加载/绑定(此前误放在保存回调里,要点一次保存才生效)
@@ -2817,6 +2824,12 @@ PAGES.plugins = {
       catch (e) { toast(e.message, "error"); }
     };
     qs("#waf-save-global", body).onclick = function() {
+      self.st.rule_groups = self.st.rule_groups || {};
+      qsa("[data-grp]", body).forEach(function(sw) {
+        self.st.rule_groups[sw.getAttribute("data-grp")] = sw.classList.contains("on");
+      });
+      self.st.honeypot_enable = qs("#sw-honeypot", body).classList.contains("on");
+      self.st.honeypot_paths = qs("#honeypot-paths", body).value.split("\n").map(function(x) { return x.trim(); }).filter(Boolean);
       self.st.spider_white_enable = qs("#sw-spider", body).classList.contains("on");
       self.st.spider_verify_dns = qs("#sw-spiderdns", body).classList.contains("on");
       self.st.spider_white = qs("#spider-list", body).value.split("\n").map(function(x) { return x.trim(); }).filter(Boolean);
@@ -2931,7 +2944,7 @@ PAGES.plugins = {
     };
   },
   /* ---- 拦截日志 ---- */
-  TAG_CLASS: { sql: "tag-sql", xss: "tag-xss", lfi: "tag-lfi", cmd: "tag-cmd", scan: "tag-scan", sensitive: "tag-sensitive", webshell: "tag-webshell", custom: "tag-custom", cc: "tag-cc", dirscan: "tag-dirscan", empty_ua: "tag-empty_ua", http10: "tag-http10", method: "tag-method", upload: "tag-upload" },
+  TAG_CLASS: { sql: "tag-sql", xss: "tag-xss", lfi: "tag-lfi", cmd: "tag-cmd", scan: "tag-scan", sensitive: "tag-sensitive", webshell: "tag-webshell", custom: "tag-custom", cc: "tag-cc", dirscan: "tag-dirscan", empty_ua: "tag-empty_ua", http10: "tag-http10", method: "tag-method", method_wl: "tag-method", upload_block: "tag-upload", url_rate: "tag-upload", ip_ban: "tag-dirscan", smuggle: "tag-cmd", honeypot: "tag-webshell", encoding: "tag-lfi", slider: "tag-custom" },
   tabLogs(body) {
     var self = this;
     var all = [];

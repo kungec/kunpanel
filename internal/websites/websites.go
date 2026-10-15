@@ -1,6 +1,7 @@
 package websites
 
 import (
+	"net"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -676,14 +677,30 @@ func PhpUpstream(siteID string) string {
 			}
 		}
 	}
-	gw := "172.17.0.1"
-	for _, c := range []string{"kun-openresty", "kun-nginx"} {
-		if out, err := util.RunWithTimeout(5*time.Second, "docker", "exec", c, "sh", "-c", "ip route | awk '/default/{print $3}'"); err == nil && strings.TrimSpace(out) != "" {
-			gw = strings.TrimSpace(out)
-			break
+	gw := dockerBridgeGateway()
+	return "http://" + gw + ":" + port + "/" + siteID + "/"
+}
+
+// dockerBridgeGateway 获取 docker 默认网桥的宿主机网关 IP。
+// 首选宿主机侧 `docker network inspect`(不依赖容器内工具链);
+// 容器内 `ip route` 探测作兜底——但必须校验输出是合法 IPv4:
+// 容器可能没有 ip 命令,sh 的报错文本("sh: 1: ip: not found")会进 CombinedOutput
+// 且 awk 退出码为 0,不校验就会把错误串当网关写进 proxy_pass(已发生的线上 bug)。
+func dockerBridgeGateway() string {
+	if out, err := util.RunWithTimeout(5*time.Second, "docker", "network", "inspect", "bridge",
+		"--format", "{{(index .IPAM.Config 0).Gateway}}"); err == nil {
+		if g := strings.TrimSpace(out); net.ParseIP(g) != nil {
+			return g
 		}
 	}
-	return "http://" + gw + ":" + port + "/" + siteID + "/"
+	for _, c := range []string{"kun-openresty", "kun-nginx"} {
+		if out, err := util.RunWithTimeout(5*time.Second, "docker", "exec", c, "sh", "-c", "ip route | awk '/default/{print $3}'"); err == nil {
+			if g := strings.TrimSpace(out); net.ParseIP(g) != nil {
+				return g
+			}
+		}
+	}
+	return "172.17.0.1"
 }
 
 // rewriteDir 站点伪静态/重写规则目录(每个站点一个 .conf 片段)

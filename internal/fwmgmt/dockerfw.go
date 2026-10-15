@@ -7,6 +7,7 @@
 package fwmgmt
 
 import (
+	"regexp"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -36,17 +37,20 @@ var dockerFWMu sync.Mutex
 
 func dockerFWStatePath() string { return config.DataDir() + "/dockerfw.json" }
 
-// extIf 默认路由出口网卡(外部流量入接口)
+// extIf 默认路由出口网卡(外部流量入接口),输出需通过接口名校验
 func extIf() string {
 	out, err := util.Run("sh", "-c", "ip route show default | awk '{print $5; exit}'")
 	if err != nil {
 		return "eth0"
 	}
-	if ifc := strings.TrimSpace(out); ifc != "" {
+	ifc := strings.TrimSpace(out)
+	if ifcRe.MatchString(ifc) {
 		return ifc
 	}
 	return "eth0"
 }
+
+var ifcRe = regexp.MustCompile(`^[a-zA-Z0-9._@-]{1,15}$`)
 
 func iptables(args ...string) (string, error) {
 	return util.RunWithTimeout(10*time.Second, "iptables", args...)

@@ -124,11 +124,19 @@ type WafSettings struct {
 	// 危险 HTTP 方法拦截
 	MethodBlockEnable bool     `json:"method_block_enable"`
 	MethodBlockList   []string `json:"method_block_list"`
+	// 自定义检测规则(用户在面板增删,保存即热更新;命中走 拦截/告警/监控 全局模式)
+	CustomRules []CustomRule `json:"custom_rules"`
 }
 
 // DefaultRuleGroups 默认规则组(全部启用)
 func DefaultRuleGroups() map[string]bool {
 	return map[string]bool{"sql": true, "xss": true, "lfi": true, "cmd": true, "scan": true}
+}
+
+// CustomRule 用户自定义检测规则
+type CustomRule struct {
+	Pattern string `json:"pattern"` // PCRE 正则(对 URI/参数/UA/Referer/POST 体扫描)
+	Label   string `json:"label"`   // 命中后日志显示的标签(可选)
 }
 
 type wafConfigFile struct {
@@ -269,6 +277,24 @@ func loadWafConfig() *wafConfigFile {
 			if c.CcMode == "" {
 				// Lua 里空串为真值,'' or "rate" 会返回 '',CC 模式判断全部错位
 				c.CcMode = "rate"
+				migrated = true
+			}
+			// 数值缺省迁移:旧配置缺失数值字段时补默认值。
+			// 否则 GET 返回 0,POST 回写被校验拒绝,设置页保存永久失败(第四轮修复)
+			if c.CcLimit <= 0 {
+				c.CcLimit = 120
+				migrated = true
+			}
+			if c.CcInterval <= 0 {
+				c.CcInterval = 60
+				migrated = true
+			}
+			if c.IpBanThreshold <= 0 {
+				c.IpBanThreshold = 10
+				migrated = true
+			}
+			if c.IpBanDuration <= 0 {
+				c.IpBanDuration = 600
 				migrated = true
 			}
 			if c.SpiderWhite == nil {
@@ -648,4 +674,42 @@ func tail(s string) string {
 // ValidateRulePublic 供测试与外部调用的单条规则校验入口
 func ValidateRulePublic(pat string) error {
 	return validateRuleRegex(pat)
+}
+
+// WafDigest 24 小时威胁摘要(供消息中心每日推送)
+type WafDigest struct {
+	Total    int               `json:"total"`
+	ByRule   map[string]int    `json:"by_rule"`
+	TopIP    string            `json:"top_ip"`
+	TopIPCnt int               `json:"top_ip_cnt"`
+	Sites    map[string]int    `json:"sites"`
+}
+
+// WafDailyDigest 汇总最近 24 小时的拦截记录
+func WafDailyDigest() WafDigest {
+	d := WafDigest{ByRule: map[string]int{}, Sites: map[string]int{}}
+	entries, err := WafLogs(2000)
+	if err != nil {
+		return d
+	}
+	cut := time.Now().Add(-24 * time.Hour)
+	ipCnt := map[string]int{}
+	for _, e := range entries {
+		t, e2 := time.Parse("2006-01-02 15:04:05", e.Time)
+		if e2 != nil || t.Before(cut) {
+			continue
+		}
+		d.Total++
+		d.ByRule[e.Rule]++
+		if e.Host != "" {
+			d.Sites[e.Host]++
+		}
+		ipCnt[e.IP]++
+	}
+	for ip, n := range ipCnt {
+		if n > d.TopIPCnt {
+			d.TopIP, d.TopIPCnt = ip, n
+		}
+	}
+	return d
 }

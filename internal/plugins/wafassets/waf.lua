@@ -16,7 +16,7 @@ local RULE_LABELS = {
     sql = "SQL 注入", xss = "XSS 跨站脚本", lfi = "文件包含/穿越",
     cmd = "命令执行", scan = "扫描器", cc = "CC 攻击",
     ip_black = "IP 黑名单", ua_black = "UA 黑名单", ip_ban = "IP 临时封禁",
-    sensitive = "敏感文件", method = "危险方法",
+    sensitive = "敏感文件", method = "危险方法", custom = "自定义规则",
 }
 
 local MODE_LABELS = { block = "拦截", alert = "告警", monitor = "监控" }
@@ -74,6 +74,45 @@ local function in_list(value, list)
     if type(list) ~= "table" or value == nil or value == "" then return false end
     for _, pat in ipairs(list) do
         if pat ~= "" and rule_match(value, pat) then return true end
+    end
+    return false
+end
+
+-- IPv4 → 32 位整数(非法返回 nil)
+local function ipv4_to_int(s)
+    local a, b, c, d = s:match("^(%d+)%.(%d+)%.(%d+)%.(%d+)$")
+    if not a then return nil end
+    a, b, c, d = tonumber(a), tonumber(b), tonumber(c), tonumber(d)
+    if a > 255 or b > 255 or c > 255 or d > 255 then return nil end
+    return ((a * 256 + b) * 256 + c) * 256 + d
+end
+
+-- CIDR 匹配(IPv4):"10.0.0.0/8" 形式
+local function cidr_match(ip, cidr)
+    local net, bits = cidr:match("^(%d+%.%d+%.%d+%.%d+)/(%d+)$")
+    if not net then return false end
+    bits = tonumber(bits)
+    if not bits or bits < 0 or bits > 32 then return false end
+    local i1 = ipv4_to_int(ip)
+    local i2 = ipv4_to_int(net)
+    if not i1 or not i2 then return false end
+    if bits == 0 then return true end
+    local shift = 32 - bits
+    local mask = bit.lshift(1, shift) - 1
+    return bit.band(i1, bit.bnot(mask)) == bit.band(i2, bit.bnot(mask))
+end
+
+-- IP 列表匹配:支持单 IP / 正则 / CIDR 网段("1.2.3.0/24")
+local function ip_in_list(ip, list)
+    if type(list) ~= "table" or ip == nil or ip == "" then return false end
+    for _, pat in ipairs(list) do
+        if pat ~= "" then
+            if pat:find("/", 1, true) then
+                if cidr_match(ip, pat) then return true end
+            elseif rule_match(ip, pat) then
+                return true
+            end
+        end
     end
     return false
 end
@@ -288,7 +327,7 @@ local uri = ngx.var.request_uri
 local ua = ngx.var.http_user_agent or ""
 
 -- 白名单优先
-if in_list(ip, conf.ip_white) then return end
+if ip_in_list(ip, conf.ip_white) then return end
 if in_list(uri, conf.url_white) then return end
 
 -- 蜘蛛反向 DNS 验证:PTR 记录 → 正向解析 → 必须包含客户端 IP。
@@ -356,7 +395,7 @@ if banDict and banDict:get("b:" .. ip) then
 end
 
 -- IP 黑名单
-if in_list(ip, conf.ip_black) then
+if ip_in_list(ip, conf.ip_black) then
     write_log("ip_black", ip)
     ngx.status = 403; ngx.header.content_type = "text/plain"; ngx.say("403 Forbidden")
     return ngx.exit(403)
@@ -424,6 +463,21 @@ for group, pats in pairs(rules) do
                         block_or_alert(conf, group, string.sub(t, 1, 200))
                         break
                     end
+                end
+            end
+        end
+    end
+end
+
+-- 用户自定义规则(面板可增删,保存即热更新)
+local customs = conf.custom_rules or {}
+for _, cr in ipairs(customs) do
+    if cr and cr.pattern and cr.pattern ~= "" then
+        for _, t in ipairs(targets) do
+            if t and t ~= "" then
+                if rule_match(t, cr.pattern) then
+                    block_or_alert(conf, "custom", (cr.label and (cr.label .. " | ") or "") .. string.sub(t, 1, 200))
+                    break
                 end
             end
         end

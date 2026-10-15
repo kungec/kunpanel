@@ -2708,6 +2708,10 @@ PAGES.plugins = {
       '<div class="settings-row"><label style="min-width:170px">启用防火墙</label><label class="radio-line"><input type="checkbox" id="waf-enable" ' + (st.enabled ? "checked" : "") + "> 关闭后所有站点不设防</label></div></div>" +
       '<div class="settings-section"><div class="settings-section-title">拦截模式</div><div class="waf-mode-grid">' + modeCards + "</div></div>" +
       '<div class="settings-section"><div class="settings-section-title">检测规则组</div>' + grpRows + "</div>" +
+      '<div class="settings-section"><div class="settings-section-title">自定义检测规则<span class="help" style="margin:0">对 URI/参数/UA/Referer/POST 体扫描,命中走全局拦截模式;保存即热更新(最多 100 条)</span></div>' +
+      '<div class="settings-row"><label style="align-items:flex-start">规则列表<div class="settings-hint" style="margin:0">每行一条,格式:PCRE 正则 | 标签(可选)<br>示例:<code>\\.(bak|old|sql)$ | 备份文件探测</code></div></label>' +
+      '<textarea class="textarea mono" id="waf-custom-rules" rows="6" style="max-width:520px;font-size:12px">' +
+      esc((st.custom_rules || []).map(function(c) { return c.pattern + " | " + (c.label || ""); }).join("\n")) + "</textarea></div>" +
       '<div class="settings-section"><div class="settings-section-title">搜索引擎蜘蛛白名单<span class="help" style="margin:0">启用的爬虫完全跳过检测:CC 人机验证、临时封禁都不会针对它们,保护 SEO 收录</span></div>' +
       '<div class="settings-row"><label style="min-width:170px">启用蜘蛛白名单</label><label class="radio-line"><input type="checkbox" id="spider-enable" ' + (st.spider_white_enable ? "checked" : "") + "> 启用</label></div>" +
       '<div class="settings-row"><label style="align-items:flex-start">UA 特征(正则)<div class="settings-hint" style="margin:0">每行一条,匹配 User-Agent 即放行</div></label>' +
@@ -2736,6 +2740,13 @@ PAGES.plugins = {
     qs("#waf-enable", body).onchange = function() { self.st.enabled = this.checked; };
     qs("#waf-save-global", body).onclick = function() {
       self.st.spider_white_enable = qs("#spider-enable", body).checked;
+      self.st.custom_rules = (qs("#waf-custom-rules", body).value || "").split("\n").map(function(line) {
+        var seg = line.split("|");
+        var pat = (seg[0] || "").trim();
+        if (!pat) return null;
+        var label = (seg[1] || "").trim();
+        return { pattern: pat, label: label };
+      }).filter(Boolean);
       self.st.spider_verify_dns = qs("#spider-dns", body).checked;
       self.st.spider_white = qs("#spider-list", body).value.split("\n").map(function(x) { return x.trim(); }).filter(Boolean);
       self.st.method_block_enable = qs("#method-enable", body).checked;
@@ -2803,7 +2814,7 @@ PAGES.plugins = {
       '<div class="settings-section"><div class="settings-section-title">IP 白名单<span class="settings-hint" style="margin-left:8px">这些 IP 完全跳过检测</span></div>' +
       ta("waf-ipw", st.ip_white, "每行一条,支持正则,如 10\\.0\\.0\\.1") + "</div>" +
       '<div class="settings-section"><div class="settings-section-title">IP 黑名单<span class="settings-hint" style="margin-left:8px">命中直接 403</span></div>' +
-      ta("waf-iph", st.ip_black, "每行一条,如 1\\.2\\.3\\.4") + "</div>" +
+      ta("waf-iph", st.ip_black, "每行一条:支持单 IP、正则、CIDR 网段(如 103.0.0.0/8)") + "</div>" +
       '<div class="settings-section"><div class="settings-section-title">URL 白名单<span class="settings-hint" style="margin-left:8px">这些 URI 跳过检测(如回调地址)</span></div>' +
       ta("waf-urlw", st.url_white, "每行一条正则,如 ^/api/pay/notify") + "</div>" +
       '<div class="settings-section"><div class="settings-section-title">UA 黑名单<span class="settings-hint" style="margin-left:8px">命中 User-Agent 直接 403</span></div>' +

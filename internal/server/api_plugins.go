@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 
@@ -69,6 +70,21 @@ func (s *Server) handleWafSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if !wafInstalledNow() {
 		Fail(w, http.StatusBadRequest, "WAF 插件未安装")
+		return
+	}
+	// 自定义规则校验:正则可编译 + ReDoS 启发式 + 数量/长度上限
+	for i, cr := range st.CustomRules {
+		if err := plugins.ValidateRulePublic(cr.Pattern); err != nil {
+			Fail(w, http.StatusBadRequest, fmt.Sprintf("自定义规则 #%d 无效: %v", i+1, err))
+			return
+		}
+		if len(cr.Label) > 60 {
+			Fail(w, http.StatusBadRequest, fmt.Sprintf("自定义规则 #%d 标签过长", i+1))
+			return
+		}
+	}
+	if len(st.CustomRules) > 100 {
+		Fail(w, http.StatusBadRequest, "自定义规则最多 100 条")
 		return
 	}
 	if err := plugins.SaveWafSettings(st); err != nil {

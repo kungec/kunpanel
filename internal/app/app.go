@@ -20,6 +20,7 @@ import (
 	"kunpanel/internal/cronx"
 	"kunpanel/internal/fwmgmt"
 	"kunpanel/internal/monhist"
+	"kunpanel/internal/notifyx"
 	"kunpanel/internal/panelupdate"
 	"kunpanel/internal/plugins"
 	"kunpanel/internal/server"
@@ -105,6 +106,26 @@ func Run(o Options) error {
 	}
 
 	srv := server.New(server.Options{Version: o.Version, WebFS: webSub})
+
+	// WAF 每日威胁摘要:每 24 小时汇总拦截数据写入消息中心
+	go func() {
+		time.Sleep(6 * time.Hour)
+		t := time.NewTicker(24 * time.Hour)
+		defer t.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-t.C:
+				d := plugins.WafDailyDigest()
+				if d.Total > 0 {
+					notifyx.Add("waf", fmt.Sprintf("WAF 昨日拦截 %d 次攻击", d.Total),
+						fmt.Sprintf("Top 规则: %v | Top 攻击 IP: %s(%d 次)| 受影响站点: %d 个",
+							d.ByRule, d.TopIP, d.TopIPCnt, len(d.Sites)))
+				}
+			}
+		}
+	}()
 
 	// 容器端口封禁规则重放(DOCKER-USER 重启后丢失;需 docker 就绪,稍延迟)
 	go func() {

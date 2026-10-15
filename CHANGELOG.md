@@ -3,6 +3,17 @@
 所有重要变更都会记录在此文件中。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v2.59.0] - 2026-10-15
+
+### 新增
+- **应用商店新增坤发卡(kunfaka)**:全自动发卡系统一键部署(PHP+MySQL+定时任务三容器)
+  - 7×24 无人值守自动发货,6 大支付通道(含 USDT-TRC20 免挂)
+  - MySQL database.sql 自动导入(MySQL init 机制)
+  - 安装钩子自动从 GitHub 下载 database.sql
+
+### 修复
+- waf.lua cc_check 定义恢复(批量补丁叠加导致函数定义丢失 → 正常请求全 500)
+
 ## [v2.58.0] - 2026-10-15
 
 ### 新增(高级防渗透)

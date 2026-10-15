@@ -26,6 +26,8 @@ type CertInfo struct {
 	Acme    bool   `json:"acme"`            // Let's Encrypt 签发,支持自动续期
 	Staging bool   `json:"staging,omitempty"` // ACME 测试环境
 	SiteID  string `json:"site_id,omitempty"` // 签发来源站点(续期时定位挑战目录)
+	VMethod string `json:"v_method,omitempty"` // ACME 验证方式:http / dns
+	VAlias  string `json:"v_alias,omitempty"`  // DNS 别名域名(CNAME 委托目标)
 	Created string `json:"created"`
 }
 

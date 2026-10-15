@@ -74,8 +74,11 @@ func (s *Server) handleAcmeGet(w http.ResponseWriter, r *http.Request) {
 }
 
 type acmeCfgReq struct {
-	Email   string `json:"email"`
-	Staging bool   `json:"staging"`
+	Email    string `json:"email"`
+	Staging  bool   `json:"staging"`
+	Provider string `json:"provider"` // letsencrypt/zerossl/google/buypass/letsencrypt_test
+	EABKeyID string `json:"eab_key_id"`
+	EABHMAC  string `json:"eab_hmac"`
 }
 
 func (s *Server) handleAcmeSet(w http.ResponseWriter, r *http.Request) {
@@ -84,17 +87,33 @@ func (s *Server) handleAcmeSet(w http.ResponseWriter, r *http.Request) {
 		Fail(w, http.StatusBadRequest, "参数错误")
 		return
 	}
-	if err := websites.SetACMEConfig(req.Email, req.Staging); err != nil {
+	provider := req.Provider
+	if provider == "" {
+		// 兼容旧前端:仅传 staging 时映射 LE 正式/测试
+		provider = "letsencrypt"
+		if req.Staging {
+			provider = "letsencrypt_test"
+		}
+	}
+	if err := websites.SetACMEConfigEx(req.Email, provider, req.EABKeyID, req.EABHMAC); err != nil {
 		Fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	OK(w, websites.GetACMEConfig())
 }
 
+// handleAcmeProviders CA 服务商列表(前端下拉)
+func (s *Server) handleAcmeProviders(w http.ResponseWriter, r *http.Request) {
+	OK(w, websites.ListACMEProviders())
+}
+
 func (s *Server) handleAcmeIssue(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		SiteID  string `json:"site_id"`
 		Staging bool   `json:"staging"`
+		Method  string `json:"method"` // http / dns(默认 http)
+		Alias   string `json:"alias"`  // DNS 别名域名(CNAME 委托目标,可选)
+		Provider string `json:"provider"`
 	}
 	if err := readJSON(r, &req); err != nil || req.SiteID == "" {
 		Fail(w, http.StatusBadRequest, "参数错误")
@@ -104,13 +123,24 @@ func (s *Server) handleAcmeIssue(w http.ResponseWriter, r *http.Request) {
 		Fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	// staging 旗标同步到 ACME 账户环境,确保签发 CA 与选择一致
-	cfg := websites.GetACMEConfig()
-	if err := websites.SetACMEConfig(cfg["email"].(string), req.Staging); err != nil {
-		Fail(w, http.StatusBadRequest, err.Error())
-		return
+	// 签发环境与账户环境保持一致(账户未切换时沿用其当前 provider)
+	if req.Provider != "" {
+		cfg := websites.GetACMEConfig()
+		email, _ := cfg["email"].(string)
+		hasEAB, _ := cfg["has_eab"].(bool)
+		eabKey, _ := cfg["eab_key_id"].(string)
+		_ = hasEAB
+		if err := websites.SetACMEConfigEx(email, req.Provider, eabKey, ""); err != nil {
+			Fail(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
-	taskID, err := websites.IssueCertTask(req.SiteID, req.Staging)
+	if req.Method != "dns" {
+		req.Method = "http"
+	}
+	taskID, err := websites.IssueCertTaskEx(req.SiteID, websites.AcmeIssueOpts{
+		Staging: req.Staging, Method: req.Method, Alias: req.Alias,
+	})
 	if err != nil {
 		Fail(w, http.StatusInternalServerError, err.Error())
 		return

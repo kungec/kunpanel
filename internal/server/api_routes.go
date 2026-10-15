@@ -115,6 +115,7 @@ func (s *Server) registerAPI() {
 
 	// Let's Encrypt (ACME)
 	m.Handle("GET /api/v1/ssl/acme/config", wrap(http.HandlerFunc(s.handleAcmeGet)))
+	m.Handle("GET /api/v1/ssl/acme/providers", wrap(http.HandlerFunc(s.handleAcmeProviders)))
 	m.Handle("POST /api/v1/ssl/acme/config", wrap(http.HandlerFunc(s.handleAcmeSet)))
 	m.Handle("POST /api/v1/ssl/acme/issue", wrap(http.HandlerFunc(s.handleAcmeIssue)))
 	m.Handle("POST /api/v1/ssl/acme/renew", wrap(http.HandlerFunc(s.handleAcmeRenew)))

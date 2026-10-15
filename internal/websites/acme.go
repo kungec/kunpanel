@@ -1,56 +1,118 @@
-// websites/acme.go —— Let's Encrypt 免费证书:ACME 账户管理、HTTP-01 签发、原位续期
+// websites/acme.go —— 免费证书签发(lego 引擎):
+//   - 多 CA 可选:Let's Encrypt / ZeroSSL / Google Trust Services / BuyPass / 测试环境
+//   - HTTP-01(写站点根验证文件)与 DNS-01(手动 TXT + 轮询,支持别名 CNAME 委托)
+//   - 账户与注册信息持久化,到期自动续期(DNS 证书到期前提醒手动续)
 package websites
 
 import (
-	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
-	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"io"
-	"net/http"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"golang.org/x/crypto/acme"
+	"github.com/go-acme/lego/v4/certcrypto"
+	"github.com/go-acme/lego/v4/certificate"
+	"github.com/go-acme/lego/v4/challenge/dns01"
+	"github.com/go-acme/lego/v4/lego"
+	"github.com/go-acme/lego/v4/registration"
 
 	"kunpanel/internal/taskx"
 	"kunpanel/internal/util"
 )
 
-// ACME 目录(个人版面板固定官方源;staging 供测试避免触发正式环境限频)
 const (
 	acmeDirProd    = "https://acme-v02.api.letsencrypt.org/directory"
 	acmeDirStaging = "https://acme-staging-v02.api.letsencrypt.org/directory"
 )
 
-// ACMEAccount ACME 账户配置(存储于 ssl 目录)
+// ACMEProvider CA 服务商预设(ZeroSSL/Google/BuyPass 需要 EAB 凭据)
+type ACMEProvider struct {
+	Name    string `json:"name"`
+	Dir     string `json:"dir"`
+	NeedEAB bool   `json:"need_eab"`
+	Staging bool   `json:"staging,omitempty"`
+}
+
+var acmeProviders = map[string]ACMEProvider{
+	"letsencrypt":      {Name: "Let's Encrypt", Dir: acmeDirProd},
+	"zerossl":          {Name: "ZeroSSL", Dir: "https://acme.zerossl.com/v2/DV90", NeedEAB: true},
+	"google":           {Name: "Google Trust Services", Dir: "https://dv.acme-v02.api.pki.goog/directory", NeedEAB: true},
+	"buypass":          {Name: "BuyPass Go SSL", Dir: "https://api.buypass.com/acme/directory", NeedEAB: true},
+	"letsencrypt_test": {Name: "Let's Encrypt 测试", Dir: acmeDirStaging, Staging: true},
+}
+
+// ListACMEProviders 供前端下拉渲染
+func ListACMEProviders() []ACMEProvider {
+	order := []string{"letsencrypt", "zerossl", "google", "buypass", "letsencrypt_test"}
+	out := make([]ACMEProvider, 0, len(order))
+	for _, k := range order {
+		p := acmeProviders[k]
+		out = append(out, p)
+	}
+	return out
+}
+
+func providerDir(provider string) string {
+	if p, ok := acmeProviders[provider]; ok && p.Dir != "" {
+		return p.Dir
+	}
+	return acmeDirProd
+}
+
+func providerStaging(provider string) bool {
+	p, ok := acmeProviders[provider]
+	return ok && p.Staging
+}
+
+// acmeUser 实现 lego registration.User
+type acmeUser struct {
+	Email        string
+	Registration *registration.Resource
+	key          crypto.PrivateKey
+}
+
+func (u *acmeUser) GetEmail() string                        { return u.Email }
+func (u *acmeUser) GetRegistration() *registration.Resource { return u.Registration }
+func (u *acmeUser) GetPrivateKey() crypto.PrivateKey        { return u.key }
+
+// ACMEAccount 账户持久化结构
 type ACMEAccount struct {
-	Email      string `json:"email"`
-	Directory  string `json:"directory"` // 完整目录 URL
-	KeyPEM     string `json:"key_pem"`
-	Registered bool   `json:"registered"`
+	Email        string          `json:"email"`
+	Provider     string          `json:"provider"`
+	Directory    string          `json:"directory"`
+	KeyPEM       string          `json:"key_pem"`
+	Registration *registration.Resource `json:"registration,omitempty"`
+	EABKeyID     string          `json:"eab_key_id,omitempty"`
+	EABHMAC      string          `json:"eab_hmac,omitempty"`
 }
 
 func acmeAccountPath() string { return filepath.Join(sslDir(), "acme_account.json") }
 
 func loadACMEAccount() *ACMEAccount {
+	a := &ACMEAccount{Provider: "letsencrypt"}
 	b, err := os.ReadFile(acmeAccountPath())
-	if err != nil {
-		return &ACMEAccount{}
+	if err == nil {
+		_ = json.Unmarshal(b, a)
 	}
-	var a ACMEAccount
-	if json.Unmarshal(b, &a) != nil {
-		return &ACMEAccount{}
+	if a.Provider == "" {
+		a.Provider = "letsencrypt"
+		if a.Directory == acmeDirStaging {
+			a.Provider = "letsencrypt_test"
+		}
 	}
-	return &a
+	return a
 }
 
 func saveACMEAccount(a *ACMEAccount) error {
@@ -62,225 +124,309 @@ func saveACMEAccount(a *ACMEAccount) error {
 	return util.AtomicWrite(acmeAccountPath(), b, 0o600)
 }
 
-// GetACMEConfig 返回账户配置(隐藏私钥)
+// GetACMEConfig 返回账户配置(隐藏私钥;HMAC 掩码)
 func GetACMEConfig() map[string]any {
 	a := loadACMEAccount()
+	hmacMasked := ""
+	if a.EABHMAC != "" {
+		hmacMasked = "••••••••"
+		if len(a.EABHMAC) > 8 {
+			hmacMasked += a.EABHMAC[len(a.EABHMAC)-4:]
+		}
+	}
 	return map[string]any{
 		"email":      a.Email,
-		"staging":    a.Directory == acmeDirStaging,
-		"registered": a.Registered && a.KeyPEM != "",
+		"provider":   a.Provider,
+		"staging":    providerStaging(a.Provider),
+		"registered": a.Registration != nil && a.KeyPEM != "",
+		"eab_key_id": a.EABKeyID,
+		"eab_hmac":   hmacMasked,
+		"has_eab":    a.EABKeyID != "" && a.EABHMAC != "",
 	}
 }
 
-// SetACMEConfig 设置邮箱与测试开关;切换环境后需重新注册账户
+// SetACMEConfig 兼容旧签名
 func SetACMEConfig(email string, staging bool) error {
-	a := loadACMEAccount()
+	p := "letsencrypt"
+	if staging {
+		p = "letsencrypt_test"
+	}
+	return SetACMEConfigEx(email, p, "", "")
+}
+
+// SetACMEConfigEx 设置邮箱、CA 服务商与 EAB;切换后旧注册作废(自动重注册)
+func SetACMEConfigEx(email, provider, eabKeyID, eabHMAC string) error {
 	email = strings.TrimSpace(email)
 	if email != "" && (!strings.Contains(email, "@") || strings.ContainsAny(email, " \t;/\\'\"")) {
 		return fmt.Errorf("邮箱格式不正确")
 	}
-	a.Email = email
-	dir := acmeDirProd
-	if staging {
-		dir = acmeDirStaging
+	if provider == "" {
+		provider = "letsencrypt"
 	}
-	if a.Directory != dir {
-		a.Registered = false // 换环境必须重新注册
-		a.Directory = dir
+	p, ok := acmeProviders[provider]
+	if !ok {
+		return fmt.Errorf("不支持的证书服务商: %s", provider)
+	}
+	if p.NeedEAB && (strings.TrimSpace(eabKeyID) == "" || strings.TrimSpace(eabHMAC) == "") {
+		return fmt.Errorf("%s 需要填写 EAB 凭据(KeyID 与 HMAC)", p.Name)
+	}
+	a := loadACMEAccount()
+	a.Email = email
+	a.Provider = provider
+	// 先比较再赋值:此处判断必须基于旧 Directory,否则永远相等、旧注册永不作废
+	dirChanged := a.Directory != providerDir(provider)
+	a.Directory = providerDir(provider)
+	eabHMAC = strings.TrimSpace(eabHMAC)
+	if strings.HasPrefix(eabHMAC, "••••") {
+		eabHMAC = a.EABHMAC // 掩码回显占位:保留已存值
+	}
+	keyIDChanged := strings.TrimSpace(eabKeyID) != "" && strings.TrimSpace(eabKeyID) != a.EABKeyID
+	if strings.TrimSpace(eabKeyID) != "" || eabHMAC != "" {
+		a.EABKeyID = strings.TrimSpace(eabKeyID)
+		a.EABHMAC = eabHMAC
+	}
+	if !p.NeedEAB {
+		a.EABKeyID, a.EABHMAC = "", ""
+	}
+	if dirChanged || keyIDChanged {
+		a.Registration = nil // 换 CA/凭据:重新注册
 	}
 	return saveACMEAccount(a)
 }
 
-// acmeClient 用账户私钥构造客户端,必要时自动注册
-func acmeClient(ctx context.Context, a *ACMEAccount) (*acme.Client, error) {
+// acmeClientFor 构造 lego 客户端(自动注册/恢复账户)
+func acmeClientFor(provider string, w io.Writer) (*lego.Client, *acmeUser, error) {
+	dir := providerDir(provider)
+	a := loadACMEAccount()
+	if a.Provider != provider {
+		a.Provider = provider
+		a.Directory = dir
+	}
 	if a.KeyPEM == "" {
 		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		der, err := x509.MarshalPKCS8PrivateKey(key)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		a.KeyPEM = string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
 		if err := saveACMEAccount(a); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	blk, _ := pem.Decode([]byte(a.KeyPEM))
 	if blk == nil {
-		return nil, fmt.Errorf("ACME 账户私钥损坏,请删除 %s 后重试", acmeAccountPath())
+		return nil, nil, fmt.Errorf("ACME 账户私钥损坏,请删除 %s 后重试", acmeAccountPath())
 	}
-	signer, err := x509.ParsePKCS8PrivateKey(blk.Bytes)
+	key, err := x509.ParsePKCS8PrivateKey(blk.Bytes)
 	if err != nil {
-		return nil, err
+		return nil, nil, fmt.Errorf("ACME 账户私钥损坏,请删除 %s 后重试", acmeAccountPath())
 	}
-	dirURL := a.Directory
-	if dirURL == "" {
-		dirURL = acmeDirProd
+	// Registration 必须在 NewClient 前设置:lego core 构造时一次性固化 KID,
+	// 之后设置无效(恢复账户场景会导致所有请求缺 kid 而 400)
+	u := &acmeUser{Email: a.Email, key: key, Registration: a.Registration}
+	cfg := lego.NewConfig(u)
+	cfg.CADirURL = dir
+	cfg.Certificate.KeyType = certcrypto.EC256
+	client, err := lego.NewClient(cfg)
+	if err != nil {
+		return nil, nil, fmt.Errorf("初始化 ACME 客户端失败: %v", err)
 	}
-	client := &acme.Client{Key: signer.(crypto.Signer), DirectoryURL: dirURL}
-	if !a.Registered {
-		// Discover 预热目录并验证连通性(TOS 由 prompt 直接接受)
-		if _, err := client.Discover(ctx); err != nil {
-			return nil, fmt.Errorf("连接 CA 失败: %v", err)
-		}
-		var contact []string
-		if a.Email != "" {
-			contact = []string{"mailto:" + a.Email}
-		}
-		if _, err := client.Register(ctx, &acme.Account{Contact: contact}, func(tos string) bool { return true }); err != nil {
-			// 账户已存在(密钥复用)不算错误
-			if ae, ok := err.(*acme.Error); !ok || ae.StatusCode != 409 {
-				return nil, fmt.Errorf("ACME 注册失败: %v", err)
+	// 注册信息一致性:registration URI 必须属于当前 CA(存量脏数据自动作废重注册)
+	regOK := a.Registration != nil && a.Registration.URI != ""
+	if regOK {
+		if ru, err := url.Parse(a.Registration.URI); err == nil {
+			if du, err2 := url.Parse(dir); err2 == nil {
+				regOK = ru.Host == du.Host
 			}
 		}
-		a.Registered = true
-		if err := saveACMEAccount(a); err != nil {
-			return nil, err
-		}
 	}
-	return client, nil
+	if !regOK {
+		fmt.Fprintf(w, ">> 向 %s 注册账户...\n", providerName(provider))
+		if a.EABKeyID != "" && a.EABHMAC != "" {
+			hmacKey, err := base64.RawURLEncoding.DecodeString(a.EABHMAC)
+			if err != nil {
+				hmacKey, err = base64.StdEncoding.DecodeString(a.EABHMAC)
+			}
+			if err != nil {
+				return nil, nil, fmt.Errorf("EAB HMAC 格式不正确(应为 base64): %v", err)
+			}
+			a.EABHMAC = base64.RawURLEncoding.EncodeToString(hmacKey)
+			reg, err := client.Registration.RegisterWithExternalAccountBinding(registration.RegisterEABOptions{
+				TermsOfServiceAgreed: true,
+				Kid:                  a.EABKeyID,
+				HmacEncoded:          a.EABHMAC,
+			})
+			if err != nil {
+				return nil, nil, fmt.Errorf("EAB 注册失败: %v", err)
+			}
+			u.Registration = reg
+		} else {
+			reg, err := client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
+			if err != nil {
+				return nil, nil, fmt.Errorf("ACME 注册失败: %v", err)
+			}
+			u.Registration = reg
+		}
+		a.Registration = u.Registration
+		if err := saveACMEAccount(a); err != nil {
+			return nil, nil, err
+		}
+	} else {
+		u.Registration = a.Registration
+	}
+	return client, u, nil
 }
 
-// siteForChallenge 签发挑战文件目录(站点根),v1 仅支持面板管理的站点域名
+// acmeChallengeDir 挑战文件目录(站点根)
 func acmeChallengeDir(site *Site) string {
 	return filepath.Join(site.Root, ".well-known", "acme-challenge")
 }
 
-func cleanupChallenge(site *Site) {
-	_ = os.RemoveAll(filepath.Join(site.Root, ".well-known"))
+// httpFileProvider HTTP-01:写站点根验证文件
+type httpFileProvider struct{ site *Site }
+
+func (p *httpFileProvider) Present(domain, token, keyAuth string) error {
+	chDir := acmeChallengeDir(p.site)
+	if err := os.MkdirAll(chDir, 0o755); err != nil {
+		return err
+	}
+	if err := util.AtomicWrite(filepath.Join(chDir, token), []byte(keyAuth), 0o644); err != nil {
+		return err
+	}
+	fmt.Printf(">> 验证文件已写入: %s\n", "/.well-known/acme-challenge/"+token)
+	return nil
 }
 
-// IssueCertForSite 为站点域名申请 Let's Encrypt 证书并自动绑定(异步任务体)
-// 成功后证书 ID 返回;签发过程输出进度到 w
-func IssueCertForSite(siteID string, staging bool, w io.Writer) (string, error) {
+func (p *httpFileProvider) CleanUp(domain, token, keyAuth string) error {
+	_ = os.RemoveAll(filepath.Join(p.site.Root, ".well-known"))
+	return nil
+}
+
+// manualDNSProvider DNS-01:输出 TXT 记录 → 轮询生效(present 阻塞等待用户操作)
+type manualDNSProvider struct {
+	w     io.Writer
+	alias string
+}
+
+func (p *manualDNSProvider) Present(domain, token, keyAuth string) error {
+	info := dns01.GetChallengeInfo(domain, keyAuth)
+	if p.alias != "" {
+		fmt.Fprintf(p.w, ">> [别名模式] 请添加 TXT 记录: 主机 %s | 值 %s\n", "_acme-challenge."+p.alias, info.Value)
+		fmt.Fprintf(p.w, ">> (需在主域 DNS 添加 CNAME: %s → %s)\n", info.FQDN, "_acme-challenge."+p.alias)
+	} else {
+		fmt.Fprintf(p.w, ">> 请添加 TXT 记录: 主机 %s | 值 %s\n", info.FQDN, info.Value)
+	}
+	deadline := time.Now().Add(10 * time.Minute)
+	for time.Now().Before(deadline) {
+		txts, err := net.LookupTXT(info.FQDN)
+		if err == nil {
+			for _, t := range txts {
+				if strings.TrimSpace(t) == info.Value {
+					fmt.Fprintf(p.w, ">> DNS 记录已生效(%s)\n", info.FQDN)
+					return nil
+				}
+			}
+		}
+		time.Sleep(8 * time.Second)
+	}
+	return fmt.Errorf("等待 %s 的 TXT 记录超时:请确认记录已保存且已生效", info.FQDN)
+}
+
+func (p *manualDNSProvider) CleanUp(domain, token, keyAuth string) error { return nil }
+
+// acmeIssueOpts 签发参数
+type AcmeIssueOpts struct {
+	Staging bool
+	Method  string // http / dns
+	Alias   string // DNS 别名域名(CNAME 委托目标,可选)
+}
+
+// orderDomains 校验并归一域名(通配符仅 DNS 验证支持)
+func orderDomains(raw []string, method string) ([]string, error) {
+	var out []string
+	for _, d := range raw {
+		d = strings.TrimPrefix(strings.TrimSpace(d), "*.")
+		if d == "" {
+			continue
+		}
+		out = append(out, d)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("站点没有域名")
+	}
+	if method == "http" {
+		for _, d := range raw {
+			if strings.Contains(d, "*") {
+				return nil, fmt.Errorf("HTTP 验证不支持通配符域名,请改用 DNS 验证")
+			}
+		}
+	}
+	return out, nil
+}
+
+// IssueCertForSite 签发证书并自动绑定(异步任务体)
+func IssueCertForSite(siteID string, opts AcmeIssueOpts, w io.Writer) (string, error) {
 	site, err := GetSite(siteID)
 	if err != nil {
 		return "", err
 	}
-	domains := strings.Fields(site.Domain)
-	if len(domains) == 0 {
-		return "", fmt.Errorf("站点没有域名")
+	method := opts.Method
+	if method != "dns" {
+		method = "http"
 	}
-	// ACME 不接受通配符走 HTTP-01
-	for _, d := range domains {
-		if strings.Contains(d, "*") {
-			return "", fmt.Errorf("HTTP-01 不支持通配符域名 %s,请使用 DNS 验证(暂未支持)", d)
-		}
-	}
-	fmt.Fprintf(w, ">> 为 %s 申请 Let's Encrypt 证书(%s)...\n", site.Domain, stageName(staging))
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-
-	a := loadACMEAccount()
-	client, err := acmeClient(ctx, a)
+	domains, err := orderDomains(strings.Fields(site.Domain), method)
 	if err != nil {
 		return "", err
 	}
-	fmt.Fprintf(w, ">> 已连接 CA,创建订单...\n")
-	ids := make([]acme.AuthzID, len(domains))
-	for i, d := range domains {
-		ids[i] = acme.AuthzID{Type: "dns", Value: d}
-	}
-	order, err := client.AuthorizeOrder(ctx, ids)
-	if err != nil {
-		return "", fmt.Errorf("创建订单失败: %v", err)
+	prov := loadACMEAccount().Provider
+	staging := opts.Staging || providerStaging(prov)
+	fmt.Fprintf(w, ">> 为 %s 申请 %s 证书(%s / %s 验证)...\n", site.Domain, providerName(prov), stageName(staging), map[string]string{"http": "HTTP 文件", "dns": "DNS"}[method])
+	alias := strings.TrimSpace(opts.Alias)
+	if alias != "" && method == "dns" {
+		alias = strings.TrimSuffix(strings.TrimPrefix(alias, "_acme-challenge."), ".")
 	}
 
-	// 写入 HTTP-01 挑战文件并应答
-	for _, azURL := range order.AuthzURLs {
-		az, err := client.GetAuthorization(ctx, azURL)
-		if err != nil {
-			return "", fmt.Errorf("获取验证信息失败: %v", err)
-		}
-		if az.Status == "valid" {
-			continue
-		}
-		var chal *acme.Challenge
-		for _, ch := range az.Challenges {
-			if ch.Type == "http-01" {
-				chal = ch
-				break
-			}
-		}
-		if chal == nil {
-			return "", fmt.Errorf("CA 未提供 http-01 验证方式")
-		}
-		keyAuth, err := client.HTTP01ChallengeResponse(chal.Token)
-		if err != nil {
-			return "", err
-		}
-		chDir := acmeChallengeDir(&site)
-		if err := os.MkdirAll(chDir, 0o755); err != nil {
-			return "", err
-		}
-		tokenFile := filepath.Join(chDir, chal.Token)
-		if err := util.AtomicWrite(tokenFile, []byte(keyAuth), 0o644); err != nil {
-			return "", err
-		}
-		fmt.Fprintf(w, ">> 验证文件已写入: %s\n", "/.well-known/acme-challenge/"+chal.Token)
-		if _, err := client.Accept(ctx, chal); err != nil {
-			cleanupChallenge(&site)
-			return "", fmt.Errorf("提交验证失败: %v", err)
-		}
-	}
-
-	// 轮询等待全部验证通过
-	fmt.Fprintf(w, ">> 等待 CA 验证(需域名解析到本服务器且 80 端口可达,最长 3 分钟)...\n")
-	for _, azURL := range order.AuthzURLs {
-		if _, err := client.WaitAuthorization(ctx, azURL); err != nil {
-			cleanupChallenge(&site)
-			if ae, ok := err.(*acme.AuthorizationError); ok {
-				return "", fmt.Errorf("域名验证失败(%s): 请确认域名已解析到本服务器 IP,且 80 端口对外开放", ae.Error())
-			}
-			return "", fmt.Errorf("域名验证超时或失败: %v", err)
-		}
-	}
-	cleanupChallenge(&site)
-
-	// 生成证书私钥与 CSR
-	certKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	client, _, err := acmeClientFor(prov, w)
 	if err != nil {
 		return "", err
 	}
-	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
-		Subject:            pkix.Name{CommonName: domains[0]},
-		DNSNames:           domains,
-		SignatureAlgorithm: x509.ECDSAWithSHA256,
-	}, certKey)
-	if err != nil {
-		return "", err
-	}
-	fmt.Fprintf(w, ">> 验证通过,签发证书...\n")
-	der, _, err := client.CreateOrderCert(ctx, order.URI, csrDER, true)
-	if err != nil {
-		return "", fmt.Errorf("签发失败: %v", err)
+
+	if method == "dns" {
+		client.Challenge.SetDNS01Provider(&manualDNSProvider{w: w, alias: alias},
+			dns01.AddRecursiveNameservers([]string{"8.8.8.8:53", "1.1.1.1:53"}))
+	} else {
+		client.Challenge.SetHTTP01Provider(&httpFileProvider{site: &site})
 	}
 
-	// 存储证书链 + 私钥
-	var chain strings.Builder
-	for _, d := range der {
-		chain.Write(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: d}))
-	}
-	keyDER, err := x509.MarshalPKCS8PrivateKey(certKey)
+	fmt.Fprintf(w, ">> 创建订单并验证域名...\n")
+	res, err := client.Certificate.Obtain(certificate.ObtainRequest{
+		Domains: domains,
+		Bundle:  true,
+	})
 	if err != nil {
-		return "", err
+		if method == "dns" {
+			return "", fmt.Errorf("DNS 验证失败: %v(请检查 TXT 记录是否按要求添加并已生效)", err)
+		}
+		return "", fmt.Errorf("签发失败: %v(请确认域名已解析到本服务器 IP,且 80 端口对外开放)", err)
 	}
+
 	certID := "cert_" + fmt.Sprintf("%d", time.Now().UnixNano()/1000000)
 	_ = os.MkdirAll(sslDir(), 0o755)
-	if err := util.AtomicWrite(certCrtPath(certID), []byte(chain.String()), 0o644); err != nil {
+	if err := util.AtomicWrite(certCrtPath(certID), res.Certificate, 0o644); err != nil {
 		return "", err
 	}
-	if err := util.AtomicWrite(certKeyPath(certID), []byte(string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}))), 0o600); err != nil {
+	if err := util.AtomicWrite(certKeyPath(certID), res.PrivateKey, 0o600); err != nil {
 		return "", err
 	}
-	// 解析叶证书有效期
-	expire, days := parseCertExpiry(der[0])
+	expire, days := parseCertPEM(res.Certificate)
 	info := CertInfo{
 		ID: certID, Name: domains[0] + "(LE)", Domains: strings.Join(domains, " "),
 		Expire: expire, Days: days, SelfSigned: false,
 		Acme: true, SiteID: siteID, Staging: staging,
+		VMethod: method, VAlias: alias,
 		Created: time.Now().Format("2006-01-02 15:04:05"),
 	}
 	if err := saveCertMeta(info); err != nil {
@@ -294,7 +440,7 @@ func IssueCertForSite(siteID string, staging bool, w io.Writer) (string, error) 
 	return certID, nil
 }
 
-// renewCertInPlace 原位续期:保持证书 ID 与站点绑定不变,仅替换证书内容
+// renewCertInPlace 原位续期:按证书的验证方式重新验证并替换证书内容
 func renewCertInPlace(id string, w io.Writer) error {
 	info, ok := GetCert(id)
 	if !ok {
@@ -307,106 +453,53 @@ func renewCertInPlace(id string, w io.Writer) error {
 	if len(domains) == 0 {
 		return fmt.Errorf("证书没有域名信息")
 	}
-	fmt.Fprintf(w, ">> 续期 %s ...\n", info.Domains)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-
-	a := loadACMEAccount()
-	client, err := acmeClient(ctx, a)
-	if err != nil {
-		return err
+	method := info.VMethod
+	if method == "" {
+		method = "http"
 	}
-	ids := make([]acme.AuthzID, len(domains))
-	for i, d := range domains {
-		ids[i] = acme.AuthzID{Type: "dns", Value: d}
-	}
-	order, err := client.AuthorizeOrder(ctx, ids)
-	if err != nil {
-		return fmt.Errorf("创建订单失败: %v", err)
-	}
-	// 续期时站点可能已删除;挑战文件写入原站点根目录,站点不存在则报错提示
+	fmt.Fprintf(w, ">> 续期 %s(%s 验证)...\n", info.Domains, map[string]string{"http": "HTTP", "dns": "DNS"}[method])
 	var site Site
 	if info.SiteID != "" {
-		if s, err := GetSite(info.SiteID); err == nil {
-			site = s
+		if s0, err := GetSite(info.SiteID); err == nil {
+			site = s0
 		}
 	}
-	if site.ID == "" {
-		return fmt.Errorf("原站点已删除,无法续期(请删除该证书后重新申请)")
-	}
-	for _, azURL := range order.AuthzURLs {
-		az, err := client.GetAuthorization(ctx, azURL)
-		if err != nil {
-			return err
-		}
-		if az.Status == "valid" {
-			continue
-		}
-		var chal *acme.Challenge
-		for _, ch := range az.Challenges {
-			if ch.Type == "http-01" {
-				chal = ch
-			}
-		}
-		if chal == nil {
-			return fmt.Errorf("CA 未提供 http-01 验证方式")
-		}
-		keyAuth, err := client.HTTP01ChallengeResponse(chal.Token)
-		if err != nil {
-			return err
-		}
-		chDir := acmeChallengeDir(&site)
-		if err := os.MkdirAll(chDir, 0o755); err != nil {
-			return err
-		}
-		if err := util.AtomicWrite(filepath.Join(chDir, chal.Token), []byte(keyAuth), 0o644); err != nil {
-			return err
-		}
-		if _, err := client.Accept(ctx, chal); err != nil {
-			cleanupChallenge(&site)
-			return err
-		}
-	}
-	fmt.Fprintf(w, ">> 等待 CA 验证...\n")
-	for _, azURL := range order.AuthzURLs {
-		if _, err := client.WaitAuthorization(ctx, azURL); err != nil {
-			cleanupChallenge(&site)
-			return fmt.Errorf("域名验证失败: %v", err)
-		}
-	}
-	cleanupChallenge(&site)
-
-	certKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	prov := loadACMEAccount().Provider
+	client, user, err := acmeClientFor(prov, w)
+	_ = user
 	if err != nil {
 		return err
 	}
-	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
-		Subject:            pkix.Name{CommonName: domains[0]},
-		DNSNames:           domains,
-		SignatureAlgorithm: x509.ECDSAWithSHA256,
-	}, certKey)
+	alias := info.VAlias
+	if method == "dns" {
+		fmt.Fprintf(w, ">> DNS 验证的证书续期需要更新 TXT 记录(值每次不同),请按提示操作\n")
+		client.Challenge.SetDNS01Provider(&manualDNSProvider{w: w, alias: alias},
+			dns01.AddRecursiveNameservers([]string{"8.8.8.8:53", "1.1.1.1:53"}))
+	} else {
+		if site.ID == "" {
+			return fmt.Errorf("原站点已删除,无法续期(请删除该证书后重新申请)")
+		}
+		client.Challenge.SetHTTP01Provider(&httpFileProvider{site: &site})
+	}
+	// lego Renew:从现有证书/私钥文件构造 Resource 并重签
+	certRes := certificate.Resource{
+		Certificate: certCrtBytes(id),
+		PrivateKey:  certKeyBytes(id),
+	}
+	res, err := client.Certificate.Renew(certRes, true, false, "")
 	if err != nil {
+		if method == "dns" {
+			return fmt.Errorf("DNS 续期失败: %v", err)
+		}
+		return fmt.Errorf("续期失败: %v", err)
+	}
+	if err := util.AtomicWrite(certCrtPath(id), res.Certificate, 0o644); err != nil {
 		return err
 	}
-	der, _, err := client.CreateOrderCert(ctx, order.URI, csrDER, true)
-	if err != nil {
-		return fmt.Errorf("签发失败: %v", err)
-	}
-	var chain strings.Builder
-	for _, d := range der {
-		chain.Write(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: d}))
-	}
-	keyDER, err := x509.MarshalPKCS8PrivateKey(certKey)
-	if err != nil {
+	if err := util.AtomicWrite(certKeyPath(id), res.PrivateKey, 0o600); err != nil {
 		return err
 	}
-	if err := util.AtomicWrite(certCrtPath(id), []byte(chain.String()), 0o644); err != nil {
-		return err
-	}
-	if err := util.AtomicWrite(certKeyPath(id), []byte(string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}))), 0o600); err != nil {
-		return err
-	}
-	expire, days := parseCertExpiry(der[0])
+	expire, days := parseCertPEM(res.Certificate)
 	info.Expire, info.Days = expire, days
 	info.Created = time.Now().Format("2006-01-02 15:04:05")
 	if err := saveCertMeta(info); err != nil {
@@ -416,11 +509,11 @@ func renewCertInPlace(id string, w io.Writer) error {
 	return Reload()
 }
 
-// StartACMERenew 在证书巡检中自动续期:剩余 ≤30 天的 ACME 证书每天尝试一次
+// StartACMERenew 证书巡检自动续期;DNS 证书仅提醒手动续
 func StartACMERenew(stop <-chan struct{}, notify func(msg string)) {
 	go func() {
 		time.Sleep(90 * time.Second)
-		lastTry := map[string]string{} // certID -> 日期,防止一天内反复触发
+		lastTry := map[string]string{}
 		run := func() {
 			today := time.Now().Format("2006-01-02")
 			for _, c := range ListCerts() {
@@ -431,6 +524,12 @@ func StartACMERenew(stop <-chan struct{}, notify func(msg string)) {
 					continue
 				}
 				lastTry[c.ID] = today
+				if c.VMethod == "dns" {
+					if notify != nil {
+						notify(fmt.Sprintf("【证书即将到期】%s 使用 DNS 验证,需手动续期:请到站点 HTTPS 设置重新申请,或到证书列表点续期并按任务提示更新 TXT 记录(剩余 %d 天)", c.Domains, c.Days))
+					}
+					continue
+				}
 				cert := c
 				go func() {
 					var buf strings.Builder
@@ -459,6 +558,24 @@ func StartACMERenew(stop <-chan struct{}, notify func(msg string)) {
 	}()
 }
 
+func certCrtBytes(id string) []byte {
+	b, _ := os.ReadFile(certCrtPath(id))
+	return b
+}
+
+func certKeyBytes(id string) []byte {
+	b, _ := os.ReadFile(certKeyPath(id))
+	return b
+}
+
+func parseCertPEM(chainPEM []byte) (string, int) {
+	blk, _ := pem.Decode(chainPEM)
+	if blk == nil {
+		return "", 0
+	}
+	return parseCertExpiry(blk.Bytes)
+}
+
 func parseCertExpiry(der []byte) (string, int) {
 	if crt, err := x509.ParseCertificate(der); err == nil {
 		return crt.NotAfter.Format("2006-01-02"), int(time.Until(crt.NotAfter).Hours() / 24)
@@ -473,10 +590,22 @@ func stageName(staging bool) string {
 	return "正式环境"
 }
 
-// IssueCertTask 以异步任务方式发起签发(供 API 调用)
+func providerName(provider string) string {
+	if p, ok := acmeProviders[provider]; ok {
+		return p.Name
+	}
+	return provider
+}
+
+// IssueCertTask 兼容旧签名
 func IssueCertTask(siteID string, staging bool) (string, error) {
+	return IssueCertTaskEx(siteID, AcmeIssueOpts{Staging: staging})
+}
+
+// IssueCertTaskEx 异步签发任务
+func IssueCertTaskEx(siteID string, opts AcmeIssueOpts) (string, error) {
 	t, err := taskx.M.Start("acme-issue", func(w io.Writer) error {
-		_, err := IssueCertForSite(siteID, staging, w)
+		_, err := IssueCertForSite(siteID, opts, w)
 		return err
 	})
 	if err != nil {
@@ -485,10 +614,7 @@ func IssueCertTask(siteID string, staging bool) (string, error) {
 	return t.ID, nil
 }
 
-// RenewCertTask 以异步任务方式续期(供 API 调用)
+// RenewCertTask 异步续期任务
 func RenewCertTask(certID string, w io.Writer) error {
 	return renewCertInPlace(certID, w)
 }
-
-// httpClient 留作自定义超时扩展位
-var _ = http.DefaultClient

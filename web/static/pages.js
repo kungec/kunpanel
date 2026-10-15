@@ -877,10 +877,27 @@ PAGES.websites = {
           </select>
           <div class="help" id="ssl-cert-count">已有 ${certs.length} 张证书;LE 证书剩余不足 30 天时自动续期</div></div>
 
-        <div class="waf-set-sec" style="padding:14px 16px 12px"><div class="waf-sec-head">${I("bolt")}免费证书 Let's Encrypt<span class="tag tag-success" style="margin-left:2px">推荐</span></div>
-          <div class="settings-hint" style="margin:0 0 10px">自动申请、自动续期,适合绝大多数网站;需域名已解析到本服务器且 80 端口可达,签发约 30 秒</div>
+        <div class="waf-set-sec" style="padding:14px 16px 12px"><div class="waf-sec-head">${I("bolt")}免费证书(ACME)<span class="tag tag-success" style="margin-left:2px">推荐</span></div>
+          <div class="settings-hint" style="margin:0 0 10px">自动申请、自动续期;Let's Encrypt 适合绝大多数网站,ZeroSSL / Google / BuyPass 适合有偏好的用户(需在其官网获取 EAB 凭据)</div>
+          <div class="form-item"><label>证书服务商(CA)</label>
+            <select class="select" id="acme-provider" style="max-width:320px"></select>
+            <div class="help" id="acme-provider-hint"></div></div>
+          <div id="acme-eab-row" style="display:none">
+            <div class="form-item"><label>EAB KeyID</label><input class="input" id="acme-eab-kid" value="${esc(acmeCfg.eab_key_id || "")}" placeholder="在 CA 官网获取" style="max-width:320px"></div>
+            <div class="form-item"><label>EAB HMAC</label><input class="input" id="acme-eab-hmac" value="${esc(acmeCfg.eab_hmac || "")}" placeholder="在 CA 官网获取" style="max-width:320px"></div>
+          </div>
           <div class="form-item"><label>申请邮箱</label>
             <input class="input" id="acme-email" value="${esc(acmeCfg.email || "")}" placeholder="用于到期提醒,如 me@example.com"></div>
+          <div class="form-item"><label>验证方式</label>
+            <select class="select" id="acme-method" style="max-width:320px">
+              <option value="http">HTTP 文件验证(推荐,需域名解析到本服务器且 80 端口可达)</option>
+              <option value="dns">DNS 手动验证(支持通配符/无法开放 80 端口的场景,签发时需添加 TXT 记录)</option>
+            </select></div>
+          <div id="acme-alias-row" style="display:none">
+            <div class="form-item"><label>DNS 别名域名(可选)</label>
+              <input class="input" id="acme-alias" placeholder="如 acme.your-domain.com(可选)" style="max-width:320px">
+              <div class="help">别名模式:在主域 DNS 添加 CNAME「_acme-challenge.主域名 → _acme-challenge.别名域名」,TXT 记录即可统一维护在别名域名下,主域 DNS 无需每次改动</div></div>
+          </div>
           <label class="radio-line"><input type="checkbox" id="acme-staging" ${acmeCfg.staging ? "checked" : ""}> 使用测试环境(staging,不限频但浏览器不信任,验证流程用)</label>
           <div style="margin-top:10px"><button class="btn btn-sm btn-primary" id="ssl-acme-issue">${I("bolt")} 申请证书并启用 HTTPS</button></div></div>
 
@@ -926,16 +943,44 @@ PAGES.websites = {
         this.render(el);
       } catch (e) { toast(e.message, "error", 5000); }
     };
-    // ① 一键申请 LE 证书
+    // ① CA 下拉与联动
+    var providerMeta = {};
+    (async function() {
+      try {
+        var list = await api("/ssl/acme/providers");
+        var sel = qs("#acme-provider", m.el);
+        sel.innerHTML = list.map(function(p2) {
+          providerMeta[p2.name] = p2;
+          return '<option value="' + esc(p2.name) + '"' + ((acmeCfg.provider || "letsencrypt") === p2.name ? " selected" : "") + ">" + esc(p2.name) + (p2.staging ? "(测试)" : "") + "</option>";
+        }).join("");
+        var sync = function() {
+          var key = sel.value;
+          var meta = providerMeta[key] || {};
+          qs("#acme-provider-hint", m.el).textContent = meta.need_eab ? "该服务商需要在官网获取 EAB 凭据后填写到下方" : "无需额外凭据,填邮箱即可申请";
+          qs("#acme-eab-row", m.el).style.display = meta.need_eab ? "" : "none";
+        };
+        sel.onchange = sync;
+        sync();
+      } catch (e) { /* 下拉失败时保底 letsencrypt */ }
+    })();
+    var methodSel = qs("#acme-method", m.el);
+    methodSel.onchange = function() {
+      qs("#acme-alias-row", m.el).style.display = this.value === "dns" ? "" : "none";
+    };
+    // ② 一键申请
     qs("#ssl-acme-issue", m.el).onclick = async () => {
       const email = qs("#acme-email", m.el).value.trim();
-      const staging = qs("#acme-staging", m.el).checked;
+      const provider = qs("#acme-provider", m.el).value;
+      const staging = qs("#acme-staging", m.el).checked || (providerMeta[provider] || {}).staging || false;
+      const method = methodSel.value;
+      const alias = qs("#acme-alias", m.el).value.trim();
       if (!email) { toast("请填写申请邮箱", "error"); return; }
-      try { await api("/ssl/acme/config", { method: "POST", body: { email, staging } }); }
-      catch (e) { toast(e.message, "error"); return; }
-      toast("正在发起申请...", "info");
+      const body = { email, staging, provider, eab_key_id: qs("#acme-eab-kid", m.el).value.trim(), eab_hmac: qs("#acme-eab-hmac", m.el).value.trim() };
+      try { await api("/ssl/acme/config", { method: "POST", body }); }
+      catch (e) { toast(e.message, "error", 6000); return; }
+      toast(method === "dns" ? "正在创建订单,请在任务日志中查看需要添加的 TXT 记录..." : "正在发起申请...", "info", 6000);
       try {
-        const d = await api("/ssl/acme/issue", { method: "POST", body: { site_id: site.id, staging } });
+        const d = await api("/ssl/acme/issue", { method: "POST", body: { site_id: site.id, staging, provider, method, alias } });
         m.close();
         taskModal(d.task_id, (status) => {
           if (status === "success") {
@@ -943,7 +988,7 @@ PAGES.websites = {
             setTimeout(() => window.location.reload(), 800);
           }
         });
-      } catch (e) { toast(e.message, "error"); }
+      } catch (e) { toast(e.message, "error", 6000); }
     };
     // ② 自有证书:本地文件选择(自动识别证书/私钥并填充)
     qs("#ssl-pick-file", m.el).onclick = () => {

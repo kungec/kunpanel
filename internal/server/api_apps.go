@@ -13,6 +13,7 @@ import (
 	"kunpanel/internal/dockerx"
 	"kunpanel/internal/taskx"
 	"kunpanel/internal/util"
+	"kunpanel/internal/websites"
 )
 
 // handleAppTemplates 应用商店目录(前端渲染)
@@ -84,6 +85,13 @@ func (s *Server) handleAppAction(w http.ResponseWriter, r *http.Request) {
 
 	// 卸载涉及容器停止/移除/数据清理,放后台任务并流式输出进度
 	if action == "uninstall" {
+		// 卸载保护:PHP 多版本实例被站点使用时拒绝(避免站点瘫痪)
+		if isPHPRuntimeKey(key) {
+			if using := websites.PHPSitesUsing(key); len(using) > 0 {
+				Fail(w, http.StatusConflict, fmt.Sprintf("有 %d 个站点正在使用该 PHP 版本(%s),请先在站点设置中切换版本后再卸载", len(using), strings.Join(using, ", ")))
+				return
+			}
+		}
 		t, err := taskx.M.Start("app-"+key+"-uninstall", func(w io.Writer) error {
 			return appstore.Uninstall(key, req.RemoveData, w)
 		})
@@ -153,8 +161,28 @@ var runtimeContainers = map[string]string{
 }
 
 func runtimeContainerOf(key string) (string, bool) {
+	// PHP 多版本实例:php81/php82... → kun-php81/kun-php82...
+	if isPHPRuntimeKey(key) {
+		return "kun-" + key, true
+	}
 	c, ok := runtimeContainers[key]
 	return c, ok
+}
+
+// isPHPRuntimeKey php 或 php+版本数字(排除 phpmyadmin)
+func isPHPRuntimeKey(key string) bool {
+	if key == "php" {
+		return true
+	}
+	if len(key) > 3 && strings.HasPrefix(key, "php") && key != "phpmyadmin" {
+		for _, r := range key[3:] {
+			if r < '0' || r > '9' {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 // handleAppRuntimeInfo 运行时信息:版本号(PHP/php-fpm/nginx/openresty -v)、PHP 已加载扩展
@@ -282,7 +310,7 @@ func (s *Server) handleAppRuntimeAction(w http.ResponseWriter, r *http.Request) 
 		}
 		OK(w, "已重载")
 	case "php-ext":
-		if key != "php" {
+		if !isPHPRuntimeKey(key) {
 			Fail(w, http.StatusBadRequest, "仅 PHP 支持扩展安装")
 			return
 		}
@@ -348,7 +376,7 @@ func (s *Server) handleAppRuntimeAction(w http.ResponseWriter, r *http.Request) 
 		}
 		OK(w, map[string]string{"task_id": t.ID})
 	case "php-ext-remove":
-		if key != "php" {
+		if !isPHPRuntimeKey(key) {
 			Fail(w, http.StatusBadRequest, "仅 PHP 支持扩展卸载")
 			return
 		}
@@ -392,13 +420,13 @@ func (s *Server) handleAppRuntimeAction(w http.ResponseWriter, r *http.Request) 
 		}
 		OK(w, map[string]string{"task_id": t.ID})
 	case "php-ext-catalog":
-		if key != "php" {
+		if !isPHPRuntimeKey(key) {
 			Fail(w, http.StatusBadRequest, "仅 PHP 支持扩展安装")
 			return
 		}
 		OK(w, phpExtCatalog())
 	case "php-ini-get":
-		if key != "php" {
+		if !isPHPRuntimeKey(key) {
 			Fail(w, http.StatusBadRequest, "仅 PHP 支持配置编辑")
 			return
 		}
@@ -422,7 +450,7 @@ func (s *Server) handleAppRuntimeAction(w http.ResponseWriter, r *http.Request) 
 		}
 		OK(w, map[string]string{"content": string(raw)})
 	case "php-ini-file-save":
-		if key != "php" {
+		if !isPHPRuntimeKey(key) {
 			Fail(w, http.StatusBadRequest, "仅 PHP 支持配置编辑")
 			return
 		}
@@ -446,7 +474,7 @@ func (s *Server) handleAppRuntimeAction(w http.ResponseWriter, r *http.Request) 
 		}
 		OK(w, "php.ini 已保存并重启 PHP 生效")
 	case "php-ini":
-		if key != "php" {
+		if !isPHPRuntimeKey(key) {
 			Fail(w, http.StatusBadRequest, "仅 PHP 支持设置修改")
 			return
 		}

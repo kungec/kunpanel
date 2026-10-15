@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -664,6 +665,16 @@ func Install(key string, params map[string]string) error {
 		}
 	}
 	params = sanitizeParams(tpl, params)
+
+	// PHP 多版本:不同版本可共存为独立实例。实例键规则:首个为 php,后续为 php+版本数字(如 php82)
+	if key == "php" {
+		instKey, err := allocatePHPKey(params["Version"])
+		if err != nil {
+			return err
+		}
+		key = instKey
+	}
+
 	dir := filepath.Join(dataRoot(), key)
 	_ = os.MkdirAll(dir, 0o755)
 
@@ -673,6 +684,10 @@ func Install(key string, params map[string]string) error {
 	}
 
 	content := tpl.ComposeFrom(params)
+	if strings.HasPrefix(key, "php") && key != "phpmyadmin" && key != "php" {
+		// 多版本实例:容器名与项目名按实例键区分
+		content = strings.ReplaceAll(content, "container_name: kun-php\n", "container_name: kun-"+key+"\n")
+	}
 	if err := util.AtomicWriteString(filepath.Join(dir, "docker-compose.yml"), content, 0o644); err != nil {
 		return err
 	}
@@ -698,8 +713,14 @@ func Install(key string, params map[string]string) error {
 			return saveInstances(list)
 		}
 	}
+	maxID := 0
+	for _, it := range list {
+		if n, err := strconv.Atoi(it.ID); err == nil && n > maxID {
+			maxID = n
+		}
+	}
 	list = append(list, Instance{
-		ID: fmt.Sprintf("%d", len(list)+1), Key: key, Name: tpl.Name,
+		ID: fmt.Sprintf("%d", maxID+1), Key: key, Name: tpl.Name,
 		Params: params, Dir: dir, CreatedAt: time.Now().Format("2006-01-02 15:04:05"),
 	})
 	return saveInstances(list)
@@ -1137,3 +1158,72 @@ func UpdateInstanceParam(key, param, value string) bool {
 	}
 	return saveInstances(list) == nil
 }
+
+// PHPInstanceKeys 返回全部 PHP 实例的键(含主实例 php 与多版本 php81/php82...)
+func PHPInstanceKeys() []string {
+	var out []string
+	for _, it := range loadInstances() {
+		if isPHPInstanceKey(it.Key) {
+			out = append(out, it.Key)
+		}
+	}
+	return out
+}
+
+// IsPHPInstanceKeyExported 供其他包判断 PHP 实例键
+func IsPHPInstanceKeyExported(key string) bool { return isPHPInstanceKey(key) }
+
+// isPHPInstanceKey 判断是否 PHP 运行时实例键(php / php81 / php82 ...;排除 phpmyadmin)
+func isPHPInstanceKey(key string) bool {
+	if key == "php" {
+		return true
+	}
+	if strings.HasPrefix(key, "php") && key != "phpmyadmin" {
+		suffix := key[3:]
+		if suffix == "" {
+			return false
+		}
+		for _, r := range suffix {
+			if r < '0' || r > '9' {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// normalizePHPVersion "8.4" → "84"
+func normalizePHPVersion(v string) string {
+	return strings.ReplaceAll(strings.TrimSpace(v), ".", "")
+}
+
+// allocatePHPKey 为待安装的 PHP 版本分配实例键:同版本已装则拒绝,首个实例用 php,
+// 后续用 php+版本数字(如 php82)
+func allocatePHPKey(version string) (string, error) {
+	ver := normalizePHPVersion(version)
+	if ver == "" {
+		return "", fmt.Errorf("PHP 版本不能为空")
+	}
+	list := loadInstances()
+	for _, it := range list {
+		if !isPHPInstanceKey(it.Key) {
+			continue
+		}
+		if normalizePHPVersion(it.Params["Version"]) == ver {
+			return "", fmt.Errorf("PHP %s 已安装,不同站点可直接选用;如需重装请先卸载该版本", version)
+		}
+	}
+	hasAny := false
+	for _, it := range list {
+		if isPHPInstanceKey(it.Key) {
+			hasAny = true
+			break
+		}
+	}
+	if !hasAny {
+		return "php", nil
+	}
+	return "php" + ver, nil
+}
+

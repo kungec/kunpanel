@@ -183,6 +183,13 @@ PAGES.websites = {
     } catch (e) { el.innerHTML = emptyState("warn", "加载失败", e.message); return; }
     data = data || [];
     certs = certs || [];
+    // PHP 实例键 → 版本映射(站点列表显示所用版本)
+    const phpVerMap = {};
+    try {
+      const phps = (await api("/apps/instances").catch(() => [])) || [];
+      phps.forEach((x) => { if (x.key === "php" || /^php[0-9]+$/.test(x.key)) phpVerMap[x.key] = (x.params && x.params.Version) || x.key.replace("php", ""); });
+    } catch (e) {}
+    window.__phpVerMap = phpVerMap;
     const certMap = {};
     certs.forEach((c) => (certMap[c.id] = c));
     const daysLeft = (c) => {
@@ -381,18 +388,27 @@ PAGES.websites = {
       if (t === "static") {
         dyn.innerHTML = '<div class="form-item"><label>根目录</label><input class="input mono" id="w-root" placeholder="留空自动生成,可自定义绝对路径"></div>';
       } else if (t === "php") {
-        dyn.innerHTML = '<div class="form-item"><label>PHP 运行环境</label><div id="w-php-status" class="help">检测中…</div></div>' +
+        dyn.innerHTML = '<div class="form-item"><label>PHP 版本</label><select class="select" id="w-php-key" style="max-width:320px"></select>' +
+          '<div id="w-php-status" class="help" style="margin-top:6px">检测中…</div></div>' +
           '<div class="form-item"><label>根目录</label><input class="input mono" id="w-root" placeholder="留空自动生成,可自定义绝对路径">' +
-          '<div class="help">站点目录会自动挂载进 PHP 运行时,上传的 PHP 程序立即可用</div></div>';
+          '<div class="help">站点目录会自动挂载进 PHP 运行时,上传的 PHP 程序立即可用;需要其他版本可在应用商店安装(多版本共存)</div></div>';
         api("/apps/instances").then(function(insts) {
-          var php = (insts || []).find(function(x) { return x.key === "php"; });
+          var phps = (insts || []).filter(function(x) { return (x.key === "php" || /^php[0-9]+$/.test(x.key)) && x.status === "running"; });
+          var sel = qs("#w-php-key", m.el);
           var box = qs("#w-php-status", m.el);
-          if (!box) return;
-          if (php && php.status === "running") box.innerHTML = '<span class="tag tag-success"><span class="dot on"></span>PHP 运行时运行中,可直接创建</span>';
-          else {
+          if (!sel || !box) return;
+          if (!phps.length) {
+            sel.innerHTML = '<option value="">无可用版本</option>';
             box.innerHTML = '<span class="tag tag-warning">PHP 运行时未安装或未运行</span> <a href="#/apps">去应用商店安装</a>';
             box.dataset.missing = "1";
+            return;
           }
+          delete box.dataset.missing;
+          sel.innerHTML = phps.map(function(x) {
+            var v = (x.params && x.params.Version) || x.key;
+            return '<option value="' + esc(x.key) + '">PHP ' + esc(v) + '</option>';
+          }).join("");
+          box.innerHTML = '<span class="tag tag-success"><span class="dot on"></span>运行中,可直接创建;不同项目可选不同版本</span>';
         }).catch(function() {});
       } else {
         dyn.innerHTML = '<div class="form-item required"><label>目标 URL</label><input class="input mono" id="w-proxy" placeholder="如: http://127.0.0.1:3000">' +
@@ -430,6 +446,10 @@ PAGES.websites = {
         root_dir: qs("#w-root", m.el) ? qs("#w-root", m.el).value.trim() : "",
         remark: qs("#w-remark", m.el).value.trim(),
       };
+      if (curType === "php") {
+        var pk = qs("#w-php-key", m.el);
+        if (pk && pk.value) body.php_key = pk.value;
+      }
       // 可选数据库
       if (qs("#w-db-on", m.el).checked) {
         var inst = qs("#w-db-inst", m.el).value;
@@ -658,7 +678,8 @@ PAGES.websites = {
             '<textarea class="textarea mono" id="ws-upstreams" rows="3" placeholder="每行一个:\nhttp://127.0.0.1:8080 5\nhttp://127.0.0.1:8081">' + esc(upstreamsText) + '</textarea>' +
             '<div class="help">每行「地址 [权重]」,多个后端自动加权轮询;配置后替代上方代理目标。格式错误会被 nginx 校验拦截并回滚</div></div>'
           : s.type === "php"
-          ? '<div class="form-item"><label>PHP 运行环境</label><div class="help" style="margin:0">自动转发到 PHP 运行时(kun-php),站点目录已挂载</div></div>'
+          ? '<div class="form-item"><label>PHP 版本</label><select class="select" id="ws-php-key" style="max-width:320px"></select>' +
+            '<div class="help">切换后自动重载 Nginx 生效;选项为当前运行中的 PHP 版本(多版本可在应用商店安装)</div></div>'
           : "") +
         '<div class="form-item"><label>监听端口</label><input class="input" id="ws-port" type="number" value="' + (s.port || 80) + '" style="max-width:180px"></div>' +
         (s.type === "static"
@@ -666,6 +687,22 @@ PAGES.websites = {
           : "") +
         '<div class="form-item"><label>备注</label><input class="input" id="ws-remark" value="' + esc(s.remark || "") + '"></div>' +
         '<button class="btn btn-primary btn-sm" id="ws-base-save">' + I("edit") + " 保存并生效</button>";
+      if (s.type === "php") {
+        (async function() {
+          var sel = document.getElementById("ws-php-key");
+          if (!sel) return;
+          try {
+            var insts = await api("/apps/instances");
+            var phps = (insts || []).filter(function(x) { return (x.key === "php" || /^php[0-9]+$/.test(x.key)) && x.status === "running"; });
+            var cur = s.php_key || "php";
+            if (!phps.some(function(x) { return x.key === cur; })) phps.unshift({ key: cur, params: { Version: cur === "php" ? "默认" : cur.replace("php", "") }, status: "running" });
+            sel.innerHTML = phps.map(function(x) {
+              var v = (x.params && x.params.Version) || x.key;
+              return '<option value="' + esc(x.key) + '"' + (x.key === cur ? " selected" : "") + '>PHP ' + esc(v) + '</option>';
+            }).join("");
+          } catch (e) { sel.innerHTML = '<option value="' + esc(s.php_key || "php") + '">PHP(当前)</option>'; }
+        })();
+      }
       qs("#ws-base-save", body).onclick = async function() {
         var domains = qs("#ws-domains", body).value.split("\n").map(function(x) { return x.trim(); }).filter(Boolean).join(" ");
         if (!domains) { toast("域名不能为空", "error"); return; }
@@ -676,6 +713,15 @@ PAGES.websites = {
               proxy_to: s.type === "proxy" ? qs("#ws-proxy", body).value.trim() : (s.proxy_to || ""),
               port: Number(qs("#ws-port", body).value) || 80,
               remark: qs("#ws-remark", body).value.trim(),
+            }});
+          } else {
+            // PHP 站点:提交所选 PHP 版本(端口/备注随同保存)
+            var pk = document.getElementById("ws-php-key");
+            await api("/websites/" + s.id, { method: "PUT", body: {
+              proxy_to: s.proxy_to || "",
+              port: Number(qs("#ws-port", body).value) || 80,
+              remark: qs("#ws-remark", body) ? qs("#ws-remark", body).value.trim() : (s.remark || ""),
+              php_key: pk ? pk.value : (s.php_key || "php"),
             }});
           }
           if (s.type === "proxy") {
@@ -1116,6 +1162,7 @@ PAGES.apps = {
     var actionsHtml = "";
     if (this.tab === "installed") actionsHtml += '<button class="btn btn-sm btn-plain" id="apps-check-upd">' + I("refresh") + ' 检查更新</button>';
     actionsHtml += '<button class="btn btn-sm btn-primary" id="apps-custom-add">' + I("plus") + ' 自定义应用</button>';
+    window.__phpUsedPorts = (instances || []).filter(function(x) { return x.key === "php" || /^php[0-9]+$/.test(x.key); }).map(function(x) { return (x.params && x.params.Port) || ""; }).filter(Boolean);
     var html = '<div class="page-head"><div class="tabs">' + tabsHtml + '</div><div class="tabs-actions">' + actionsHtml + "</div></div><div id=\"apps-body\"></div>";
     el.innerHTML = html;
 
@@ -1151,7 +1198,8 @@ PAGES.apps = {
         html += '<p style="font-size:12px;color:var(--text-3);flex:1;min-height:32px;line-height:1.5;margin:6px 0">' + esc(t.desc) + '</p>';
         html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-top:auto">';
         html += '<span class="tag tag-info">' + esc(t.version) + '</span>';
-        var instMissing = inst && inst.status === "missing";
+        // PHP 多版本:已装时仍可安装其他版本(卡片保留安装按钮)
+        var phpMulti = t.key === "php" && inst && !instMissing;
         if (t.key.indexOf("custom_") === 0) {
           html += '<span style="display:flex;gap:6px;align-items:center">' +
             (inst ? (instMissing ? '<span class="tag tag-danger" title="容器已不存在,点「重建」按原配置恢复">容器已删除</span>' : '<span class="tag tag-success">已安装</span>') : '<button class="btn btn-sm btn-primary" data-install="' + t.key + '">安装</button>') +
@@ -1159,6 +1207,9 @@ PAGES.apps = {
         } else if (instMissing) {
           html += '<span style="display:flex;gap:6px;align-items:center"><span class="tag tag-danger" title="安装记录还在,容器已不存在(可能被手动删除)">容器已删除</span>' +
             '<button class="btn btn-sm btn-primary" data-rebuild="' + t.key + '">重建</button></span>';
+        } else if (phpMulti) {
+          html += '<span style="display:flex;gap:6px;align-items:center"><span class="tag tag-success">已装 ' + esc((inst.params && inst.params.Version) || "") + '</span>' +
+            '<button class="btn btn-sm btn-primary" data-install="' + t.key + '" title="可共存不同版本">装其他版本</button></span>';
         } else if (inst) { html += '<span class="tag tag-success">已安装</span>'; }
         else { html += '<button class="btn btn-sm btn-primary" data-install="' + t.key + '">安装</button>'; }
         html += '</div></div>';
@@ -1809,6 +1860,18 @@ PAGES.apps = {
     };
   },
   installDialog(el, t) {
+    // PHP 多版本:端口默认避开已装实例的端口
+    var usedPorts = {};
+    (window.__phpUsedPorts || []).forEach(function(x) { usedPorts[x] = 1; });
+    var defPort = function(p0) {
+      var v = p0.default || "";
+      if (t.key === "php" && p0.key === "Port" && usedPorts[v]) {
+        var n = parseInt(v, 10) || 8088;
+        while (usedPorts[String(n)]) n++;
+        v = String(n);
+      }
+      return v;
+    };
     var paramsHTML = (t.params || []).map(function(p) {
       var field;
       if (p.type === "select") {
@@ -1818,7 +1881,7 @@ PAGES.apps = {
         });
         field += '</select>';
       } else {
-        field = '<input class="input" data-k="' + esc(p.key) + '" type="' + (p.type === "password" ? "password" : "text") + '" value="' + esc(p.default || "") + '" placeholder="' + esc(p.default || "请输入") + '">';
+        field = '<input class="input" data-k="' + esc(p.key) + '" type="' + (p.type === "password" ? "password" : "text") + '" value="' + esc(defPort(p) || "") + '" placeholder="' + esc(p.default || "请输入") + '">';
       }
       var help = p.help ? '<div class="help">' + esc(p.help) + '</div>' : '';
       return '<div class="form-item ' + (p.required ? "required" : "") + '"><label>' + esc(p.label) + '</label>' + field + help + '</div>';

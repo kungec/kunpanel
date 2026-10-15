@@ -78,6 +78,7 @@ type Site struct {
 	Upstreams []Upstream `json:"upstreams,omitempty"`
 	CreatedAt      string `json:"created_at"`
 	Remark         string `json:"remark"`
+	PhpKey    string    `json:"php_key,omitempty"` // 使用的 PHP 实例键(php/php82...;空=默认)
 }
 
 // Upstream 反代负载均衡后端
@@ -178,6 +179,7 @@ type CreateOpts struct {
 	RootDir  string // 可选:自定义根目录(默认自动生成)
 	Remark   string
 	Port     int
+	PhpKey   string // php 类型:PHP 实例键(php/php82...;空=默认)
 }
 
 // Add 新建站点(兼容旧签名)
@@ -216,8 +218,9 @@ func Create(o CreateOpts) (*Site, error) {
 		Root: filepath.Join(rootsDir(), id),
 	}
 	if o.SiteType == "php" {
-		// PHP 站点:全部请求转发到 PHP 运行时容器,容器内按站点目录区分
-		s.ProxyTo = PhpUpstream(id)
+		// PHP 站点:全部请求转发到所选 PHP 运行时实例,容器内按站点目录区分
+		s.PhpKey = normalizePHPKey(o.PhpKey)
+		s.ProxyTo = PhpUpstreamFor(s.PhpKey, id)
 	}
 	if o.SiteType == "proxy" {
 		s.ProxyTo = strings.TrimSpace(o.ProxyTo)
@@ -668,17 +671,58 @@ func fileExists(p string) bool {
 // PhpUpstream PHP 运行时的反代上游(http://<容器网关>:<端口>/<站点ID>/)
 // PHP 容器把全部站点根目录挂载在 /var/www/html,按站点子目录区分
 func PhpUpstream(siteID string) string {
-	port := "8088"
+	return PhpUpstreamFor("", siteID)
+}
+
+// PhpUpstreamFor 指定 PHP 实例键的反代上游;phpKey 为空时按顺序取:php → 第一个 php 系实例
+func PhpUpstreamFor(phpKey, siteID string) string {
+	phpKey = normalizePHPKey(phpKey)
+	port := ""
 	insts, _ := appstore.List()
+	// 目标实例
 	for _, inst := range insts {
-		if inst.Key == "php" {
+		if inst.Key == phpKey && phpKey != "" {
 			if p := strings.TrimSpace(inst.Params["Port"]); p != "" {
 				port = p
 			}
+			break
 		}
+	}
+	// 未指定/未找到:php 主实例 → 第一个运行中的 php 系实例
+	if port == "" {
+		for _, inst := range insts {
+			if inst.Key == "php" {
+				if p := strings.TrimSpace(inst.Params["Port"]); p != "" {
+					port = p
+				}
+				break
+			}
+		}
+	}
+	if port == "" {
+		for _, inst := range insts {
+			if appstore.IsPHPInstanceKeyExported(inst.Key) {
+				if p := strings.TrimSpace(inst.Params["Port"]); p != "" {
+					port = p
+				}
+				break
+			}
+		}
+	}
+	if port == "" {
+		port = "8088"
 	}
 	gw := dockerBridgeGateway()
 	return "http://" + gw + ":" + port + "/" + siteID + "/"
+}
+
+// normalizePHPKey 归一 PHP 实例键
+func normalizePHPKey(k string) string {
+	k = strings.ToLower(strings.TrimSpace(k))
+	if k == "" || k == "phpmyadmin" {
+		return ""
+	}
+	return k
 }
 
 // dockerBridgeGateway 获取 docker 默认网桥的宿主机网关 IP。
@@ -770,4 +814,63 @@ func rewriteConfLines(id string) string {
 		return fmt.Sprintf("    # 伪静态/重写规则(由坤面板生成)\n    %s\n", strings.TrimRight(string(b), "\n"))
 	}
 	return ""
+}
+
+// UpdateSitePhp 切换 PHP 站点使用的 PHP 实例(多版本):更新 PhpKey、重写 conf 并重载
+func UpdateSitePhp(id, phpKey string) error {
+	phpKey = normalizePHPKey(phpKey)
+	mu.Lock()
+	load()
+	var site *Site
+	for i := range list {
+		if list[i].ID == id {
+			site = &list[i]
+			break
+		}
+	}
+	if site == nil {
+		mu.Unlock()
+		return fmt.Errorf("站点不存在")
+	}
+	if site.Type != "php" {
+		mu.Unlock()
+		return fmt.Errorf("仅 PHP 站点支持切换 PHP 版本")
+	}
+	if site.PhpKey == phpKey {
+		mu.Unlock()
+		return nil // 无变化
+	}
+	site.PhpKey = phpKey
+	site.ProxyTo = PhpUpstreamFor(phpKey, id)
+	if err := save(); err != nil {
+		mu.Unlock()
+		return err
+	}
+	cp := *site
+	mu.Unlock()
+	if err := writeConf(&cp); err != nil {
+		return err
+	}
+	return Reload()
+}
+
+// PHPSitesUsing 返回正在使用指定 PHP 实例键的站点域名列表(卸载保护)
+func PHPSitesUsing(phpKey string) []string {
+	mu.Lock()
+	defer mu.Unlock()
+	load()
+	var out []string
+	for _, s := range list {
+		if s.Type != "php" {
+			continue
+		}
+		k := normalizePHPKey(s.PhpKey)
+		if k == "" {
+			k = "php"
+		}
+		if k == phpKey {
+			out = append(out, s.Alias)
+		}
+	}
+	return out
 }

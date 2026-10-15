@@ -32,6 +32,7 @@ func (s *Server) handleSiteUpdate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ProxyTo string `json:"proxy_to"`
 		Remark  string `json:"remark"`
+		PhpKey  string `json:"php_key"` // PHP 站点:切换 PHP 实例(多版本)
 		Port    int    `json:"port"`
 	}
 	if err := readJSON(r, &req); err != nil {
@@ -41,6 +42,12 @@ func (s *Server) handleSiteUpdate(w http.ResponseWriter, r *http.Request) {
 	if err := websites.UpdateSite(id, req.ProxyTo, req.Remark, req.Port); err != nil {
 		Fail(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if req.PhpKey != "" {
+		if err := websites.UpdateSitePhp(id, req.PhpKey); err != nil {
+			Fail(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 	site, err := websites.GetSite(id)
 	if err != nil {
@@ -59,6 +66,7 @@ type siteAddReq struct {
 	RootDir    string `json:"root_dir"`
 	DbInstance string `json:"db_instance"`
 	DbName     string `json:"db_name"`
+	PhpKey     string `json:"php_key"` // PHP 站点:选择 PHP 实例(多版本)
 }
 
 func (s *Server) handleSiteAdd(w http.ResponseWriter, r *http.Request) {
@@ -69,7 +77,7 @@ func (s *Server) handleSiteAdd(w http.ResponseWriter, r *http.Request) {
 	}
 	site, err := websites.Create(websites.CreateOpts{
 		Domain: req.Domain, SiteType: req.Type, ProxyTo: req.ProxyTo,
-		RootDir: req.RootDir, Remark: req.Remark, Port: req.Port,
+		RootDir: req.RootDir, Remark: req.Remark, Port: req.Port, PhpKey: req.PhpKey,
 	})
 	if err != nil {
 		Fail(w, http.StatusBadRequest, err.Error())

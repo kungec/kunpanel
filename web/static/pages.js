@@ -1227,6 +1227,10 @@ PAGES.apps = {
       return '<div class="card" style="margin:0;height:150px"><div class="sk" style="height:44px;width:44px;border-radius:12px;margin-bottom:12px"></div><div class="sk" style="height:14px;width:55%;margin-bottom:10px"></div><div class="sk" style="height:12px;width:90%"></div><div class="sk" style="height:12px;width:70%"></div></div>';
     }).join("") + "</div>";
     var self = this;
+    // 深链支持:#/apps?tab=installed 直达已安装列表(数据库页空态"前往重建"入口)
+    var q = (location.hash || "").split("?")[1] || "";
+    if (q.indexOf("tab=installed") >= 0) this.tab = "installed";
+    else if (q.indexOf("tab=store") >= 0) this.tab = "store";
     var templates = [], instances = [];
     try {
       var results = await Promise.all([api("/apps/templates"), api("/apps/instances")]);
@@ -1274,10 +1278,14 @@ PAGES.apps = {
         html += '<p style="font-size:12px;color:var(--text-3);flex:1;min-height:32px;line-height:1.5;margin:6px 0">' + esc(t.desc) + '</p>';
         html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-top:auto">';
         html += '<span class="tag tag-info">' + esc(t.version) + '</span>';
+        var instMissing = inst && inst.status === "missing";
         if (t.key.indexOf("custom_") === 0) {
           html += '<span style="display:flex;gap:6px;align-items:center">' +
-            (inst ? '<span class="tag tag-success">已安装</span>' : '<button class="btn btn-sm btn-primary" data-install="' + t.key + '">安装</button>') +
+            (inst ? (instMissing ? '<span class="tag tag-danger" title="容器已不存在,点「重建」按原配置恢复">容器已删除</span>' : '<span class="tag tag-success">已安装</span>') : '<button class="btn btn-sm btn-primary" data-install="' + t.key + '">安装</button>') +
             '<button class="btn btn-xs btn-danger-plain" data-custom-del="' + t.key + '" title="删除该自定义应用">删除</button></span>';
+        } else if (instMissing) {
+          html += '<span style="display:flex;gap:6px;align-items:center"><span class="tag tag-danger" title="安装记录还在,容器已不存在(可能被手动删除)">容器已删除</span>' +
+            '<button class="btn btn-sm btn-primary" data-rebuild="' + t.key + '">重建</button></span>';
         } else if (inst) { html += '<span class="tag tag-success">已安装</span>'; }
         else { html += '<button class="btn btn-sm btn-primary" data-install="' + t.key + '">安装</button>'; }
         html += '</div></div>';
@@ -1303,6 +1311,15 @@ PAGES.apps = {
           }, 0);
         };
       }
+      body.querySelectorAll("[data-rebuild]").forEach(function(b) {
+        b.onclick = function() {
+          var key = b.getAttribute("data-rebuild");
+          b.disabled = true; b.textContent = "重建中...";
+          api("/apps/instances/" + key + "/start", { method: "POST", body: {} })
+            .then(function() { toast("重建完成"); self.render(el); })
+            .catch(function(e) { toast(e.message || "重建失败", "error", 6000); b.disabled = false; b.textContent = "重建"; });
+        };
+      });
       body.querySelectorAll("[data-install]").forEach(function(b) {
         b.onclick = function() {
           var tpl = null;
@@ -1967,7 +1984,25 @@ PAGES.databases = {
     var notRunning = instances.filter((i) => !i.running);
     var typeNames = { mysql: "MySQL", mariadb: "MariaDB", postgresql: "PostgreSQL" };
 
+    var self = this;
     if (!running.length) {
+      // 有安装记录但容器被删:给出重建指引,而不是笼统引导"去安装"(商店会显示已安装,无路可走)
+      var missingDb = "";
+      try {
+        var appInsts0 = (await api("/apps/instances")) || [];
+        var dbTypes = ["mysql", "mariadb", "postgresql"];
+        var m = appInsts0.filter(function(i) { return dbTypes.indexOf(i.key) >= 0 && i.status === "missing"; })[0];
+        if (m) missingDb = ({ mysql: "MySQL", mariadb: "MariaDB", postgresql: "PostgreSQL" })[m.key] || m.key;
+      } catch (e) {}
+      if (missingDb) {
+        el.innerHTML = '<div class="card" style="max-width:680px;margin:40px auto;text-align:center;padding:48px 32px">' +
+          '<div style="margin-bottom:16px">' + iconBox("warn", 64) + "</div>" +
+          '<h3 style="font-size:18px;margin-bottom:8px">' + esc(missingDb) + ' 安装记录还在,但容器已不存在</h3>' +
+          '<p style="color:var(--text-3);font-size:13.5px;margin-bottom:6px">容器可能被手动删除或异常丢失;数据目录仍保留在服务器上</p>' +
+          '<p style="color:var(--text-3);font-size:13.5px;margin-bottom:20px">到 <b>应用商店 → 已安装</b> 列表点「重建」即可按原配置恢复,数据不丢</p>' +
+          '<a class="btn btn-primary" href="#/apps?tab=installed">前往重建</a></div>';
+        return;
+      }
       el.innerHTML = '<div class="card" style="max-width:680px;margin:40px auto;text-align:center;padding:48px 32px">' +
         '<div style="margin-bottom:16px">' + iconBox("database", 64) + "</div>" +
         '<h3 style="font-size:18px;margin-bottom:8px">未检测到运行中的数据库</h3>' +
@@ -1976,7 +2011,6 @@ PAGES.databases = {
       return;
     }
 
-    var self = this;
     // 保留当前选中的实例(此前每次重置为第一个,多实例时无法切换)
     if (!this.tab.key || !running.some(function(i) { return i.key === self.tab.key; })) {
       this.tab = { key: running[0].key, database: "", table: "" };

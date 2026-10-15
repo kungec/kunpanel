@@ -2606,23 +2606,25 @@ PAGES.plugins = {
     var modeName = (this.MODE_INFO[st.mode] || this.MODE_INFO.block).name;
 
     var stats = info.stats || {};
-    var head = '<div class="card waf-hero">' +
+    var head = '<div class="waf-hero">' +
       '<div class="waf-hero-left">' + iconBox("shield", 46) +
-      '<div class="stat-meta"><h3 style="font-size:17px">WAF 防火墙 ' + stateTag(info.active, "防护中", "已停用") + "</h3>" +
+      '<div class="stat-meta"><h3>WAF 防火墙 ' + stateTag(info.active, "防护中", "已停用") + "</h3>" +
       '<div class="stat-line"><span class="tag tag-primary">' + esc(modeName) + "</span> · Nginx + Lua 引擎 · v" + esc((info.settings && info.settings.version) || "1.0") + "</div></div></div>" +
       '<div class="waf-hero-mid">' +
-      '<div class="wh-stat"><b>' + (stats.today || 0) + "</b><span>今日拦截</span></div>" +
+      '<div class="wh-stat danger"><b>' + (stats.today || 0) + "</b><span>今日拦截</span></div>" +
       '<div class="wh-stat"><b>' + (stats.total || 0) + "</b><span>累计拦截</span></div>" +
+      '<div class="wh-stat"><b>' + ((stats.hours || [])[23] || 0) + "</b><span>最近 1 小时</span></div>" +
       "</div>" +
       '<div class="waf-hero-right">' +
       '<div class="wh-toggle"><span class="switch' + (st.enabled ? " on" : "") + '" id="waf-hero-switch"></span><span>' + (st.enabled ? "防护开启" : "防护关闭") + "</span></div>" +
+      '<button class="btn btn-sm btn-plain" id="waf-refresh" title="刷新">' + I("refresh") + "</button>" +
       '<button class="btn btn-sm btn-danger-plain" id="waf-uninstall">卸载</button></div></div>';
     var tabs = '<div class="hub-tabs">';
     this.tabsDef.forEach(function(t) {
       tabs += '<div class="hub-tab ' + (self.tab === t.key ? "active" : "") + '" data-tab="' + t.key + '">' + t.label + "</div>";
     });
     tabs += '</div><div id="waf-body">' + skeletonTable(5, 4) + "</div>";
-    el.innerHTML = '<div class="card">' + head + tabs + "</div>";
+    el.innerHTML = head + '<div class="card" style="margin-top:12px">' + tabs + "</div>";
 
     qs("#waf-hero-switch", el).onclick = function() {
       st.enabled = !st.enabled;
@@ -2637,6 +2639,7 @@ PAGES.plugins = {
         self.render(el);
       });
     };
+    qs("#waf-refresh", el).onclick = function() { self.render(el); };
     qs("#waf-uninstall", el).onclick = function() {
       confirmDlg("确定卸载 WAF 插件吗?所有站点将恢复无防护状态。", { danger: true }).then(function(ok) {
         if (!ok) return;
@@ -2703,57 +2706,92 @@ PAGES.plugins = {
       '<div class="card" style="margin:0;padding:16px 18px"><div class="card-title" style="margin-bottom:10px">攻击来源 IP Top6</div>' + ipRows + "</div></div>";
     setPageTimer(function() { if (document.visibilityState === "visible" && body.isConnected && self.tab === "overview") self.tabOverview(body); }, 15000);
   },
-  /* ---- 全局设置 ---- */
+  /* ---- 全局设置:左侧锚点导航 + 分组卡片 ---- */
   tabGlobal(body) {
     var self = this;
     var st = this.st;
-    var grp = [["sql", "SQL 注入", "拦截 union select、sleep() 等注入特征"], ["xss", "XSS 跨站", "拦截 script 标签、事件注入等"], ["lfi", "文件包含", "拦截目录穿越、/etc/passwd 等"], ["cmd", "命令执行", "拦截 cat /etc、system() 等"], ["scan", "扫描器", "拦截常见扫描器 UA 与探测行为"], ["sensitive", "敏感文件", "拦截 .git/.env/.sql 备份等敏感文件泄露", ["webshell", "Webshell 木马", "拦截 eval($_POST)、一句话木马上传、反序列化等"]]];
+    var grp = [["sql", "SQL 注入", "union select、sleep() 等注入特征"], ["xss", "XSS 跨站", "script 标签、事件注入等"], ["lfi", "文件包含", "目录穿越、/etc/passwd 等"], ["cmd", "命令执行", "cat /etc、system() 等"], ["scan", "扫描器", "常见扫描器 UA 与探测行为"], ["sensitive", "敏感文件", ".git/.env/.sql 备份泄露"], ["webshell", "Webshell 木马", "eval($_POST)、一句话木马、反序列化"]];
     var modeCards = ["block", "alert", "monitor"].map(function(m) {
       var on = st.mode === m;
       return '<div class="waf-mode-card ' + (on ? "active" : "") + '" data-mode="' + m + '"><b>' + self.MODE_INFO[m].name + "</b><div>" + self.MODE_INFO[m].desc + "</div></div>";
     }).join("");
-    var grpRows = grp.map(function(g) {
-      return '<div class="settings-row"><label style="min-width:170px">' + g[1] + '<div class="settings-hint" style="margin:0">' + g[2] + "</div></label>" +
-        '<label class="radio-line"><input type="checkbox" data-grp="' + g[0] + '" ' + (st.rule_groups && st.rule_groups[g[0]] !== false ? "checked" : "") + "> 启用</label></div>";
+    var ruleItems = grp.map(function(g) {
+      var on = !st.rule_groups || st.rule_groups[g[0]] !== false;
+      return '<div class="waf-rule-item"><label><b>' + g[1] + '</b><span class="settings-hint">' + g[2] + '</span></label><span class="switch' + (on ? " on" : "") + '" data-grp="' + g[0] + '"></span></div>';
     }).join("");
-    body.innerHTML = '<div class="settings-section"><div class="settings-section-title">WAF 开关</div>' +
-      '<div class="settings-row"><label style="min-width:170px">启用防火墙</label><label class="radio-line"><input type="checkbox" id="waf-enable" ' + (st.enabled ? "checked" : "") + "> 关闭后所有站点不设防</label></div></div>" +
-      '<div class="settings-section"><div class="settings-section-title">拦截模式</div><div class="waf-mode-grid">' + modeCards + "</div></div>" +
-      '<div class="settings-section"><div class="settings-section-title">检测规则组</div>' + grpRows + "</div>" +
-      '<div class="settings-section"><div class="settings-section-title">自定义检测规则<span class="help" style="margin:0">对 URI/参数/UA/Referer/POST 体扫描,命中走全局拦截模式;保存即热更新(最多 100 条)</span></div>' +
-      '<div class="settings-row"><label style="align-items:flex-start">规则列表<div class="settings-hint" style="margin:0">每行一条,格式:PCRE 正则 | 标签(可选)<br>示例:<code>\\.(bak|old|sql)$ | 备份文件探测</code></div></label>' +
-      '<textarea class="textarea mono" id="waf-custom-rules" rows="6" style="max-width:520px;font-size:12px">' +
-      esc((st.custom_rules || []).map(function(c) { return c.pattern + " | " + (c.label || ""); }).join("\n")) + "</textarea></div>" +
-      '<div class="settings-section"><div class="settings-section-title">增强防护</div>' +
-      '<div class="settings-row"><label style="min-width:170px">拦截空 UA 请求<div class="settings-hint" style="margin:0">正规浏览器必有 User-Agent;空 UA 多为脚本工具与扫描器</div></label><label class="radio-line"><input type="checkbox" id="emptyua-block" ' + (st.empty_ua_block ? "checked" : "") + "> 启用</label></div>" +
-      '<div class="settings-row"><label style="min-width:170px">拦截 HTTP/1.0 请求<div class="settings-hint" style="margin:0">现代浏览器均使用 HTTP/1.1+,HTTP/1.0 请求多为攻击工具</div></label><label class="radio-line"><input type="checkbox" id="http10-block" ' + (st.http10_block ? "checked" : "") + "> 启用</label></div></div>" +
-      '<div class="settings-section"><div class="settings-section-title">自动封禁<span class="help" style="margin:0">24 小时内违规次数达阈值的 IP 自动加入持久黑名单(与手工黑名单分列,每日自动巡检 + 可手动立即扫描;上限 500)</span></div>' +
-      '<div class="settings-row"><label style="min-width:170px">启用自动封禁</label><label class="radio-line"><input type="checkbox" id="autoban-enable" ' + (st.auto_ban_enable ? "checked" : "") + "> 启用</label>" +
-      '<input class="input" id="autoban-threshold" type="number" value="' + (st.auto_ban_threshold || 50) + '" style="max-width:120px" title="24 小时违规次数阈值"><span class="help" style="margin:0">次(24h)</span>' +
+    var navDef = [["basic", "shield2", "基础防护"], ["rules", "search", "检测规则"], ["enhance", "bolt", "增强防护"], ["autoban", "stop", "自动封禁"], ["ratelimit", "pulse", "限速防护"], ["method", "tool", "方法管控"], ["spider", "globe", "蜘蛛白名单"]];
+    var nav = navDef.map(function(n) { return '<a data-sec="' + n[0] + '">' + I(n[1]) + n[2] + "</a>"; }).join("");
+    body.innerHTML =
+      '<div class="waf-set-wrap"><div class="waf-set-nav">' + nav + '</div><div class="waf-set-body">' +
+      '<div class="waf-set-sec" data-sec="basic"><div class="waf-sec-head">' + I("shield2") + "基础防护</div>" +
+      '<div class="settings-row"><label style="min-width:170px">启用防火墙<div class="settings-hint" style="margin:0">关闭后所有站点不设防</div></label><label class="radio-line"><input type="checkbox" id="waf-enable" ' + (st.enabled ? "checked" : "") + "> 启用</label></div>" +
+      '<div class="settings-section-title" style="margin:14px 0 10px">拦截模式</div><div class="waf-mode-grid">' + modeCards + "</div></div>" +
+      '<div class="waf-set-sec" data-sec="rules"><div class="waf-sec-head">' + I("search") + '检测规则<span class="settings-hint" style="margin:0 0 0 4px">按类型启停内置规则组</span></div>' +
+      '<div class="waf-rule-grid">' + ruleItems + "</div>" +
+      '<div class="settings-row" style="margin-top:14px"><label style="align-items:flex-start;min-width:170px">自定义检测规则<div class="settings-hint" style="margin:0">对 URI/参数/UA/Referer/POST 体扫描,命中走全局拦截模式<br>每行一条:PCRE 正则 | 标签(可选),最多 100 条<br>示例:<code>\\.(bak|old|sql)$ | 备份文件探测</code></div></label>' +
+      '<textarea class="textarea mono" id="waf-custom-rules" rows="5" style="flex:1;max-width:520px;font-size:12px">' +
+      esc((st.custom_rules || []).map(function(c) { return c.pattern + " | " + (c.label || ""); }).join("\n")) + "</textarea></div></div>" +
+      '<div class="waf-set-sec" data-sec="enhance"><div class="waf-sec-head">' + I("bolt") + "增强防护</div>" +
+      '<div class="waf-rule-grid">' +
+      '<div class="waf-rule-item"><label><b>拦截空 UA 请求</b><span class="settings-hint">正规浏览器必有 User-Agent,空 UA 多为脚本工具</span></label><span class="switch' + (st.empty_ua_block ? " on" : "") + '" id="sw-emptyua"></span></div>' +
+      '<div class="waf-rule-item"><label><b>拦截 HTTP/1.0 请求</b><span class="settings-hint">现代浏览器均用 HTTP/1.1+,1.0 多为攻击工具</span></label><span class="switch' + (st.http10_block ? " on" : "") + '" id="sw-http10"></span></div>' +
+      "</div></div>" +
+      '<div class="waf-set-sec" data-sec="autoban"><div class="waf-sec-head">' + I("stop") + '自动封禁<span class="settings-hint" style="margin:0 0 0 4px">24h 内违规达阈值的 IP 自动进持久黑名单,每日巡检,上限 500</span></div>' +
+      '<div class="waf-params-row"><label style="display:flex;align-items:center;gap:8px"><span class="switch' + (st.auto_ban_enable ? " on" : "") + '" id="sw-autoban"></span><span>启用</span></label>' +
+      '<span class="waf-param">阈值 <input class="input" id="autoban-threshold" type="number" value="' + (st.auto_ban_threshold || 50) + '"> 次 / 24h</span>' +
       '<button class="btn btn-sm btn-plain" id="autoban-clear">清空清单</button></div>' +
-      '<div class="settings-row"><label>自动黑名单</label><div class="help" style="margin:0" id="autoban-list">加载中…</div></div></div>' +
-      '<div class="settings-section"><div class="settings-section-title">敏感路径限速<span class="help" style="margin:0">对指定 URL 前缀做独立 IP 频率限制(防暴力破解登录/API);每行一条,格式:路径 | 限制次数 | 窗口秒</span></div>' +
-      '<textarea class="textarea mono" id="url-rules" rows="5" style="max-width:520px;font-size:12px">' +
+      '<div class="settings-hint" id="autoban-list" style="margin-top:10px">加载中…</div></div>' +
+      '<div class="waf-set-sec" data-sec="ratelimit"><div class="waf-sec-head">' + I("pulse") + "限速防护</div>" +
+      '<div class="settings-row"><label style="align-items:flex-start;min-width:170px">敏感路径限速<div class="settings-hint" style="margin:0">对指定 URL 前缀独立限频,防暴力破解登录/API<br>每行一条:路径 | 限制次数 | 窗口秒</div></label>' +
+      '<textarea class="textarea mono" id="url-rules" rows="4" style="flex:1;max-width:520px;font-size:12px">' +
       esc((st.url_rate_rules || []).map(function(r) { return r.path + " | " + r.limit + " | " + (r.window || 60); }).join("\n")) + "</textarea></div>" +
-      '<div class="settings-section"><div class="settings-section-title">目录扫描防御<span class="help" style="margin:0">窗口期内不同 URI 数量超阈值自动封禁(防目录暴力枚举/扫描器)</span></div>' +
-      '<div class="settings-row"><label style="min-width:170px">启用目录扫描防御</label><label class="radio-line"><input type="checkbox" id="dirscan-enable" ' + (st.dirscan_enable ? "checked" : "") + "> 启用</label></div>" +
-      '<div class="settings-row"><label style="min-width:170px">URI 数量阈值</label><input class="input" id="dirscan-threshold" type="number" value="' + (st.dirscan_threshold || 30) + '" style="max-width:120px"><span class="help" style="margin:0">个 / 窗口</span></div>' +
-      '<div class="settings-row"><label style="min-width:170px">统计窗口(秒)</label><input class="input" id="dirscan-window" type="number" value="' + (st.dirscan_window || 60) + '" style="max-width:120px"></div></div>' +
-      '<div class="settings-section"><div class="settings-section-title">HTTP 方法白名单<span class="help" style="margin:0">仅允许列表内方法,其余返回 405(比黑名单更安全);每行一个,大写</span></div>' +
-      '<div class="settings-row"><label style="min-width:170px">启用方法白名单</label><label class="radio-line"><input type="checkbox" id="mwl-enable" ' + (st.method_whitelist_enable ? "checked" : "") + "> 启用</label></div>" +
-      '<textarea class="textarea mono" id="mwl-list" rows="4" style="max-width:520px;font-size:12px">' + esc((st.method_whitelist || ["GET","POST","HEAD","OPTIONS"]).join("\n")) + "</textarea></div>" +
-      '<div class="settings-section"><div class="settings-section-title">搜索引擎蜘蛛白名单<span class="help" style="margin:0">启用的爬虫完全跳过检测:CC 人机验证、临时封禁都不会针对它们,保护 SEO 收录</span></div>' +
-      '<div class="settings-row"><label style="min-width:170px">启用蜘蛛白名单</label><label class="radio-line"><input type="checkbox" id="spider-enable" ' + (st.spider_white_enable ? "checked" : "") + "> 启用</label></div>" +
-      '<div class="settings-row"><label style="align-items:flex-start">UA 特征(正则)<div class="settings-hint" style="margin:0">每行一条,匹配 User-Agent 即放行</div></label>' +
-      '<textarea class="textarea mono" id="spider-list" rows="4" style="max-width:520px;font-size:12px">' + esc((st.spider_white || []).join("\n")) + "</textarea>" +
-      '<div class="settings-row"><label style="min-width:170px">严格反向 DNS 验证</label><label class="radio-line"><input type="checkbox" id="spider-dns" ' + (st.spider_verify_dns ? "checked" : "") + "> 启用</label>" +
-      '<span class="settings-hint" style="margin:0">防伪造 Googlebot UA 整体绕过 WAF:PTR 反查 + 正向确认必须匹配客户端 IP,验证失败按普通请求检测(开启后蜘蛛首次访问可能因 DNS 查询略慢)</span></div></div>' +
-      '<div class="settings-section"><div class="settings-section-title">危险 HTTP 方法拦截<span class="help" style="margin:0">命中返回 405,可防 TRACK/TRACE 跟踪探测;REST 接口需要 PUT/DELETE 时自行增删</span></div>' +
-      '<div class="settings-row"><label style="min-width:170px">启用方法拦截</label><label class="radio-line"><input type="checkbox" id="method-enable" ' + (st.method_block_enable ? "checked" : "") + "> 启用</label></div>" +
-      '<div class="settings-row"><label style="align-items:flex-start">拦截的方法<div class="settings-hint" style="margin:0">每行一个,大写,如 TRACE</div></label>' +
-      '<textarea class="textarea mono" id="method-list" rows="4" style="max-width:520px;font-size:12px">' + esc((st.method_block_list || []).join("\n")) + "</textarea></div></div>" +
-      '<div style="margin-top:16px"><button class="btn btn-primary btn-sm" id="waf-save-global">' + I("edit") + " 保存设置</button>" +
-      '<span class="settings-hint" style="margin-left:10px">保存后自动重载 Nginx 生效</span></div>';
+      '<div class="waf-params-row" style="margin-top:14px"><label style="display:flex;align-items:center;gap:8px"><span class="switch' + (st.dirscan_enable ? " on" : "") + '" id="sw-dirscan"></span><span><b style="font-size:13px">目录扫描防御</b></span></label>' +
+      '<span class="waf-param">窗口期访问 <input class="input" id="dirscan-threshold" type="number" value="' + (st.dirscan_threshold || 30) + '"> 个不同 URI</span>' +
+      '<span class="waf-param">统计窗口 <input class="input" id="dirscan-window" type="number" value="' + (st.dirscan_window || 60) + '"> 秒</span></div>' +
+      '<div class="settings-hint" style="margin-top:8px">超阈值自动封禁,防目录暴力枚举与扫描器</div></div>' +
+      '<div class="waf-set-sec" data-sec="method"><div class="waf-sec-head">' + I("tool") + "方法管控</div>" +
+      '<div class="settings-row"><label style="align-items:flex-start;min-width:170px">方法白名单<div class="settings-hint" style="margin:0">仅放行列表内方法,其余 405(比黑名单更安全);每行一个,大写</div></label>' +
+      '<div style="flex:1;max-width:520px"><label style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><span class="switch' + (st.method_whitelist_enable ? " on" : "") + '" id="sw-mwl"></span><span class="settings-hint" style="margin:0">启用白名单</span></label>' +
+      '<textarea class="textarea mono" id="mwl-list" rows="3" style="width:100%;font-size:12px">' + esc((st.method_whitelist || ["GET","POST","HEAD","OPTIONS"]).join("\n")) + "</textarea></div></div>" +
+      '<div class="settings-row" style="margin-top:14px"><label style="align-items:flex-start;min-width:170px">危险方法拦截<div class="settings-hint" style="margin:0">命中返回 405,防 TRACK/TRACE 探测;需要 PUT/DELETE 的 REST 接口自行增删</div></label>' +
+      '<div style="flex:1;max-width:520px"><label style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><span class="switch' + (st.method_block_enable ? " on" : "") + '" id="sw-method"></span><span class="settings-hint" style="margin:0">启用拦截</span></label>' +
+      '<textarea class="textarea mono" id="method-list" rows="3" style="width:100%;font-size:12px">' + esc((st.method_block_list || []).join("\n")) + "</textarea></div></div></div>" +
+      '<div class="waf-set-sec" data-sec="spider"><div class="waf-sec-head">' + I("globe") + '搜索引擎蜘蛛白名单<span class="settings-hint" style="margin:0 0 0 4px">名单内爬虫跳过全部检测(含 CC 验证/封禁),保护 SEO 收录</span></div>' +
+      '<div class="settings-row"><label style="min-width:170px">启用蜘蛛白名单</label><label style="display:flex;align-items:center;gap:8px"><span class="switch' + (st.spider_white_enable ? " on" : "") + '" id="sw-spider"></span></label></div>' +
+      '<div class="settings-row"><label style="align-items:flex-start;min-width:170px">UA 特征(正则)<div class="settings-hint" style="margin:0">每行一条,匹配 User-Agent 即放行</div></label>' +
+      '<textarea class="textarea mono" id="spider-list" rows="4" style="flex:1;max-width:520px;font-size:12px">' + esc((st.spider_white || []).join("\n")) + "</textarea></div>" +
+      '<div class="settings-row"><label style="min-width:170px">严格反向 DNS 验证<div class="settings-hint" style="margin:0">PTR 反查 + 正向确认匹配客户端 IP,防伪造 Googlebot 绕过;开启后蜘蛛首次访问略慢</div></label>' +
+      '<label style="display:flex;align-items:center;gap:8px"><span class="switch' + (st.spider_verify_dns ? " on" : "") + '" id="sw-spiderdns"></span></label></div></div>' +
+      '<div class="waf-save-bar"><span class="settings-hint" style="margin:0">修改后需点击保存,自动重载 Nginx 生效</span><div class="spacer"></div>' +
+      '<button class="btn btn-primary btn-sm" id="waf-save-global">' + I("edit") + " 保存设置</button></div>" +
+      "</div></div>";
+    // 左侧导航:点击滚动定位 + 滚动高亮(元素移除后自清理)
+    qsa(".waf-set-nav a", body).forEach(function(a) {
+      a.onclick = function() {
+        var t = qs('.waf-set-sec[data-sec="' + a.getAttribute("data-sec") + '"]', body);
+        if (t) t.scrollIntoView({ behavior: "smooth", block: "start" });
+      };
+    });
+    var secs = qsa(".waf-set-sec", body);
+    var spy = function() {
+      if (!body.isConnected) { window.removeEventListener("scroll", spy); return; }
+      var cur = secs[0];
+      secs.forEach(function(s) { if (s.getBoundingClientRect().top <= 130) cur = s; });
+      qsa(".waf-set-nav a", body).forEach(function(a) {
+        a.classList.toggle("active", !!cur && a.getAttribute("data-sec") === cur.getAttribute("data-sec"));
+      });
+    };
+    window.addEventListener("scroll", spy, { passive: true });
+    spy();
+    // 通用开关:点击切换 on 类
+    function bindSwitch(id, fn) {
+      var el = qs(id, body);
+      if (!el) return;
+      el.onclick = function() { el.classList.toggle("on"); if (fn) fn(el.classList.contains("on")); };
+    }
+    bindSwitch("#sw-emptyua"); bindSwitch("#sw-http10"); bindSwitch("#sw-autoban");
+    bindSwitch("#sw-dirscan"); bindSwitch("#sw-mwl"); bindSwitch("#sw-method");
+    bindSwitch("#sw-spider"); bindSwitch("#sw-spiderdns");
     qsa("[data-mode]", body).forEach(function(c) {
       c.onclick = function() {
         qsa("[data-mode]", body).forEach(function(x) { x.classList.remove("active"); });
@@ -2761,53 +2799,49 @@ PAGES.plugins = {
         self.st.mode = c.getAttribute("data-mode");
       };
     });
-    qsa("[data-grp]", body).forEach(function(cb) {
-      cb.onchange = function() {
-        self.st.rule_groups = self.st.rule_groups || {};
-        self.st.rule_groups[cb.getAttribute("data-grp")] = cb.checked;
-      };
+    qsa("[data-grp]", body).forEach(function(sw) {
+      sw.onclick = function() { sw.classList.toggle("on"); };
     });
     qs("#waf-enable", body).onchange = function() { self.st.enabled = this.checked; };
+    // 自动封禁清单:渲染时即加载/绑定(此前误放在保存回调里,要点一次保存才生效)
+    (async function() {
+      try {
+        var d = await api("/waf/auto-ban");
+        var el2 = qs("#autoban-list", body);
+        if (el2) el2.textContent = (d.list && d.list.length) ? d.list.slice(0, 20).join(", ") + (d.list.length > 20 ? " …共 " + d.list.length + " 个" : "") : "暂无封禁 IP";
+      } catch (e) { var el3 = qs("#autoban-list", body); if (el3) el3.textContent = "加载失败"; }
+    })();
+    var abClear = qs("#autoban-clear", body);
+    if (abClear) abClear.onclick = async function() {
+      if (!(await confirmDlg("确定清空自动封禁清单吗?", { danger: true }))) return;
+      try { await api("/waf/auto-ban/clear", { method: "POST", body: {} }); toast("已清空"); var el4 = qs("#autoban-list", body); if (el4) el4.textContent = "暂无封禁 IP"; }
+      catch (e) { toast(e.message, "error"); }
+    };
     qs("#waf-save-global", body).onclick = function() {
-      self.st.spider_white_enable = qs("#spider-enable", body).checked;
+      self.st.spider_white_enable = qs("#sw-spider", body).classList.contains("on");
+      self.st.spider_verify_dns = qs("#sw-spiderdns", body).classList.contains("on");
+      self.st.spider_white = qs("#spider-list", body).value.split("\n").map(function(x) { return x.trim(); }).filter(Boolean);
       self.st.custom_rules = (qs("#waf-custom-rules", body).value || "").split("\n").map(function(line) {
         var seg = line.split("|");
         var pat = (seg[0] || "").trim();
         if (!pat) return null;
-        var label = (seg[1] || "").trim();
-        return { pattern: pat, label: label };
+        return { pattern: pat, label: (seg[1] || "").trim() };
       }).filter(Boolean);
-      self.st.spider_verify_dns = qs("#spider-dns", body).checked;
-      self.st.spider_white = qs("#spider-list", body).value.split("\n").map(function(x) { return x.trim(); }).filter(Boolean);
-      self.st.method_block_enable = qs("#method-enable", body).checked;
-      self.st.empty_ua_block = qs("#emptyua-block", body).checked;
-      self.st.http10_block = qs("#http10-block", body).checked;
+      self.st.empty_ua_block = qs("#sw-emptyua", body).classList.contains("on");
+      self.st.http10_block = qs("#sw-http10", body).classList.contains("on");
+      self.st.auto_ban_enable = qs("#sw-autoban", body).classList.contains("on");
+      self.st.auto_ban_threshold = Number(qs("#autoban-threshold", body).value) || 50;
       self.st.url_rate_rules = (qs("#url-rules", body).value || "").split("\n").map(function(line) {
         var parts = line.split("|").map(function(x) { return x.trim(); });
         if (!parts[0]) return null;
         return { path: parts[0], limit: Number(parts[1]) || 10, window: Number(parts[2]) || 60 };
       }).filter(Boolean);
-      self.st.dirscan_enable = qs("#dirscan-enable", body).checked;
+      self.st.dirscan_enable = qs("#sw-dirscan", body).classList.contains("on");
       self.st.dirscan_threshold = Number(qs("#dirscan-threshold", body).value) || 30;
       self.st.dirscan_window = Number(qs("#dirscan-window", body).value) || 60;
-      self.st.method_whitelist_enable = qs("#mwl-enable", body).checked;
+      self.st.method_whitelist_enable = qs("#sw-mwl", body).classList.contains("on");
       self.st.method_whitelist = (qs("#mwl-list", body).value || "").split("\n").map(function(x) { return x.trim().toUpperCase(); }).filter(Boolean);
-      // 自动封禁清单加载/清空
-      (async function() {
-        try {
-          var d = await api("/waf/auto-ban");
-          var el2 = qs("#autoban-list", body);
-          if (el2) el2.textContent = (d.list && d.list.length) ? d.list.slice(0, 20).join(", ") + (d.list.length > 20 ? " …共 " + d.list.length + " 个" : "") : "暂无";
-        } catch (e) {}
-      })();
-      var abClear = qs("#autoban-clear", body);
-      if (abClear) abClear.onclick = async function() {
-        if (!(await confirmDlg("确定清空自动封禁清单吗?", { danger: true }))) return;
-        try { await api("/waf/auto-ban/clear", { method: "POST", body: {} }); toast("已清空"); var el3 = qs("#autoban-list", body); if (el3) el3.textContent = "暂无"; }
-        catch (e) { toast(e.message, "error"); }
-      };
-      self.st.auto_ban_enable = qs("#autoban-enable", body).checked;
-      self.st.auto_ban_threshold = Number(qs("#autoban-threshold", body).value) || 50;
+      self.st.method_block_enable = qs("#sw-method", body).classList.contains("on");
       self.st.method_block_list = qs("#method-list", body).value.split("\n").map(function(x) { return x.trim(); }).filter(Boolean);
       self.save(body);
     };
@@ -2829,21 +2863,28 @@ PAGES.plugins = {
       var on = (st.cc_mode || "rate") === mo.k;
       return '<div class="waf-mode-card ' + (on ? "active" : "") + '" data-ccmode="' + mo.k + '"><b>' + mo.name + (mo.k === "rate" ? "(默认)" : "") + "</b><div>" + mo.desc + "</div></div>";
     }).join("");
-    body.innerHTML = '<div class="settings-section"><div class="settings-section-title">CC 攻击防御</div>' +
-      '<div class="settings-row"><label style="min-width:170px">启用 CC 防御<div class="settings-hint" style="margin:0">同一 IP 在窗口期内请求超过阈值即触发</div></label>' +
-      '<label class="radio-line"><input type="checkbox" id="cc-enable" ' + (st.cc_enable ? "checked" : "") + "> 启用</label></div>" +
-      '<div class="settings-row"><label>统计窗口(秒)</label><input class="input" id="cc-interval" type="number" value="' + (st.cc_interval || 60) + '" style="max-width:140px"></div>' +
-      '<div class="settings-row"><label>请求次数阈值</label><input class="input" id="cc-limit" type="number" value="' + (st.cc_limit || 120) + '" style="max-width:140px"><span class="settings-hint">窗口期内超过该次数判定为 CC 攻击(建议 60-600)</span></div></div>' +
-      '<div class="settings-section"><div class="settings-section-title">触发后的验证方式</div>' +
-      '<div class="waf-mode-grid">' + modeCards + '</div>' +
-      '<div class="settings-row" style="margin-top:14px"><label>验证有效期(分钟)<div class="settings-hint" style="margin:0">人机验证通过后,该 IP 在此期限内免验证</div></label>' +
-      '<input class="input" id="cc-ttl" type="number" value="' + Math.round((st.cc_clear_ttl || 3600) / 60) + '" style="max-width:140px"></div></div>' +
-      '<div class="settings-section"><div class="settings-section-title">IP 临时封禁</div>' +
-      '<div class="settings-row"><label style="min-width:170px">自动封禁<div class="settings-hint" style="margin:0">触发 CC 或多次命中规则后临时封禁该 IP</div></label>' +
-      '<label class="radio-line"><input type="checkbox" id="ban-enable" ' + (st.ip_ban_enable ? "checked" : "") + "> 启用</label></div>" +
-      '<div class="settings-row"><label>封禁触发次数</label><input class="input" id="ban-thres" type="number" value="' + (st.ip_ban_threshold || 10) + '" style="max-width:140px"></div>' +
-      '<div class="settings-row"><label>封禁时长(分钟)</label><input class="input" id="ban-dur" type="number" value="' + Math.round((st.ip_ban_duration || 600) / 60) + '" style="max-width:140px"></div></div>' +
-      '<div style="margin-top:16px"><button class="btn btn-primary btn-sm" id="waf-save-cc">' + I("edit") + " 保存设置</button></div>";
+    body.innerHTML =
+      '<div class="waf-set-body">' +
+      '<div class="waf-set-sec"><div class="waf-sec-head">' + I("pulse") + 'CC 攻击防御<span class="settings-hint" style="margin:0 0 0 4px">同一 IP 在窗口期内请求超过阈值即触发</span></div>' +
+      '<div class="waf-params-row">' +
+      '<label style="display:flex;align-items:center;gap:8px"><span class="switch' + (st.cc_enable ? " on" : "") + '" id="sw-cc"></span><span>启用</span></label>' +
+      '<span class="waf-param">统计窗口 <input class="input" id="cc-interval" type="number" value="' + (st.cc_interval || 60) + '"> 秒</span>' +
+      '<span class="waf-param">请求阈值 <input class="input" id="cc-limit" type="number" value="' + (st.cc_limit || 120) + '"> 次<span class="settings-hint" style="margin:0">(建议 60-600)</span></span>' +
+      "</div></div>" +
+      '<div class="waf-set-sec"><div class="waf-sec-head">' + I("shield2") + '触发后的验证方式<span class="settings-hint" style="margin:0 0 0 4px">真人可完成、脚本工具被拦</span></div>' +
+      '<div class="waf-mode-grid cc-grid">' + modeCards + "</div>" +
+      '<div class="waf-params-row" style="margin-top:14px"><span class="waf-param"><b>验证有效期</b> <input class="input" id="cc-ttl" type="number" value="' + Math.round((st.cc_clear_ttl || 3600) / 60) + '"> 分钟<span class="settings-hint" style="margin:0">(通过验证后该 IP 在此期限内免验证)</span></span></div></div>' +
+      '<div class="waf-set-sec"><div class="waf-sec-head">' + I("stop") + 'IP 临时封禁<span class="settings-hint" style="margin:0 0 0 4px">触发 CC 或多次命中规则后临时封禁该 IP</span></div>' +
+      '<div class="waf-params-row">' +
+      '<label style="display:flex;align-items:center;gap:8px"><span class="switch' + (st.ip_ban_enable ? " on" : "") + '" id="sw-ban"></span><span>启用</span></label>' +
+      '<span class="waf-param">触发 <input class="input" id="ban-thres" type="number" value="' + (st.ip_ban_threshold || 10) + '"> 次</span>' +
+      '<span class="waf-param">封禁 <input class="input" id="ban-dur" type="number" value="' + Math.round((st.ip_ban_duration || 600) / 60) + '"> 分钟</span>' +
+      "</div></div>" +
+      '<div class="waf-save-bar"><span class="settings-hint" style="margin:0">修改后需点击保存,自动重载 Nginx 生效</span><div class="spacer"></div>' +
+      '<button class="btn btn-primary btn-sm" id="waf-save-cc">' + I("edit") + " 保存设置</button></div></div>";
+    qsa("#sw-cc, #sw-ban", body).forEach(function(sw) {
+      sw.onclick = function() { sw.classList.toggle("on"); };
+    });
     qsa("[data-ccmode]", body).forEach(function(c) {
       c.onclick = function() {
         qsa("[data-ccmode]", body).forEach(function(x) { x.classList.remove("active"); });
@@ -2852,12 +2893,12 @@ PAGES.plugins = {
       };
     });
     qs("#waf-save-cc", body).onclick = function() {
-      self.st.cc_enable = qs("#cc-enable", body).checked;
+      self.st.cc_enable = qs("#sw-cc", body).classList.contains("on");
       self.st.cc_interval = parseInt(qs("#cc-interval", body).value) || 60;
       self.st.cc_limit = parseInt(qs("#cc-limit", body).value) || 120;
       self.st.cc_mode = self.st.cc_mode || "rate";
       self.st.cc_clear_ttl = (parseInt(qs("#cc-ttl", body).value) || 60) * 60;
-      self.st.ip_ban_enable = qs("#ban-enable", body).checked;
+      self.st.ip_ban_enable = qs("#sw-ban", body).classList.contains("on");
       self.st.ip_ban_threshold = parseInt(qs("#ban-thres", body).value) || 10;
       self.st.ip_ban_duration = (parseInt(qs("#ban-dur", body).value) || 10) * 60;
       self.save(body);
@@ -2867,20 +2908,20 @@ PAGES.plugins = {
   tabLists(body) {
     var self = this;
     var st = this.st;
-    function ta(id, val, ph) {
-      return '<textarea class="textarea mono" id="' + id + '" rows="6" placeholder="' + ph + '">' + esc((val || []).join("\n")) + "</textarea>";
+    function card(id, icon, tone, title, hint, ph, val) {
+      var n = (val || []).length;
+      return '<div class="waf-list-card ' + tone + '"><div class="waf-lc-head">' + I(icon) + "<b>" + title + '</b><span class="waf-lc-badge">' + n + " 条</span></div>" +
+        '<div class="settings-hint">' + hint + "</div>" +
+        '<textarea class="textarea mono" id="' + id + '" rows="7" placeholder="' + ph + '">' + esc((val || []).join("\n")) + "</textarea></div>";
     }
-    body.innerHTML = '<div class="waf-lists-grid">' +
-      '<div class="settings-section"><div class="settings-section-title">IP 白名单<span class="settings-hint" style="margin-left:8px">这些 IP 完全跳过检测</span></div>' +
-      ta("waf-ipw", st.ip_white, "每行一条,支持正则,如 10\\.0\\.0\\.1") + "</div>" +
-      '<div class="settings-section"><div class="settings-section-title">IP 黑名单<span class="settings-hint" style="margin-left:8px">命中直接 403</span></div>' +
-      ta("waf-iph", st.ip_black, "每行一条:支持单 IP、正则、CIDR 网段(如 103.0.0.0/8)") + "</div>" +
-      '<div class="settings-section"><div class="settings-section-title">URL 白名单<span class="settings-hint" style="margin-left:8px">这些 URI 跳过检测(如回调地址)</span></div>' +
-      ta("waf-urlw", st.url_white, "每行一条正则,如 ^/api/pay/notify") + "</div>" +
-      '<div class="settings-section"><div class="settings-section-title">UA 黑名单<span class="settings-hint" style="margin-left:8px">命中 User-Agent 直接 403</span></div>' +
-      ta("waf-uab", st.ua_black, "每行一条正则,如 (curl|python-requests|sqlmap)") + "</div></div>" +
-      '<div style="margin-top:16px"><button class="btn btn-primary btn-sm" id="waf-save-lists">' + I("edit") + " 保存名单</button>" +
-      '<span class="settings-hint" style="margin-left:10px">每行一条,支持正则;保存前自动校验合法性</span></div>';
+    body.innerHTML = '<div class="waf-set-body"><div class="waf-lists-grid" style="gap:14px">' +
+      card("waf-ipw", "shield", "safe", "IP 白名单", "这些 IP 完全跳过检测;每行一条,支持单 IP、正则、CIDR 网段", "每行一条,支持正则,如 10\\.0\\.0\\.1", st.ip_white) +
+      card("waf-iph", "stop", "danger", "IP 黑名单", "命中直接 403;支持单 IP、正则、CIDR 网段(如 103.0.0.0/8)", "每行一条:支持单 IP、正则、CIDR 网段(如 103.0.0.0/8)", st.ip_black) +
+      card("waf-urlw", "globe", "safe", "URL 白名单", "这些 URI 跳过检测(如支付回调地址);每行一条正则", "每行一条正则,如 ^/api/pay/notify", st.url_white) +
+      card("waf-uab", "eye", "danger", "UA 黑名单", "命中 User-Agent 直接 403;每行一条正则", "每行一条正则,如 (curl|python-requests|sqlmap)", st.ua_black) +
+      "</div>" +
+      '<div class="waf-save-bar"><span class="settings-hint" style="margin:0">每行一条,支持正则;保存前自动校验合法性,保存后自动重载 Nginx 生效</span><div class="spacer"></div>' +
+      '<button class="btn btn-primary btn-sm" id="waf-save-lists">' + I("edit") + " 保存名单</button></div></div>";
     qs("#waf-save-lists", body).onclick = function() {
       var split = function(id) { return qs(id, body).value.split("\n").map(function(x) { return x.trim(); }).filter(Boolean); };
       self.st.ip_white = split("#waf-ipw");
@@ -2891,15 +2932,17 @@ PAGES.plugins = {
     };
   },
   /* ---- 拦截日志 ---- */
+  TAG_CLASS: { sql: "tag-sql", xss: "tag-xss", lfi: "tag-lfi", cmd: "tag-cmd", scan: "tag-scan", sensitive: "tag-sensitive", webshell: "tag-webshell", custom: "tag-custom", cc: "tag-cc", dirscan: "tag-dirscan", empty_ua: "tag-empty_ua", http10: "tag-http10", method: "tag-method", upload: "tag-upload" },
   tabLogs(body) {
     var self = this;
     var all = [];
-    var m = '<div class="card-title" style="padding:0;margin-bottom:12px">拦截日志' +
-      '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+    var m = '<div class="card-title" style="padding:0;margin-bottom:10px">拦截日志<span class="settings-hint" id="waf-log-count" style="margin:0 0 0 6px"></span></div>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">' +
       '<select class="select" id="waf-log-type" style="max-width:150px"><option value="">全部类型</option></select>' +
       '<input class="input" id="waf-log-ip" placeholder="按 IP 搜索" style="max-width:170px">' +
+      '<div class="spacer" style="flex:1"></div>' +
       '<button class="btn btn-sm btn-plain" id="waf-log-refresh">' + I("refresh") + " 刷新</button>" +
-      '<button class="btn btn-sm btn-danger-plain" id="waf-log-clear">' + I("trash") + " 清空日志</button></div></div>" +
+      '<button class="btn btn-sm btn-danger-plain" id="waf-log-clear">' + I("trash") + " 清空日志</button></div>" +
       '<div id="waf-log-table">' + skeletonTable(8, 5) + "</div>";
     body.innerHTML = m;
     var load = async function() {
@@ -2928,35 +2971,39 @@ PAGES.plugins = {
         if (ipq && (e.ip || "").indexOf(ipq) < 0) return false;
         return true;
       });
+      var cnt = qs("#waf-log-count", body);
+      if (cnt) cnt.textContent = all.length ? "共 " + all.length + " 条" + (list.length !== all.length ? ",筛选出 " + list.length + " 条" : "") : "";
       if (!all.length) { box.innerHTML = emptyState("shield", "暂无拦截记录", "攻击发生时会实时记录在这里"); return; }
       if (!list.length) { box.innerHTML = emptyState("search", "无匹配记录", "调整类型或 IP 关键字试试"); return; }
       box.innerHTML = '<div class="table-wrap"><table class="table waf-log-table"><thead><tr><th style="width:170px">时间</th><th style="width:150px">IP</th><th style="width:150px">类型</th><th style="width:40%">URI</th><th>详情</th><th style="width:90px">操作</th></tr></thead><tbody>' +
         list.map(function(e) {
-          return '<tr><td class="waf-nowrap">' + esc(e.time) + '</td><td class="mono waf-nowrap">' + esc(e.ip) + '</td><td><span class="tag tag-danger">' + esc(e.label || e.rule) + '</span></td>' +
+          var tc = self.TAG_CLASS[e.rule] || "tag-danger";
+          return '<tr><td class="waf-nowrap">' + esc(e.time) + '</td><td class="mono waf-nowrap">' + esc(e.ip) + '</td><td><span class="tag ' + tc + '">' + esc(e.label || e.rule) + "</span></td>" +
             '<td class="mono fm-ellipsis" style="max-width:260px" title="' + esc(e.method + " " + e.uri) + '">' + esc(e.method + " " + e.uri) + '</td>' +
             '<td class="fm-ellipsis" style="max-width:200px" title="' + esc(e.detail || "") + '">' + esc(e.detail || "-") + '</td>' +
             '<td style="width:90px"><button class="btn btn-xs btn-danger-plain" data-waf-ban="' + esc(e.ip) + '">封禁</button></td></tr>';
         }).join("") + "</tbody></table></div>";
+      qsa("[data-waf-ban]", box).forEach(function(b) {
+        b.onclick = async function() {
+          var ip = b.getAttribute("data-waf-ban");
+          if (!(await confirmDlg("将 IP <b class=mono>" + esc(ip) + "</b> 加入 WAF IP 黑名单?<br><span style='font-size:12px;color:var(--text-3)'>加入后该 IP 的所有请求直接 403;若误封自己的出口 IP 将无法访问面板(可在黑名单中移除)。</span>", { danger: true }))) return;
+          try {
+            var st2 = (await api("/waf")).settings;
+            var bl = st2.ip_black || [];
+            if (bl.indexOf(ip) >= 0) { toast("该 IP 已在黑名单中"); return; }
+            bl.push(ip);
+            st2.ip_black = bl;
+            await api("/waf/settings", { method: "POST", body: st2 });
+            toast("IP " + ip + " 已加入黑名单");
+          } catch (e) { toast(e.message, "error"); }
+        };
+      });
     };
     load();
     var typeSel = qs("#waf-log-type", body), ipInput = qs("#waf-log-ip", body);
     if (typeSel) typeSel.onchange = draw;
     if (ipInput) ipInput.oninput = draw;
-    qsa("[data-waf-ban]", body).forEach(function(b) {
-      b.onclick = async function() {
-        var ip = b.getAttribute("data-waf-ban");
-        if (!(await confirmDlg("将 IP <b class=mono>" + esc(ip) + "</b> 加入 WAF IP 黑名单?<br><span style='font-size:12px;color:var(--text-3)'>加入后该 IP 的所有请求直接 403;若误封自己的出口 IP 将无法访问面板(可在黑名单中移除)。</span>", { danger: true }))) return;
-        try {
-          var st = (await api("/waf")).settings;
-          var bl = st.ip_black || [];
-          if (bl.indexOf(ip) >= 0) { toast("该 IP 已在黑名单中"); return; }
-          bl.push(ip);
-          st.ip_black = bl;
-          await api("/waf/settings", { method: "POST", body: st });
-          toast("IP " + ip + " 已加入黑名单");
-        } catch (e) { toast(e.message, "error"); }
-      };
-    });
+    qs("#waf-log-refresh", body).onclick = load;
     qs("#waf-log-clear", body).onclick = async function() {
       if (!(await confirmDlg("确定清空全部拦截日志吗?", { danger: true }))) return;
       try { await api("/waf/logs/clear", { method: "POST", body: {} }); toast("日志已清空"); load(); }

@@ -1974,6 +1974,10 @@ PAGES.databases = {
     }
 
     var self = this;
+    // 保留当前选中的实例(此前每次重置为第一个,多实例时无法切换)
+    if (!this.tab.key || !running.some(function(i) { return i.key === self.tab.key; })) {
+      this.tab = { key: running[0].key, database: "", table: "" };
+    }
     // phpMyAdmin 快捷入口(应用商店已安装且运行时显示真实访问地址)
     var pma = null;
     try {
@@ -1981,21 +1985,29 @@ PAGES.databases = {
       const pmaInst = appInsts.filter(function(i) { return i.key === "phpmyadmin" && i.running; })[0];
       if (pmaInst) pma = { url: "http://" + location.hostname + ":" + (pmaInst.params && pmaInst.params.Port || "8082") + "/", label: "phpMyAdmin" };
     } catch (e) {}
-    var self = this;
-    // 实例状态条:只显示运行中的数据库服务
-    var bar = '<div class="db-instbar">' +
-      running.map(function(i) {
-        return '<span class="db-inst"><span class="dot on"></span> <b>' + esc(typeNames[i.key] || i.key) + '</b> · 运行中</span>';
-      }).join("") +
-      (notRunning.length ? '<span class="db-inst-more">还可安装: ' + notRunning.map(function(i) { return esc(typeNames[i.key] || i.key); }).join(" / ") + '</span>' : "") +
-      '<span style="flex:1"></span>' +
-      '<button class="btn btn-sm btn-plain" id="db-rootpwd">' + I("key") + " 修改 root 密码</button>" +
-      '<button class="btn btn-sm btn-plain" id="db-refresh">' + I("refresh") + " 刷新</button>" +
-      (pma ? '<a class="btn btn-sm btn-plain" id="db-pma" href="' + esc(pma.url) + '" target="_blank">' + I("external") + " " + esc(pma.label) + "</a>" : "") + "</div>";
 
-    el.innerHTML = bar +
-      '<div class="card page-fade" style="margin-top:14px">' +
-      '<div class="card-title"><span>数据库列表<span id="db-sys-slot" style="margin-left:8px"></span></span><span class="title-actions"><button class="btn btn-sm btn-primary" id="db-new">' + I("plus") + " 添加数据库</button></span></div>" +
+    var head = '<div class="waf-hero db-hero">' +
+      '<div class="waf-hero-left">' + iconBox("database", 46) +
+      '<div class="stat-meta"><h3>' + esc(typeNames[this.tab.key] || this.tab.key) + " " + stateTag(true, "运行中", "已停止") + "</h3>" +
+      '<div class="stat-line db-stat-line">业务库 <b id="db-stat-dbs">-</b> 个 · 数据表 <b id="db-stat-tables">-</b> 张 · 备份 <b id="db-stat-baks">-</b> 份</div></div></div>' +
+      '<div class="waf-hero-right">' +
+      '<button class="btn btn-sm btn-plain" id="db-rootpwd">' + I("key") + " root 密码</button>" +
+      (pma ? '<a class="btn btn-sm btn-plain" href="' + esc(pma.url) + '" target="_blank">' + I("external") + " " + esc(pma.label) + "</a>" : "") +
+      '<button class="btn btn-sm btn-plain" id="db-refresh" title="刷新">' + I("refresh") + "</button></div></div>";
+    // 实例切换 chips(多个数据库服务同时运行时)
+    var instBar = "";
+    if (running.length > 1) {
+      instBar = '<div class="db-chipbar">' + running.map(function(i) {
+        var on = self.tab.key === i.key;
+        return '<span class="db-chip' + (on ? " active" : "") + '" data-inst="' + esc(i.key) + '"><span class="dot"></span>' + esc(typeNames[i.key] || i.key) + "</span>";
+      }).join("") + "</div>";
+    } else if (notRunning.length) {
+      instBar = '<div class="db-chipbar"><span class="settings-hint" style="margin:0">还可安装:' + notRunning.map(function(i) { return esc(typeNames[i.key] || i.key); }).join(" / ") + '(应用商店一键安装)</span></div>';
+    }
+
+    el.innerHTML = head + instBar +
+      '<div class="card page-fade" style="margin-top:12px">' +
+      '<div class="card-title"><span>数据库<span id="db-sys-slot" style="margin-left:8px"></span></span><span class="title-actions"><button class="btn btn-sm btn-primary" id="db-new">' + I("plus") + " 添加数据库</button></span></div>" +
       '<div id="db-table-wrap">' + skeletonTable(4, 3) + "</div></div>" +
       '<div id="db-mgr" style="margin-top:14px"></div>';
 
@@ -2029,9 +2041,14 @@ PAGES.databases = {
         self.render(el);
       } catch (e) { toast(e.message, "error"); }
     };
+    // 实例切换
+    qsa("[data-inst]", el).forEach(function(c) {
+      c.onclick = function() {
+        self.tab = { key: c.getAttribute("data-inst"), database: "", table: "" };
+        self.render(el);
+      };
+    });
 
-    // 默认选中第一个运行中的实例
-    this.tab = { key: running[0].key, database: "", table: "" };
     await this.loadDbList(el);
   },
   async loadDbList(el) {
@@ -2046,25 +2063,31 @@ PAGES.databases = {
     var user = dbs.filter(function(d) { return self.SYSTEM_DBS.indexOf(d) < 0; });
     var sys = dbs.filter(function(d) { return self.SYSTEM_DBS.indexOf(d) >= 0; });
     var showSys = this._showSys;
-    function row(d, isSys) {
+    var st = qs("#db-stat-dbs", el);
+    if (st) st.textContent = user.length;
+    // 默认选中:业务库优先,否则第一个(需在渲染卡片前确定,active 高亮才正确)
+    if (!this.tab.database || dbs.indexOf(this.tab.database) < 0) {
+      this.tab.database = (user[0] || dbs[0] || "");
+    }
+    // 数据库卡片(库名 + 操作),替代空旷表格
+    function card(d, isSys) {
       var active = self.tab.database === d;
-      return '<tr' + (active ? ' style="background:var(--primary-light)"' : "") + ">" +
-        '<td><a href="javascript:void(0)" class="fm-name" data-dbname="' + esc(d) + '"><b>' + esc(d) + "</b></a>" +
-        (isSys ? ' <span class="tag tag-info">系统</span>' : "") + "</td>" +
-        '<td class="fm-size">' + (isSys ? "系统库" : "业务库") + "</td>" +
-        '<td><div class="ops"><button class="btn btn-xs btn-primary" data-dbname="' + esc(d) + '">管理</button>' +
-        '<button class="btn btn-xs btn-plain" data-dbbak="' + esc(d) + '">备份</button>' +
-        (isSys ? "" : '<button class="btn btn-xs btn-danger-plain" data-drop="' + esc(d) + '">删除</button>') + "</div></td></tr>";
+      return '<div class="db-card' + (active ? " active" : "") + '" data-dbname="' + esc(d) + '" title="点击管理该库">' +
+        '<span class="db-c-ico">' + I("database") + "</span>" +
+        '<span class="db-c-name mono"><b>' + esc(d) + "</b>" + (isSys ? ' <span class="tag tag-info">系统</span>' : "") + "</span>" +
+        '<span class="db-c-ops">' +
+        (isSys ? "" : '<button class="btn btn-xs btn-plain" data-dbbak="' + esc(d) + '">备份</button>' +
+          '<button class="btn btn-xs btn-danger-plain" data-drop="' + esc(d) + '">删除</button>') +
+        "</span></div>";
     }
     var showSysBtn = sys.length
       ? '<button class="btn btn-xs btn-plain" id="db-showsys" style="margin-left:8px">' + (showSys ? "隐藏系统库" : "显示系统库(" + sys.length + ")") + "</button>"
       : "";
     if (user.length || showSys) {
-      var html = '<div class="table-wrap"><table class="table"><thead><tr><th>数据库名</th><th style="width:100px">类别</th><th style="width:260px">操作</th></tr></thead><tbody>' +
-        user.map(function(d) { return row(d, false); }).join("") +
-        (showSys ? sys.map(function(d) { return row(d, true); }).join("") : "") +
-        "</tbody></table></div>";
-      wrap.innerHTML = html;
+      wrap.innerHTML = '<div class="db-grid">' +
+        user.map(function(d) { return card(d, false); }).join("") +
+        (showSys ? sys.map(function(d) { return card(d, true); }).join("") : "") +
+        "</div>";
     } else {
       wrap.innerHTML = '<div class="db-empty">' + I("database") + '<p>还没有业务数据库</p><p class="help">点击右上角「添加数据库」创建' + (sys.length ? ';系统库 ' + sys.length + ' 个已隐藏' : "") + '</p></div>';
     }
@@ -2076,23 +2099,26 @@ PAGES.databases = {
       ssb.remove();
       qs("#db-showsys", el).onclick = function() { self._showSys = !self._showSys; self.loadDbList(el); };
     }
-    // 管理 → 选中并加载详情
+    // 点击卡片 = 选中管理
     qsa("[data-dbname]", wrap).forEach(function(a) {
-      a.onclick = function() {
+      a.onclick = function(e) {
+        if (e.target.closest("button")) return; // 卡内按钮各自处理
         self.tab.database = a.getAttribute("data-dbname");
         self.render(el);
       };
     });
     // 备份 → 选中库并滚到详情
     qsa("[data-dbbak]", wrap).forEach(function(b) {
-      b.onclick = function() {
+      b.onclick = function(e) {
+        e.stopPropagation();
         self.tab.database = b.getAttribute("data-dbbak");
         self.render(el);
       };
     });
     // 删除
     qsa("[data-drop]", wrap).forEach(function(b) {
-      b.onclick = async function() {
+      b.onclick = async function(e) {
+        e.stopPropagation();
         var d = b.getAttribute("data-drop");
         if (!(await confirmDlg("确定删除数据库 <b>" + esc(d) + "</b> 吗?库内全部数据将丢失!"))) return;
         try {
@@ -2103,10 +2129,6 @@ PAGES.databases = {
         } catch (e) { toast(e.message, "error"); }
       };
     });
-    // 默认选中:业务库优先,否则第一个
-    if (!this.tab.database || dbs.indexOf(this.tab.database) < 0) {
-      this.tab.database = (user[0] || dbs[0] || "");
-    }
     await this.manager(qs("#db-mgr", el));
   },
   async manager(el) {
@@ -2125,6 +2147,8 @@ PAGES.databases = {
       tables = (await api("/db/" + key + "/tables?db=" + encodeURIComponent(db))) || [];
     } catch (e) { tables = []; }
     if (!qs(".card", el)) return;
+    var stT = document.getElementById("db-stat-tables");
+    if (stT) stT.textContent = tables.length;
 
     el.innerHTML = `
       <div class="grid-2 db-mgr-grid">
@@ -2138,7 +2162,8 @@ PAGES.databases = {
             <textarea class="textarea mono" id="db-sql" rows="4" placeholder="SELECT * FROM table LIMIT 20;"></textarea>
             <div style="margin-top:10px;display:flex;gap:10px;align-items:center">
               <button class="btn btn-primary" id="db-run">${I("play")} 执行</button>
-              <span class="help">以 root 身份执行,支持任意 SQL</span>
+              <button class="btn btn-plain" id="db-sql-clear">${I("close")} 清空</button>
+              <span class="help">以 root 身份执行,支持任意 SQL;点击左侧表名自动填充查询</span>
             </div>
             <div id="db-result" style="margin-top:14px"></div>
           </div>
@@ -2158,6 +2183,9 @@ PAGES.databases = {
         qs("#db-run", el).click();
       };
     });
+
+    var sqlClear = qs("#db-sql-clear", el);
+    if (sqlClear) sqlClear.onclick = function() { qs("#db-sql", el).value = ""; qs("#db-result", el).innerHTML = ""; };
 
     // SQL 执行(表格化结果)
     qs("#db-run", el).onclick = async function() {
@@ -2189,6 +2217,8 @@ PAGES.databases = {
       var listEl = qs("#db-bak-list", el);
       try {
         var list = (await api("/db/" + key + "/backups")) || [];
+        var stB = document.getElementById("db-stat-baks");
+        if (stB) stB.textContent = list.length;
         listEl.innerHTML = tableHTML([
           { title: "文件", render: function(r) { return '<span class="mono">' + esc(r.file) + "</span>"; } },
           { title: "大小", width: "100px", render: function(r) { return fmtBytes(r.size); } },

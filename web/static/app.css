@@ -1000,6 +1000,37 @@ tr.fm-selected { background: var(--primary-light); }
 .waf-list-card.safe .waf-lc-head svg { color: #22c55e; }
 .waf-list-card .settings-hint { margin: 0 0 6px !important; }
 .waf-list-card .textarea { width: 100%; font-size: 12px; }
+
+/* ================= 数据库页 v2.63(hero 复用 .waf-hero)================= */
+.db-chipbar { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.db-chip {
+  display: inline-flex; align-items: center; gap: 7px; padding: 6px 15px; border-radius: 99px;
+  border: 1.5px solid var(--border); background: var(--card); font-size: 12.5px;
+  color: var(--text-3); cursor: pointer; transition: all .13s; user-select: none;
+}
+.db-chip .dot { width: 7px; height: 7px; border-radius: 50%; background: #22c55e; flex: none; }
+.db-chip:hover { border-color: var(--primary); color: var(--text); }
+.db-chip.active {
+  border-color: var(--primary); color: var(--primary); background: var(--primary-light);
+  font-weight: 600; box-shadow: 0 0 0 1px var(--primary);
+}
+.db-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
+.db-card {
+  display: flex; align-items: center; gap: 11px; padding: 13px 15px;
+  border: 1px solid var(--border-light); border-radius: 10px; background: var(--card);
+  cursor: pointer; transition: all .13s; min-width: 0;
+}
+.db-card:hover { border-color: var(--primary); }
+.db-card.active { border-color: var(--primary); background: var(--primary-light); box-shadow: 0 0 0 1px var(--primary); }
+.db-c-ico {
+  width: 34px; height: 34px; border-radius: 9px; background: var(--bg-2);
+  display: flex; align-items: center; justify-content: center; flex: none;
+}
+.db-c-ico svg { width: 16px; height: 16px; color: var(--primary); }
+.db-card.active .db-c-ico { background: var(--card); }
+.db-c-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; }
+.db-c-ops { margin-left: auto; flex: none; display: flex; gap: 6px; }
+.db-stat-line b { color: var(--text); font-variant-numeric: tabular-nums; }
 /* 拦截日志类型彩色 tag */
 .tag-sql { background: #fee2e2; color: #dc2626; }
 .tag-xss { background: #ffedd5; color: #ea580c; }

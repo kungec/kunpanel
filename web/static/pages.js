@@ -4373,8 +4373,8 @@ PAGES.files = {
           "Cmd-F": "findPersistent",
           "Ctrl-/": "toggleComment",
           "Cmd-/": "toggleComment",
-          "F11": function(c) { c.setOption("fullScreen", !c.getOption("fullScreen")); },
-          "Esc": function(c) { if (c.getOption("fullScreen")) c.setOption("fullScreen", false); },
+          "F11": function() { m.el.classList.toggle("modal-max"); setTimeout(function() { cm.refresh(); }, 50); },
+          "Esc": function() { if (m.el.classList.contains("modal-max")) { m.el.classList.remove("modal-max"); setTimeout(function() { cm.refresh(); }, 50); } },
         },
       });
       window.__cme = cm;
@@ -4409,7 +4409,11 @@ PAGES.files = {
       var sv = qs("#cme-save", m.el);
       if (sv) sv.onclick = function() { doSave(); };
       var fs2 = qs("#cme-fullscreen", m.el);
-      if (fs2) fs2.onclick = function() { cm.setOption("fullScreen", !cm.getOption("fullScreen")); };
+      if (fs2) fs2.onclick = function() {
+        // 复用弹窗最大化(保留工具栏);CM 原生 fixed 全屏会被遮罩 backdrop-filter 破坏,弃用
+        m.el.classList.toggle("modal-max");
+        setTimeout(function() { cm.refresh(); }, 50);
+      };
       var fd2 = qs("#cme-find", m.el);
       if (fd2) fd2.onclick = function() { cm.execCommand("findPersistent"); };
       var histBtn = qs("#cme-history", m.el);

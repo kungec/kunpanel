@@ -503,7 +503,160 @@ func DetectPkgManager() string {
 	return ""
 }
 
-// InstallEngine 一键安装 Docker 引擎(仅 Linux)。优先官方脚本,失败后按发行版回退。
+// repoMirror 国内 Docker CE 软件源(顺序即优先级)。repo 文件由各镜像站发布,
+// baseurl 本身指向镜像站自身域名,拉取成功即可用。
+var repoMirrors = []struct {
+	Name string
+	Yum  string // CentOS/RHEL 系 docker-ce.repo
+	Apt  string // Debian/Ubuntu 系(模板,含 %s=distro)
+}{
+	{"阿里云", "https://mirrors.aliyun.com/docker-ce/linux/centos/docker-ce.repo", "https://mirrors.aliyun.com/docker-ce/linux/%s/"},
+	{"腾讯云", "https://mirrors.tencent.com/docker-ce/linux/centos/docker-ce.repo", "https://mirrors.tencent.com/docker-ce/linux/%s/"},
+	{"清华大学", "https://mirrors.tuna.tsinghua.edu.cn/docker-ce/linux/centos/docker-ce.repo", "https://mirrors.tuna.tsinghua.edu.cn/docker-ce/linux/%s/"},
+	{"中科大", "https://mirrors.ustc.edu.cn/docker-ce/linux/centos/docker-ce.repo", "https://mirrors.ustc.edu.cn/docker-ce/linux/%s/"},
+}
+
+// urlReachable 探测 URL 可达性(6s 超时;HTTP 4xx/5xx 或连接失败均视为不可达)
+func urlReachable(url string) bool {
+	_, err := util.RunWithTimeout(6*time.Second, "sh", "-c",
+		"curl -fsSL -m 5 -o /dev/null "+url)
+	return err == nil
+}
+
+// osRelease 解析 /etc/os-release,供 apt 源拼接 distro(debian/ubuntu)
+func osRelease() map[string]string {
+	out := map[string]string{}
+	b, err := os.ReadFile("/etc/os-release")
+	if err != nil {
+		return out
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		kv := strings.SplitN(line, "=", 2)
+		if len(kv) != 2 {
+			continue
+		}
+		out[kv[0]] = strings.Trim(kv[1], `"'`)
+	}
+	return out
+}
+
+// installFromChinaYumRepo 为 yum/dnf 系逐个尝试国内 docker-ce 源并安装。
+// 逐源验证 repo 文件拉取与 makecache,全部失败才报错。
+func installFromChinaYumRepo(pm string, force string, w io.Writer) error {
+	for _, m := range repoMirrors {
+		if force != "" && m.Name != force && !(force == "ustc" && m.Name == "中科大") {
+			continue
+		}
+		fmt.Fprintf(w, ">> 尝试国内源[%s]:拉取 docker-ce.repo ... ", m.Name)
+		if _, err := util.RunWithTimeout(15*time.Second, "sh", "-c",
+			"curl -fsSL -m 12 -o /etc/yum.repos.d/docker-ce.repo "+m.Yum); err != nil {
+			fmt.Fprintln(w, "失败(不可达)")
+			continue
+		}
+		fmt.Fprintln(w, "OK")
+		// 刷新该源元数据(只启用 docker-ce,避免拖慢)
+		_, _ = util.RunWithTimeout(3*time.Minute, "sh", "-c", pm+" makecache -y --disablerepo=* --enablerepo=docker-ce*")
+		pkgs := []string{"docker-ce", "docker-ce-cli", "containerd.io", "docker-compose-plugin"}
+		fmt.Fprintf(w, ">> 从[%s]安装 docker-ce ... \n", m.Name)
+		if err := pmInstall(pm, pkgs...); err != nil {
+			fmt.Fprintf(w, "[%s] docker-ce 安装失败:%v,尝试下一个源 ...\n", m.Name, err)
+			continue
+		}
+		return nil
+	}
+	return fmt.Errorf("所有国内源均不可用")
+}
+
+// installFromChinaAptRepo 为 apt 系逐个尝试国内 docker-ce 源并安装
+func installFromChinaAptRepo(force string, w io.Writer) error {
+	osi := osRelease()
+	distro := osi["ID"]
+	if distro != "debian" && distro != "ubuntu" {
+		// ID_LIKE 兜底(如 linuxmint → ubuntu)
+		if strings.Contains(osi["ID_LIKE"], "debian") {
+			distro = "debian"
+		} else if strings.Contains(osi["ID_LIKE"], "ubuntu") || distro == "linuxmint" {
+			distro = "ubuntu"
+		} else {
+			return fmt.Errorf("不支持的发行版: %s", osi["ID"])
+		}
+	}
+	codename := osi["VERSION_CODENAME"]
+	if codename == "" && distro == "ubuntu" {
+		codename = osi["UBUNTU_CODENAME"]
+	}
+	if codename == "" {
+		return fmt.Errorf("无法识别系统代号(VERSION_CODENAME 为空)")
+	}
+	_, _ = util.RunWithTimeout(15*time.Second, "sh", "-c", "install -m 0755 -d /etc/apt/keyrings")
+	for _, m := range repoMirrors {
+		if force != "" && m.Name != force && !(force == "ustc" && m.Name == "中科大") {
+			continue
+		}
+		base := fmt.Sprintf(m.Apt, distro)
+		fmt.Fprintf(w, ">> 尝试国内源[%s]:配置 apt 源 ... ", m.Name)
+		script := fmt.Sprintf(
+			`set -e; curl -fsSL -m 12 %s/gpg -o /etc/apt/keyrings/docker.asc && chmod a+r /etc/apt/keyrings/docker.asc && `+
+				`echo "deb [arch=$(dpkg --print-architecture 2>/dev/null || echo amd64) signed-by=/etc/apt/keyrings/docker.asc] %s %s stable" > /etc/apt/sources.list.d/docker.list`,
+			base, base, codename)
+		if _, err := util.RunWithTimeout(30*time.Second, "sh", "-c", script); err != nil {
+			fmt.Fprintln(w, "失败(不可达)")
+			continue
+		}
+		fmt.Fprintln(w, "OK")
+		_, _ = util.RunWithTimeout(5*time.Minute, "apt-get", "update")
+		if err := pmInstall("apt-get", "docker-ce", "docker-ce-cli", "containerd.io", "docker-compose-plugin"); err != nil {
+			fmt.Fprintf(w, "[%s] 安装失败:%v,尝试下一个源 ...\n", m.Name, err)
+			continue
+		}
+		return nil
+	}
+	return fmt.Errorf("所有国内源均不可用")
+}
+
+// applyChinaRegistryMirrors 国内网络下为 docker pull 配置公共镜像加速器。
+// 仅在用户未配置 registry-mirrors 时写入,原文件备份为 daemon.json.bak。
+func applyChinaRegistryMirrors(w io.Writer) {
+	path := "/etc/docker/daemon.json"
+	var cfg map[string]any
+	if b, err := os.ReadFile(path); err == nil {
+		if json.Unmarshal(b, &cfg) != nil {
+			fmt.Fprintln(w, ">> 跳过镜像加速配置:daemon.json 不是合法 JSON,请手动检查")
+			return
+		}
+		if _, ok := cfg["registry-mirrors"]; ok {
+			return // 用户已有配置,不覆盖
+		}
+		_ = os.WriteFile(path+".bak", b, 0o644)
+	}
+	if cfg == nil {
+		cfg = map[string]any{}
+	}
+	cfg["registry-mirrors"] = []string{
+		"https://docker.m.daocloud.io",
+		"https://docker.1panel.live",
+		"https://docker.1ms.run",
+	}
+	out, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return
+	}
+	if err := util.AtomicWrite(path, out, 0o644); err != nil {
+		fmt.Fprintln(w, ">> 镜像加速配置写入失败:"+err.Error())
+		return
+	}
+	fmt.Fprintln(w, ">> 已配置 Docker 镜像拉取加速(国内加速器,原配置备份于 daemon.json.bak)")
+	// 已在运行的引擎需要重启加载
+	if ContainerRunningDockerd() {
+		_, _ = util.RunWithTimeout(60*time.Second, "sh", "-c",
+			"systemctl restart docker 2>/dev/null || service docker restart 2>/dev/null || true")
+	}
+}
+
+// InstallEngine 一键安装 Docker 引擎(仅 Linux)。
+// mirror: ""=强制官方源;auto=探测后自动选择(官方可达走官方,不通自动切国内源);
+// aliyun/ustc=强制指定国内源。官方脚本失败或官方源不可达时,逐个尝试国内
+// docker-ce 软件源(阿里云→腾讯云→清华→中科大),不再依赖官方脚本可达。
 func InstallEngine(mirror string, w io.Writer) error {
 	if runtime.GOOS != "linux" {
 		return fmt.Errorf("仅在 Linux 上支持在线安装 Docker")
@@ -514,28 +667,60 @@ func InstallEngine(mirror string, w io.Writer) error {
 			_ = pmInstall(pm, "curl")
 		}
 	}
-
-	// 1) 官方一键脚本(get.docker.com),--mirror aliyun 使用国内源
+	force := ""
 	if mirror == "aliyun" {
-		fmt.Fprintln(w, ">> 使用阿里云镜像源安装 Docker ...")
-		cmd := exec.Command("sh", "-c", "curl -fsSL https://get.docker.com | sh -s -- --mirror Aliyun")
-		cmd.Stdout = w
-		cmd.Stderr = w
-		if err := cmd.Run(); err == nil {
-			return ensureEngineRunning(w)
-		} else {
-			fmt.Fprintln(w, "阿里云源安装失败:"+err.Error()+",尝试系统包管理器回退 ...")
-		}
-	} else {
+		force = "阿里云"
+	} else if mirror == "ustc" {
+		force = "中科大"
+	}
+
+	// 官方源连通性:download.docker.com 在国内大量机房被重置,探测通过才走官方
+	officialOK := force == "" && urlReachable("https://download.docker.com/linux/centos/docker-ce.repo")
+
+	if officialOK {
 		fmt.Fprintln(w, ">> 通过官方脚本 get.docker.com 安装 Docker ...")
 		if err := stream("sh", []string{"-c", "curl -fsSL https://get.docker.com | sh"}, w, 30*time.Minute); err == nil {
 			return ensureEngineRunning(w)
+		}
+		fmt.Fprintln(w, "官方脚本安装失败,尝试系统包管理器回退 ...")
+	} else {
+		if force == "" {
+			fmt.Fprintln(w, ">> 检测到 Docker 官方源不可达(国内机房常见),自动切换国内镜像源 ...")
+		}
+		// 1) 官方一键脚本 + --mirror Aliyun(脚本域名 get.docker.com 与软件源域名不同,可能单独可达)
+		if getScript := urlReachable("https://get.docker.com"); getScript {
+			fmt.Fprintln(w, ">> 使用阿里云镜像模式执行官方脚本 ...")
+			cmd := exec.Command("sh", "-c", "curl -fsSL https://get.docker.com | sh -s -- --mirror Aliyun")
+			cmd.Stdout = w
+			cmd.Stderr = w
+			if err := cmd.Run(); err == nil {
+				applyChinaRegistryMirrors(w)
+				return ensureEngineRunning(w)
+			}
+			fmt.Fprintln(w, "脚本安装失败,改用手动配置国内软件源 ...")
 		} else {
-			fmt.Fprintln(w, "官方脚本安装失败:"+err.Error()+",尝试系统包管理器回退 ...")
+			fmt.Fprintln(w, "get.docker.com 也不可达,直接手动配置国内软件源 ...")
+		}
+		// 2) 手动配置国内 docker-ce 源(不依赖任何官方域名)
+		pm := DetectPkgManager()
+		var ierr error
+		switch pm {
+		case "yum", "dnf":
+			ierr = installFromChinaYumRepo(pm, force, w)
+		case "apt-get":
+			ierr = installFromChinaAptRepo(force, w)
+		default:
+			ierr = fmt.Errorf("未识别的包管理器 %q,无法自动换源", pm)
+		}
+		if ierr != nil {
+			fmt.Fprintln(w, "国内源安装失败:"+ierr.Error()+",尝试系统包管理器回退 ...")
+		} else {
+			applyChinaRegistryMirrors(w)
+			return ensureEngineRunning(w)
 		}
 	}
 
-	// 2) 包管理器回退
+	// 3) 包管理器回退(官方源可用但脚本失败 / 国内源全部失败)
 	pm := DetectPkgManager()
 	if pm == "" {
 		return fmt.Errorf("未识别的发行版,请手动安装 Docker 后重试")
@@ -564,8 +749,12 @@ func InstallEngine(mirror string, w io.Writer) error {
 			return fmt.Errorf("zypper 安装失败: %v", err)
 		}
 	}
+	if force != "" || !officialOK {
+		applyChinaRegistryMirrors(w)
+	}
 	return ensureEngineRunning(w)
 }
+
 
 func pmInstall(pm string, pkgs ...string) error {
 	var cmd *exec.Cmd

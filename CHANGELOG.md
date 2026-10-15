@@ -3,6 +3,26 @@
 所有重要变更都会记录在此文件中。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v2.62.0] - 2026-10-15
+
+### 新增(Docker 安装自动换源,解决国内机房连不上官方源)
+
+- **安装前自动探测官方源连通性**:`download.docker.com` 在国内大量机房被直接重置
+  (TCP connection reset),探测通过才走官方脚本;不可达时**自动切换国内镜像源**,
+  无需用户理解网络细节
+- **逐镜像自动回退**:阿里云 → 腾讯云 → 清华大学 → 中科大,逐个拉取 docker-ce.repo
+  验证可用性,单个源失败自动换下一个;不再依赖官方脚本可达
+- **yum/dnf 与 apt 双链路**:CentOS/RHEL 写 `/etc/yum.repos.d/docker-ce.repo` 后
+  `makecache` 刷新并安装;Debian/Ubuntu 自动写入 keyring + apt 源(自动识别发行版
+  与系统代号),兼容只放行特定架构的机器
+- **镜像拉取加速**:国内网络安装成功后自动为 `docker pull` 配置公共加速器
+  (写入 daemon.json,已有配置不覆盖,原文件备份为 daemon.json.bak)
+- **修复选项失效**:此前前端"自动选择镜像源 / 中科大镜像"两个选项后端根本没实现
+  (都走官方源)——现已全部生效
+
+实测(容器内屏蔽官方域名模拟国内网络):CentOS 7 yum 路径与 Debian 12 apt 路径
+均成功装出 Docker;Debian 路径完整安装 docker-ce-cli 29.9.1 可执行。
+
 ## [v2.61.4] - 2026-10-15
 
 ### 修复(WAF 功能全量复查)

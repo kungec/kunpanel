@@ -203,8 +203,10 @@ local function cc_cookie_valid(conf)
     local now = ngx.now()
     local ttl = tonumber(conf.cc_clear_ttl) or 3600
     if (now - issue_n) > ttl or (issue_n - now) > 30 then return false end
-    -- jump 模式强制真的等待了 5 秒(留 1 秒时钟容差)
-    if (conf.cc_mode or "rate") == "jump" and (now - issue_n) < 4 then return false end
+    -- jump 模式强制真的等待了 5 秒(留 1 秒时钟容差);cf 模式强制停留 1 秒
+    local ccm = conf.cc_mode or "rate"
+    if ccm == "jump" and (now - issue_n) < 4 then return false end
+    if ccm == "cf" and (now - issue_n) < 1 then return false end
     if cc_hmac(conf, ip .. "|" .. issue) ~= sig then return false end
     return true
 end
@@ -252,6 +254,29 @@ local function serve_challenge(conf, kind)
         local sig = cc_hmac(conf, ip .. "|" .. issue)
         inner = '<h1>继续访问前请确认</h1><p>检测到异常请求频率,点击按钮完成人机验证</p>' ..
             '<button class="btn" onclick="document.cookie=\'kun_cc=' .. sig .. '.' .. issue .. ';Path=/;Max-Age=' .. (tonumber(conf.cc_clear_ttl) or 3600) .. ';SameSite=Lax\';location.replace(\'' .. host_uri .. '\')">我已了解,继续访问</button>'
+    elseif kind == "cf" then
+        -- Cloudflare 风格无感验证:全屏 Verifying 动画页,停留约 1.2 秒后自动颁发 Cookie 回跳
+        local sig = cc_hmac(conf, ip .. "|" .. issue)
+        local ttl = tonumber(conf.cc_clear_ttl) or 3600
+        inner = '<style>body{background:#fff!important;display:flex!important;align-items:center;justify-content:center;height:100vh!important;margin:0!important}' ..
+            '.card{box-shadow:none!important;background:#fff!important;padding:0!important;max-width:none!important}' ..
+            '.cf-spin{width:52px;height:52px;position:relative;margin:0 auto 26px}' ..
+            '.cf-spin i{position:absolute;inset:0;animation:cfblink 1.04s linear infinite}' ..
+            '.cf-spin i::after{content:"";position:absolute;top:0;left:50%;width:10px;height:10px;margin-left:-5px;border-radius:50%;background:#2fae4a}' ..
+            '.cf-spin i:nth-child(2){transform:rotate(45deg)}.cf-spin i:nth-child(3){transform:rotate(90deg)}.cf-spin i:nth-child(4){transform:rotate(135deg)}' ..
+            '.cf-spin i:nth-child(5){transform:rotate(180deg)}.cf-spin i:nth-child(6){transform:rotate(225deg)}.cf-spin i:nth-child(7){transform:rotate(270deg)}.cf-spin i:nth-child(8){transform:rotate(315deg)}' ..
+            '.cf-spin i:nth-child(1){animation-delay:-1.04s}.cf-spin i:nth-child(2){animation-delay:-.91s}.cf-spin i:nth-child(3){animation-delay:-.78s}.cf-spin i:nth-child(4){animation-delay:-.65s}' ..
+            '.cf-spin i:nth-child(5){animation-delay:-.52s}.cf-spin i:nth-child(6){animation-delay:-.39s}.cf-spin i:nth-child(7){animation-delay:-.26s}.cf-spin i:nth-child(8){animation-delay:-.13s}' ..
+            '@keyframes cfblink{0%{opacity:1}100%{opacity:.12}}' ..
+            '.cf-t{font-size:27px;color:#313131;font-weight:600;letter-spacing:.01em}' ..
+            '.cf-f{margin-top:30px;text-align:right}' ..
+            '.cf-f b{font-size:15px;color:#f6821f;letter-spacing:.06em}' ..
+            '.cf-f span{display:block;color:#c0c4cc;font-size:11px;margin-top:2px}</style>' ..
+            '<div class="cf-spin"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>' ..
+            '<div class="cf-t">Verifying…</div>' ..
+            '<div class="cf-f"><b>CLOUDFLARE 风格</b><span>KunPanel WAF · 人机验证</span></div>'
+        script = '<script>setTimeout(function(){document.cookie="kun_cc=' .. sig .. '.' .. issue .. ';Path=/;Max-Age=' .. ttl .. ';SameSite=Lax";location.replace("' .. host_uri .. '")},1200);</script>' ..
+            '<noscript><meta http-equiv="refresh" content="3"></noscript>'
     else -- js 无感验证
         local sig = cc_hmac(conf, ip .. "|" .. issue)
         inner = '<h1>安全验证中</h1><p>正在验证浏览器环境,请稍候…</p><div class="ring"></div>'
@@ -409,7 +434,7 @@ if in_list(ua, conf.ua_black) then
 end
 
 -- 危险 HTTP 方法拦截(TRACE/TRACK/CONNECT 等)
-if conf.method_block_enable and conf.method_block_list then
+if conf.method_block_enable and type(conf.method_block_list) == "table" then
     local method = ngx.req.get_method()
     for _, bm in ipairs(conf.method_block_list) do
         if method == bm then
@@ -470,7 +495,9 @@ for group, pats in pairs(rules) do
 end
 
 -- 用户自定义规则(面板可增删,保存即热更新)
-local customs = conf.custom_rules or {}
+-- 注意:Go 侧 nil 切片序列化为 null,而 ngx.null 是真值 userdata,必须显式判型
+local customs = conf.custom_rules
+if type(customs) ~= "table" then customs = {} end
 for _, cr in ipairs(customs) do
     if cr and cr.pattern and cr.pattern ~= "" then
         for _, t in ipairs(targets) do

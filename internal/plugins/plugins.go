@@ -104,7 +104,7 @@ type WafSettings struct {
 	CcEnable       bool            `json:"cc_enable"`
 	CcLimit        int             `json:"cc_limit"`
 	CcInterval     int             `json:"cc_interval"`
-	CcMode         string          `json:"cc_mode"`      // rate(默认限流403) / jump(5秒跳转) / js(JS无感) / click(点击) / captcha(验证码)
+	CcMode         string          `json:"cc_mode"`      // rate(默认限流403) / jump(5秒跳转) / js(JS无感) / cf(CF风格Verifying) / click(点击) / captcha(验证码)
 	CcSecret       string          `json:"cc_secret"`    // 挑战令牌签名密钥(自动生成)
 	CcClearTTL     int             `json:"cc_clear_ttl"` // 验证通过后的放行时长(秒)
 	IpBanEnable    bool            `json:"ip_ban_enable"`
@@ -317,6 +317,31 @@ func loadWafConfig() *wafConfigFile {
 }
 
 func saveWafConfig(c *wafConfigFile) error {
+	// nil 切片归一为空切片:JSON null 会让 Lua 端拿到 truthy userdata
+	if c.IpWhite == nil {
+		c.IpWhite = []string{}
+	}
+	if c.IpBlack == nil {
+		c.IpBlack = []string{}
+	}
+	if c.UrlWhite == nil {
+		c.UrlWhite = []string{}
+	}
+	if c.UaBlack == nil {
+		c.UaBlack = []string{}
+	}
+	if c.SpiderWhite == nil {
+		c.SpiderWhite = []string{}
+	}
+	if c.MethodBlockList == nil {
+		c.MethodBlockList = []string{}
+	}
+	if c.CustomRules == nil {
+		c.CustomRules = []CustomRule{}
+	}
+	if c.RuleGroups == nil {
+		c.RuleGroups = DefaultRuleGroups()
+	}
 	_ = os.MkdirAll(wafDir(), 0o755)
 	b, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
@@ -358,7 +383,7 @@ func SaveWafSettings(s WafSettings) error {
 		return fmt.Errorf("CC 统计窗口应在 1-3600 秒之间")
 	}
 	switch s.CcMode {
-	case "", "rate", "jump", "js", "click", "captcha":
+	case "", "rate", "jump", "js", "cf", "click", "captcha":
 	default:
 		return fmt.Errorf("未知 CC 防御模式")
 	}

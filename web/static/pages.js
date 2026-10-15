@@ -2762,6 +2762,7 @@ PAGES.plugins = {
       { k: "rate", name: "限流拦截", desc: "超限直接返回 403,最简单直接" },
       { k: "jump", name: "5 秒跳转", desc: "超限后展示 5 秒等待页,通过后放行;真人友好,机器无法通过" },
       { k: "js", name: "JS 无感验证", desc: "浏览器自动完成验证,真人无感知,脚本工具无法通过" },
+      { k: "cf", name: "Cloudflare 风格", desc: "全屏 Verifying 动画页后无感放行,观感最接近 CDN 厂商,对脚本工具极不友好" },
       { k: "click", name: "点击验证", desc: "需点击确认按钮后继续访问" },
       { k: "captcha", name: "算术验证码", desc: "需输入算式答案,防护强度最高" },
     ];

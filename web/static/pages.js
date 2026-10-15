@@ -416,7 +416,6 @@ PAGES.websites = {
     load();
     qs('[data-act="refresh"]', m.el).onclick = load;
   },
-  /* HTTPS 证书绑定弹窗 */
   /* 网站全局设置(防恶意解析 / Gzip) */
   async globalDialog(el) {
     let ap = false, gz = false;
@@ -458,106 +457,6 @@ PAGES.websites = {
     const nl = qs("#gp-nginx-link", m.el);
     if (nl) nl.onclick = function(e) { e.preventDefault(); m.close(); location.hash = "#/apps"; };
     qs('[data-act="close"]', m.el).onclick = m.close;
-  },
-  async sslDialog(site, el) {
-    let certs = [];
-    let acmeCfg = { email: "", staging: false, registered: false };
-    try {
-      const results = await Promise.all([api("/ssl/certs"), api("/ssl/acme/config").catch(() => null)]);
-      certs = results[0] || [];
-      if (results[1]) acmeCfg = results[1];
-    } catch (e) {}
-    const mainDomain = site.domain.split(" ")[0];
-    const m = modal({
-      title: "HTTPS 设置 · " + mainDomain, width: 600,
-      body: `
-        <div class="form-item"><label>绑定状态</label>
-          <div>${site.ssl_cert_id ? '<span class="tag tag-success">已启用 HTTPS</span>' : '<span class="tag tag-info">未启用</span>'}</div></div>
-        <div class="form-item"><label>证书</label>
-          <select class="select" id="ssl-cert"><option value="">不启用 HTTPS</option>
-            ${certs.map((c) => '<option value="' + esc(c.id) + '"' + (c.id === site.ssl_cert_id ? " selected" : "") + ">" + esc(c.name) + (c.expire ? "(到期 " + esc(c.expire) + (c.acme ? " · LE" : "") + ")" : "") + "</option>").join("")}
-          </select>
-          <div class="help" id="ssl-cert-count">已有 ${certs.length} 张证书;LE 证书剩余不足 30 天时自动续期</div></div>
-        <div class="settings-section-title">一键申请 Let's Encrypt 免费证书</div>
-        <div class="form-item"><label>申请邮箱</label>
-          <input class="input" id="acme-email" value="${esc(acmeCfg.email || "")}" placeholder="用于到期提醒,如 me@example.com">
-          <div class="help">需域名已解析到本服务器且 80 端口可达;签发过程约 30 秒${acmeCfg.staging ? "(当前为测试环境 staging)" : ""}</div></div>
-        <div class="form-item"><label class="radio-line"><input type="checkbox" id="acme-staging" ${acmeCfg.staging ? "checked" : ""}> 使用测试环境(staging,不限频但浏览器不信任,验证流程用)</label></div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn btn-sm btn-primary" id="ssl-acme-issue">${I("bolt")} 申请 Let's Encrypt 证书并启用</button>
-          <button class="btn btn-sm btn-plain" id="ssl-upload">${I("upload")} 上传证书</button>
-          <button class="btn btn-sm btn-plain" id="ssl-selfsign">${I("key")} 自签(10年)</button>
-        </div>
-        <div class="form-item"><label>上传新证书(PEM 格式)</label>
-          <textarea class="textarea" id="ssl-cert-pem" rows="3" placeholder="证书内容(BEGIN CERTIFICATE ...)"></textarea>
-          <textarea class="textarea" id="ssl-key-pem" rows="3" placeholder="私钥内容(BEGIN PRIVATE KEY ...)" style="margin-top:6px"></textarea></div>
-        <div class="form-item" style="margin-top:8px"><label class="radio-line"><input type="checkbox" id="ssl-redirect" ${site.ssl_redirect ? "checked" : ""}> HTTP 强制跳转 HTTPS(仅监听 80 端口时生效)</label></div>
-        <div class="settings-section-title">HTTPS 增强(绑定证书后生效)</div>
-        <div class="form-item"><label class="radio-line"><input type="checkbox" id="ssl-http2" ${site.http2 ? "checked" : ""}> HTTP/2(多路复用,页面加载更快)</label></div>
-        <div class="form-item"><label class="radio-line"><input type="checkbox" id="ssl-hsts" ${site.hsts ? "checked" : ""}> HSTS(强制浏览器一年内只用 HTTPS 访问本站,开启后短期难以回退)</label></div>`,
-      footer: '<button class="btn btn-plain" data-act="no">取 消</button><button class="btn btn-primary" data-act="yes">保 存</button>',
-    });
-    if (site.ssl_cert_id) {
-      const dl = document.createElement("button");
-      dl.className = "btn btn-plain";
-      dl.style.marginRight = "auto";
-      dl.innerHTML = '${I("download")} 下载证书';
-      dl.onclick = () => window.open("/api/v1/ssl/certs/" + site.ssl_cert_id + "/download?token=" + encodeURIComponent(localStorage.getItem(TOKEN_KEY)), "_blank");
-      const foot = m.el.querySelector(".modal-footer");
-      foot.insertBefore(dl, foot.firstChild);
-    }
-    qs('[data-act="no"]', m.el).onclick = m.close;
-    const persist = async (certId, redirect) => {
-      try {
-        await api("/websites/" + site.id + "/ssl", { method: "POST", body: { cert_id: certId, redirect } });
-        try {
-          await api("/websites/" + site.id + "/extras", { method: "POST", body: {
-            http2: qs("#ssl-http2", m.el).checked,
-            hsts: qs("#ssl-hsts", m.el).checked,
-            index_files: site.index_files || "",
-          }});
-        } catch (e2) { toast(e2.message, "error", 6000); }
-        toast("HTTPS 设置已保存并生效");
-        m.close();
-        this.render(el);
-      } catch (e) { toast(e.message, "error", 5000); }
-    };
-    // 一键申请 LE 证书
-    qs("#ssl-acme-issue", m.el).onclick = async () => {
-      const email = qs("#acme-email", m.el).value.trim();
-      const staging = qs("#acme-staging", m.el).checked;
-      if (!email) { toast("请填写申请邮箱", "error"); return; }
-      try { await api("/ssl/acme/config", { method: "POST", body: { email, staging } }); }
-      catch (e) { toast(e.message, "error"); return; }
-      toast("正在发起申请...", "info");
-      try {
-        const d = await api("/ssl/acme/issue", { method: "POST", body: { site_id: site.id, staging } });
-        m.close();
-        taskModal(d.task_id, (status) => {
-          if (status === "success") {
-            toast("证书申请成功,已启用 HTTPS");
-            setTimeout(() => window.location.reload(), 800);
-          }
-        });
-      } catch (e) { toast(e.message, "error"); }
-    };
-    qs("#ssl-upload", m.el).onclick = async () => {
-      const cert = qs("#ssl-cert-pem", m.el).value.trim(), key = qs("#ssl-key-pem", m.el).value.trim();
-      if (!cert || !key) { toast("请填写证书与私钥内容", "error"); return; }
-      try {
-        const info = await api("/ssl/upload", { method: "POST", body: { name: mainDomain, cert, key } });
-        toast("证书上传成功");
-        await persist(info.id, qs("#ssl-redirect", m.el).checked);
-      } catch (e) { toast(e.message, "error"); }
-    };
-    qs("#ssl-selfsign", m.el).onclick = async () => {
-      try {
-        const info = await api("/ssl/selfsign", { method: "POST", body: { domain: mainDomain, days: 3650 } });
-        toast("自签证书已生成");
-        await persist(info.id, qs("#ssl-redirect", m.el).checked);
-      } catch (e) { toast(e.message, "error"); }
-    };
-    qs('[data-act="yes"]', m.el).onclick = () => persist(qs("#ssl-cert", m.el).value, qs("#ssl-redirect", m.el).checked);
   },
   /* 编辑站点弹窗(代理目标 / 端口 / 备注) */
   async editDialog(s, el) {
@@ -1075,7 +974,7 @@ PAGES.websites = {
     load();
     qs('[data-act="refresh"]', m.el).onclick = load;
   },
-  /* HTTPS 证书绑定弹窗 */
+  /* HTTPS 证书绑定弹窗:免费证书 / 自有证书 / 自签 三区分离,新手按需选择 */
   async sslDialog(site, el) {
     let certs = [];
     let acmeCfg = { email: "", staging: false, registered: false };
@@ -1090,52 +989,62 @@ PAGES.websites = {
       body: `
         <div class="form-item"><label>绑定状态</label>
           <div>${site.ssl_cert_id ? '<span class="tag tag-success">已启用 HTTPS</span>' : '<span class="tag tag-info">未启用</span>'}</div></div>
-        <div class="form-item"><label>证书</label>
+        <div class="form-item"><label>当前使用的证书</label>
           <select class="select" id="ssl-cert"><option value="">不启用 HTTPS</option>
             ${certs.map((c) => '<option value="' + esc(c.id) + '"' + (c.id === site.ssl_cert_id ? " selected" : "") + ">" + esc(c.name) + (c.expire ? "(到期 " + esc(c.expire) + (c.acme ? " · LE" : "") + ")" : "") + "</option>").join("")}
           </select>
           <div class="help" id="ssl-cert-count">已有 ${certs.length} 张证书;LE 证书剩余不足 30 天时自动续期</div></div>
-        <div class="settings-section-title">一键申请 Let's Encrypt 免费证书</div>
-        <div class="form-item"><label>申请邮箱</label>
-          <input class="input" id="acme-email" value="${esc(acmeCfg.email || "")}" placeholder="用于到期提醒,如 me@example.com">
-          <div class="help">需域名已解析到本服务器且 80 端口可达;签发过程约 30 秒${acmeCfg.staging ? "(当前为测试环境 staging)" : ""}</div></div>
-        <div class="form-item"><label class="radio-line"><input type="checkbox" id="acme-staging" ${acmeCfg.staging ? "checked" : ""}> 使用测试环境(staging,不限频但浏览器不信任,验证流程用)</label></div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn btn-sm btn-primary" id="ssl-acme-issue">${I("bolt")} 申请 Let's Encrypt 证书并启用</button>
-          <button class="btn btn-sm btn-plain" id="ssl-upload">${I("upload")} 上传证书</button>
-          <button class="btn btn-sm btn-plain" id="ssl-selfsign">${I("key")} 自签(10年)</button>
-        </div>
-        <div class="form-item"><label>上传新证书(PEM 格式)</label>
+
+        <div class="waf-set-sec" style="padding:14px 16px 12px"><div class="waf-sec-head">${I("bolt")}免费证书 Let's Encrypt<span class="tag tag-success" style="margin-left:2px">推荐</span></div>
+          <div class="settings-hint" style="margin:0 0 10px">自动申请、自动续期,适合绝大多数网站;需域名已解析到本服务器且 80 端口可达,签发约 30 秒</div>
+          <div class="form-item"><label>申请邮箱</label>
+            <input class="input" id="acme-email" value="${esc(acmeCfg.email || "")}" placeholder="用于到期提醒,如 me@example.com"></div>
+          <label class="radio-line"><input type="checkbox" id="acme-staging" ${acmeCfg.staging ? "checked" : ""}> 使用测试环境(staging,不限频但浏览器不信任,验证流程用)</label>
+          <div style="margin-top:10px"><button class="btn btn-sm btn-primary" id="ssl-acme-issue">${I("bolt")} 申请证书并启用 HTTPS</button></div></div>
+
+        <div class="waf-set-sec" style="padding:14px 16px 12px;margin-top:12px"><div class="waf-sec-head">${I("upload")}自有证书(商业证书)</div>
+          <div class="settings-hint" style="margin:0 0 10px">已购买的商业证书(如阿里云/腾讯云/StormBytes 签发):下载 PEM 格式后,选择文件或直接粘贴内容</div>
+          <div style="margin-bottom:8px"><button class="btn btn-sm btn-plain" id="ssl-pick-file">${I("upload")} 选择证书文件</button>
+            <span class="help" style="margin:0 0 0 8px">支持 .pem / .crt / .key / .txt,自动区分证书与私钥</span></div>
           <textarea class="textarea" id="ssl-cert-pem" rows="3" placeholder="证书内容(BEGIN CERTIFICATE ...)"></textarea>
-          <textarea class="textarea" id="ssl-key-pem" rows="3" placeholder="私钥内容(BEGIN PRIVATE KEY ...)" style="margin-top:6px"></textarea></div>
-        <div class="form-item" style="margin-top:8px"><label class="radio-line"><input type="checkbox" id="ssl-redirect" ${site.ssl_redirect ? "checked" : ""}> HTTP 强制跳转 HTTPS(仅监听 80 端口时生效)</label></div>` +
-        ((() => {
-          const cur = certs.find((c) => c.id === site.ssl_cert_id);
-          return cur && cur.acme ? '<div class="form-item"><button class="btn btn-sm btn-plain" id="ssl-renew-now">' + I("refresh") + ' 立即续期当前 LE 证书</button><div class="help">正常情况剩余不足 30 天自动续期;此按钮用于手动提前续期</div></div>' : "";
-        })()),
+          <textarea class="textarea" id="ssl-key-pem" rows="3" placeholder="私钥内容(BEGIN PRIVATE KEY ...)" style="margin-top:6px"></textarea>
+          <div style="margin-top:10px"><button class="btn btn-sm btn-primary" id="ssl-upload">${I("bolt")} 保存并启用 HTTPS</button></div></div>
+
+        <div class="waf-set-sec" style="padding:14px 16px 12px;margin-top:12px"><div class="waf-sec-head">${I("key")}自签证书<span class="settings-hint" style="margin:0 0 0 4px">仅本地/内网测试用,浏览器会提示不安全</span></div>
+          <button class="btn btn-sm btn-plain" id="ssl-selfsign">${I("key")} 生成自签证书(10年)并启用</button></div>
+
+        <div style="margin-top:14px">
+          <div class="form-item"><label class="radio-line"><input type="checkbox" id="ssl-redirect" ${site.ssl_redirect ? "checked" : ""}> HTTP 强制跳转 HTTPS(仅监听 80 端口时生效)</label></div>
+          <div class="form-item"><label class="radio-line"><input type="checkbox" id="ssl-http2" ${site.http2 ? "checked" : ""}> HTTP/2(多路复用,页面加载更快)</label></div>
+          <div class="form-item"><label class="radio-line"><input type="checkbox" id="ssl-hsts" ${site.hsts ? "checked" : ""}> HSTS(强制浏览器一年内只用 HTTPS 访问本站,开启后短期难以回退)</label></div></div>`,
       footer: '<button class="btn btn-plain" data-act="no">取 消</button><button class="btn btn-primary" data-act="yes">保 存</button>',
     });
-    const renewBtn = qs("#ssl-renew-now", m.el);
-    if (renewBtn) renewBtn.onclick = async function() {
-      const cid = site.ssl_cert_id;
-      if (!cid) { toast("未绑定证书", "error"); return; }
-      this.disabled = true; this.textContent = "续期中...";
-      try {
-        const d = await api("/ssl/acme/renew", { method: "POST", body: { cert_id: cid } });
-        m.close();
-        taskModal(d.task_id, (st) => { if (st === "success") { toast("证书已续期"); setTimeout(() => window.location.reload(), 800); } });
-      } catch (e) { toast(e.message, "error", 8000); this.disabled = false; this.textContent = "立即续期当前 LE 证书"; }
-    };
+    if (site.ssl_cert_id) {
+      const dl = document.createElement("button");
+      dl.className = "btn btn-plain";
+      dl.style.marginRight = "auto";
+      dl.innerHTML = '${I("download")} 下载证书';
+      dl.onclick = () => window.open("/api/v1/ssl/certs/" + site.ssl_cert_id + "/download?token=" + encodeURIComponent(localStorage.getItem(TOKEN_KEY)), "_blank");
+      const foot = m.el.querySelector(".modal-footer");
+      foot.insertBefore(dl, foot.firstChild);
+    }
     qs('[data-act="no"]', m.el).onclick = m.close;
     const persist = async (certId, redirect) => {
       try {
         await api("/websites/" + site.id + "/ssl", { method: "POST", body: { cert_id: certId, redirect } });
+        try {
+          await api("/websites/" + site.id + "/extras", { method: "POST", body: {
+            http2: qs("#ssl-http2", m.el).checked,
+            hsts: qs("#ssl-hsts", m.el).checked,
+            index_files: site.index_files || "",
+          }});
+        } catch (e2) { toast(e2.message, "error", 6000); }
         toast("HTTPS 设置已保存并生效");
         m.close();
         this.render(el);
       } catch (e) { toast(e.message, "error", 5000); }
     };
-    // 一键申请 LE 证书
+    // ① 一键申请 LE 证书
     qs("#ssl-acme-issue", m.el).onclick = async () => {
       const email = qs("#acme-email", m.el).value.trim();
       const staging = qs("#acme-staging", m.el).checked;
@@ -1154,15 +1063,53 @@ PAGES.websites = {
         });
       } catch (e) { toast(e.message, "error"); }
     };
+    // ② 自有证书:本地文件选择(自动识别证书/私钥并填充)
+    qs("#ssl-pick-file", m.el).onclick = () => {
+      const inp = document.createElement("input");
+      inp.type = "file"; inp.multiple = true;
+      inp.accept = ".pem,.crt,.cer,.key,.txt";
+      inp.onchange = () => {
+        let pending = inp.files.length;
+        [...inp.files].forEach((f) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const txt = String(reader.result || "").trim();
+            if (/PRIVATE KEY/.test(txt)) {
+              qs("#ssl-key-pem", m.el).value = txt;
+              toast(f.name + " 已识别为私钥", "success");
+            } else if (/BEGIN CERTIFICATE/.test(txt)) {
+              qs("#ssl-cert-pem", m.el).value = txt;
+              toast(f.name + " 已识别为证书", "success");
+            } else {
+              toast(f.name + ": 无法识别(需 PEM 格式的证书或私钥)", "error", 6000);
+            }
+            if (--pending === 0) inp.remove();
+          };
+          reader.readAsText(f);
+        });
+      };
+      document.body.appendChild(inp);
+      inp.click();
+      setTimeout(function() { if (inp.parentNode) inp.remove(); }, 60000);
+    };
+    // ② 保存自有证书
     qs("#ssl-upload", m.el).onclick = async () => {
       const cert = qs("#ssl-cert-pem", m.el).value.trim(), key = qs("#ssl-key-pem", m.el).value.trim();
-      if (!cert || !key) { toast("请填写证书与私钥内容", "error"); return; }
-      try {
-        const info = await api("/ssl/upload", { method: "POST", body: { name: mainDomain, cert, key } });
-        toast("证书上传成功");
-        await persist(info.id, qs("#ssl-redirect", m.el).checked);
-      } catch (e) { toast(e.message, "error"); }
+      if (!cert || !key) { toast("请填写(或选择)证书与私钥内容", "error"); return; }
+      b_dis: {
+        const btn = qs("#ssl-upload", m.el);
+        btn.disabled = true;
+        try {
+          const info = await api("/ssl/upload", { method: "POST", body: { name: mainDomain, cert, key } });
+          toast("证书上传成功");
+          await persist(info.id, qs("#ssl-redirect", m.el).checked);
+        } catch (e) {
+          toast(e.message, "error");
+          btn.disabled = false;
+        }
+      }
     };
+    // ③ 自签
     qs("#ssl-selfsign", m.el).onclick = async () => {
       try {
         const info = await api("/ssl/selfsign", { method: "POST", body: { domain: mainDomain, days: 3650 } });
@@ -1172,7 +1119,6 @@ PAGES.websites = {
     };
     qs('[data-act="yes"]', m.el).onclick = () => persist(qs("#ssl-cert", m.el).value, qs("#ssl-redirect", m.el).checked);
   },
-  /* 编辑站点弹窗(代理目标 / 端口 / 备注) */
   editDialog(s, el) {
     const m = modal({
       title: "编辑站点 · " + s.alias, width: 520,
@@ -1403,7 +1349,7 @@ PAGES.apps = {
             var dis = (a === "start" && running) || (a !== "start" && missing) || (a === "stop" && !running);
             html += '<button class="btn btn-sm btn-plain" data-app-act="' + a + '" data-app-key="' + r.key + '"' + (dis ? " disabled" : "") + ">" + actNames[a] + '</button>';
           });
-          html += '<button class="btn btn-sm btn-danger-plain" data-app-act="uninstall" data-app-key="' + r.key + '">卸载</button></div></td></tr>';
+          html += '<button class="btn btn-sm btn-danger-plain" data-app-act="uninstall" data-app-key="' + r.key + '"' + (missing ? ' title="清除安装记录' + '" data-clear="1"' : '') + '>' + (missing ? "清除" : "卸载") + '</button></div></td></tr>';
         });
         html += '</tbody></table></div>';
       }
@@ -1419,6 +1365,26 @@ PAGES.apps = {
         b.onclick = function() {
           var key = b.getAttribute("data-app-key"), act = b.getAttribute("data-app-act");
           if (act === "uninstall") {
+            if (b.getAttribute("data-clear")) {
+              // 容器已删除:专用「彻底清除」弹窗(清安装记录,可选删数据目录)
+              var pm = modal({
+                title: "彻底清除 · " + key, width: 470,
+                body: '<div class="help" style="margin-bottom:12px">该应用的容器已不存在,清除将移除安装记录,应用商店即可重新安装。</div>' +
+                  '<label class="radio-line" style="color:var(--danger)"><input type="checkbox" id="un-del-data"> 同时删除数据目录(含数据库文件/配置,<b>不可恢复</b>)</label>',
+                footer: '<button class="btn btn-plain" data-act="no">取 消</button><button class="btn btn-danger" data-act="yes">确认清除</button>'
+              });
+              qs('[data-act="no"]', pm.el).onclick = pm.close;
+              qs('[data-act="yes"]', pm.el).onclick = async function() {
+                var delData = qs("#un-del-data", pm.el).checked;
+                if (delData && !(await confirmDlg("再次确认:将删除该应用在服务器上的全部数据文件,<b>不可恢复</b>!", { danger: true }))) return;
+                pm.close();
+                b.disabled = true;
+                api("/apps/instances/" + key + "/uninstall", { method: "POST", body: { remove_data: delData }, timeout: 0 })
+                  .then(function() { toast(delData ? "已彻底清除(含数据目录)" : "已清除安装记录"); self.render(el); })
+                  .catch(function(e) { toast(e.message || "清除失败", "error", 6000); b.disabled = false; });
+              };
+              return;
+            }
             confirmDlg("卸载 <b>" + key + "</b>?容器将停止并移除(站点配置保留)。", { danger: true }).then(function(ok) {
               if (!ok) return;
               b.disabled = true;

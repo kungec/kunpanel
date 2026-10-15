@@ -6,16 +6,28 @@ const TOKEN_KEY = "kp_token";
 const USER_KEY = "kp_user";
 
 /* ---------- API ---------- */
+/* timeout:请求超时毫秒数,默认 30s;传 0 关闭超时(大文件上传等)。超时立即中断,
+   防止挂起请求占满浏览器同域 6 连接池导致整个面板假死。 */
 async function api(path, opts = {}) {
-  const { method = "GET", body = null, raw = false } = opts;
+  const { method = "GET", body = null, raw = false, timeout = 30000 } = opts;
   const headers = {};
   const token = localStorage.getItem(TOKEN_KEY);
   if (token) headers["Authorization"] = "Bearer " + token;
   if (body !== null && !(body instanceof FormData)) headers["Content-Type"] = "application/json";
-  const res = await fetch("/api/v1" + path, {
-    method, headers,
-    body: body instanceof FormData ? body : (body !== null ? JSON.stringify(body) : undefined),
-  });
+  const ctrl = timeout ? new AbortController() : null;
+  const tid = ctrl ? setTimeout(() => ctrl.abort(), timeout) : null;
+  let res;
+  try {
+    res = await fetch("/api/v1" + path, {
+      method, headers, signal: ctrl ? ctrl.signal : undefined,
+      body: body instanceof FormData ? body : (body !== null ? JSON.stringify(body) : undefined),
+    });
+  } catch (e) {
+    if (e && e.name === "AbortError") throw new Error("请求超时,请检查网络或稍后重试");
+    throw e;
+  } finally {
+    if (tid) clearTimeout(tid);
+  }
   let json = null;
   try { json = await res.json(); } catch (e) { /* ignore */ }
   if (res.status === 401) {
@@ -265,8 +277,6 @@ function modal({ title, body, footer, width = 540, onClose }) {
   _modalStack.push(close);
   return { el: box, close, doClose, setVeto: (fn) => (vetoClose = fn) };
 }
-function closeModal() { if (_modalStack.length) _modalStack[_modalStack.length - 1](); }
-
 /* ---------- 独立弹层:可叠加在已打开的 modal 之上 ----------
    modal() 复用同一个 #modal-box,二次开弹窗会顶掉前一个的 DOM;
    确认/输入类弹窗(常从列表弹窗内触发)必须用独立浮层。 */

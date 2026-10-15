@@ -37,6 +37,7 @@ func (s *Server) handleSystemQuick(w http.ResponseWriter, r *http.Request) {
 	OK(w, map[string]any{
 		"system":       snap,
 		"panel_name":   cfg.PanelName,
+		"version":      Version,
 	})
 }
 

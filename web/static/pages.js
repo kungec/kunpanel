@@ -7,11 +7,6 @@ const _pageTimers = [];
 function setPageTimer(fn, ms) { const id = setInterval(fn, ms); _pageTimers.push(id); return id; }
 function clearPageTimers() { _pageTimers.forEach(clearInterval); _pageTimers.length = 0; }
 
-/* 页面标题 + 主按钮的工具条 */
-function pageCard(title, rightBtnHTML) {
-  return '<div class="card-title">' + esc(title) + "<div>" + (rightBtnHTML || "") + "</div></div>";
-}
-
 /* ================= 概览 ================= */
 PAGES.dashboard = {
   title: "概览",
@@ -4123,7 +4118,7 @@ PAGES.files = {
       var fd = new FormData();
       fd.append("path", self.cwd);
       fd.append("file", list[i]);
-      try { await api("/files/upload", { method: "POST", body: fd }); ok++; }
+      try { await api("/files/upload", { method: "POST", body: fd, timeout: 0 }); ok++; }
       catch (e) { fail++; toast(list[i].name + ": " + e.message, "error", 5000); }
     }
     if (ok) toast("上传完成(" + ok + " 个)" + (fail ? ",失败 " + fail + " 个" : ""));

@@ -311,9 +311,9 @@ const App = {
     // 面板更新检测:服务端版本与页面启动时不同(说明部署了新版)则提示刷新,避免旧标签页一直跑旧 JS
     const verPoll = async () => {
       try {
-        const r = await fetch("/api/v1/dashboard", { headers: { "Authorization": "Bearer " + localStorage.getItem("kp_token") } });
+        const r = await fetch("/api/v1/system/quick", { headers: { "Authorization": "Bearer " + localStorage.getItem("kp_token") } });
         const d = (await r.json()).data || {};
-        const v = (d.panel && d.panel.version) || "";
+        const v = d.version || "";
         if (!v) return;
         const boot = sessionStorage.getItem("kp_boot_ver");
         if (!boot) { sessionStorage.setItem("kp_boot_ver", v); return; }
@@ -420,10 +420,12 @@ const App = {
   /* ---------- 顶栏监控 ---------- */
   startMonitor() {
     this.stopMonitor();
+    let busy = false;
     const tick = async () => {
-      if (document.visibilityState === "hidden") return; // 后台标签页暂停轮询
+      if (busy || document.visibilityState === "hidden") return; // 后台标签页暂停轮询;上一拍未返回不叠加
       // 概览页有自己的 timer 在拉 /dashboard,避免同一时刻双倍请求
       if (location.hash === "#/" || location.hash === "#/dashboard") return;
+      busy = true;
       try {
         const d = await api("/system/quick");
         const s = d.system;
@@ -437,9 +439,9 @@ const App = {
         if (d.panel_name) {
           this.panelName = d.panel_name;
           const lt = qs(".logo-text");
-          if (lt && lt.textContent !== d.panel.panelName) lt.textContent = d.panel.panelName;
+          if (lt && lt.textContent !== d.panel_name) lt.textContent = d.panel_name;
         }
-      } catch (e) { /* silent */ }
+      } catch (e) { /* silent */ } finally { busy = false; }
     };
     tick();
     this.monitorTimer = setInterval(tick, 5000);

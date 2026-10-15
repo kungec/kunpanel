@@ -732,13 +732,38 @@ func readAllLogs() []WafLogEntry {
 	return out
 }
 
-// tailLines 读文件最后 maxLines 行
+// tailLines 读文件最后 maxLines 行。只从文件尾部读估算字节量(单行按 600B 上限
+// 估算,超出部分自然被行裁剪丢掉),不再把整个日志文件(最大 5MB)读进内存——
+// 旧实现每次 WAF 日志请求都全量读文件 + split,高攻击流量下每请求数 MB 分配,
+// 是面板卡死的诱因之一。
 func tailLines(path string, maxLines int) []string {
-	b, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return nil
 	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return nil
+	}
+	readSize := int64(maxLines) * 600
+	if readSize > 8<<20 {
+		readSize = 8 << 20
+	}
+	if st.Size() < readSize {
+		readSize = st.Size()
+	}
+	if readSize == 0 {
+		return nil
+	}
+	b := make([]byte, readSize)
+	if _, err = f.ReadAt(b, st.Size()-readSize); err != nil {
+		return nil
+	}
 	parts := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	if readSize < st.Size() && len(parts) > 0 {
+		parts = parts[1:] // 首行大概率被截断,丢弃
+	}
 	if len(parts) > maxLines {
 		parts = parts[len(parts)-maxLines:]
 	}

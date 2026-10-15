@@ -61,31 +61,62 @@ func Version() string {
 }
 
 var (
-	infoMu    sync.Mutex
-	infoCache map[string]any
-	infoAt    time.Time
+	infoMu     sync.Mutex
+	infoCache  map[string]any
+	infoAt     time.Time
+	infoBusy   bool // 已有后台刷新在跑
 )
 
-// Info Docker 引擎概要。dashboard 被前端每 5 秒轮询,而每次计算要拉起
-// 3 个以上 docker CLI 子进程,故加 15 秒 TTL 缓存;容器增删后最多延迟
-// 15 秒反映到概览数字。
+// Info Docker 引擎概要。每次计算要拉起 3 个以上 docker CLI 子进程(每个超时 8s),
+// 旧实现持锁同步执行:docker 引擎一慢,所有 dashboard 请求串行排队最长 30s+,
+// 前端轮询堆积后表现为面板整体卡死。现在改为:缓存有效直接返回;过期但有旧值时
+// 立即返回旧值并由后台单飞协程刷新(请求路径零阻塞);仅首次无缓存才同步计算。
 func Info() map[string]any {
 	infoMu.Lock()
-	defer infoMu.Unlock()
 	if infoCache != nil && time.Since(infoAt) < 30*time.Second {
-		return infoCache
+		c := infoCache
+		infoMu.Unlock()
+		return c
 	}
+	if infoCache != nil {
+		// 有旧值:立即返回旧值,过期数据由后台单飞刷新,请求永不等待子进程
+		if !infoBusy {
+			infoBusy = true
+			go func() {
+				res := computeInfo()
+				infoMu.Lock()
+				infoCache = res
+				infoAt = time.Now()
+				infoBusy = false
+				infoMu.Unlock()
+			}()
+		}
+		c := infoCache
+		infoMu.Unlock()
+		return c
+	}
+	infoMu.Unlock()
+	// 冷启动首次调用:同步算一次(子进程自带 8s 超时,仅发生一次)
+	res := computeInfo()
+	infoMu.Lock()
+	infoCache = res
+	infoAt = time.Now()
+	infoMu.Unlock()
+	return res
+}
+
+// computeInfo 实际执行 docker CLI 采集,不持任何锁调用子进程。
+func computeInfo() map[string]any {
 	res := map[string]any{"installed": false, "running": false, "version": "", "images": 0, "containers": 0, "runningCount": 0}
 	cliOK, engineOK := Installed()
 	res["installed"] = cliOK
 	if !engineOK {
-		// CLI 在但引擎检查失败(如负载下子进程超时):只短缓存 3s,避免"未安装"假状态持续 30s
-		if !cliOK {
-			infoCache = res
-			infoAt = time.Now()
-		} else {
-			infoCache = res
+		// CLI 在但引擎检查失败(如负载下子进程超时):把时间戳回拨,
+		// 让下次请求立即触发重刷,避免"未安装"假状态持续 30s
+		if cliOK {
+			infoMu.Lock()
 			infoAt = time.Now().Add(-27 * time.Second)
+			infoMu.Unlock()
 		}
 		return res
 	}
@@ -110,8 +141,6 @@ func Info() map[string]any {
 		res["containers"] = total
 		res["runningCount"] = running
 	}
-	infoCache = res
-	infoAt = time.Now()
 	return res
 }
 

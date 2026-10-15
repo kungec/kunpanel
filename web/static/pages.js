@@ -5172,10 +5172,29 @@ PAGES.docker = {
     catch (e) { body.innerHTML = emptyState("warn", "加载失败", e.message); return; }
     if (!body.isConnected) return;
     if (!list.length) { body.innerHTML = emptyState("cube", "暂无数据"); return; }
-    body.innerHTML = '<div class="table-wrap"><table class="table"><thead><tr><th>名称</th><th>驱动</th><th>范围</th><th>详情</th></tr></thead><tbody>' +
+    var isVol = this.tab === "volumes";
+    body.innerHTML = '<div class="table-wrap"><table class="table"><thead><tr><th>名称</th><th>驱动</th><th>范围</th><th>详情</th>' + (isVol ? '<th style="width:90px">操作</th>' : "") + '</tr></thead><tbody>' +
       list.map(function(n) {
-        return "<tr><td><b>" + esc(n.name) + "</b></td><td>" + esc(n.driver || "-") + "</td><td>" + esc(n.scope || "-") + '</td><td class="mono fm-ellipsis" title="' + esc(n.detail || "") + '">' + esc(n.detail || "-") + "</td></tr>";
+        return "<tr><td><b>" + esc(n.name) + "</b></td><td>" + esc(n.driver || "-") + "</td><td>" + esc(n.scope || "-") + '</td><td class="mono fm-ellipsis" title="' + esc(n.detail || "") + '">' + esc(n.detail || "-") + "</td>" +
+          (isVol ? '<td><button class="btn btn-xs btn-danger-plain" data-vol-rm="' + esc(n.name) + '">删除</button></td>' : "") + "</tr>";
       }).join("") + "</tbody></table></div>";
+    if (isVol) {
+      qsa("[data-vol-rm]", body).forEach(function(b) {
+        b.onclick = async function() {
+          var name = b.getAttribute("data-vol-rm");
+          if (!(await confirmDlg("删除数据卷 <b class=mono>" + esc(name) + "</b>?<br><span style='font-size:12px;color:var(--text-3)'>卷内数据将<b>永久删除且不可恢复</b>;若卷仍被容器使用,删除会失败。</span>", { danger: true }))) return;
+          b.disabled = true;
+          try {
+            await api("/docker/volumes/remove", { method: "POST", body: { name: name } });
+            toast("数据卷已删除");
+            self.renderTab(body);
+          } catch (e) {
+            toast(e.message, "error", 8000);
+            b.disabled = false;
+          }
+        };
+      });
+    }
   },
   async tabContainers(body) {
     var self = this;

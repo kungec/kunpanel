@@ -158,7 +158,26 @@ func (s *Server) handleVolumes(w http.ResponseWriter, r *http.Request) {
 		Fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if list == nil {
+		list = []dockerx.NetResource{}
+	}
 	OK(w, list)
+}
+
+// handleVolumeRemove 删除数据卷(被容器占用时 docker 拒绝,错误透传)
+func (s *Server) handleVolumeRemove(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := readJSON(r, &req); err != nil || strings.TrimSpace(req.Name) == "" {
+		Fail(w, http.StatusBadRequest, "参数错误")
+		return
+	}
+	if err := dockerx.VolumeRemove(strings.TrimSpace(req.Name)); err != nil {
+		Fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	OK(w, nil)
 }
 
 // handleContainerInfo 读取容器详细信息(inspect)

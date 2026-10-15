@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -373,9 +374,25 @@ func Volumes() ([]NetResource, error) {
 			}
 			return ""
 		}
-		list = append(list, NetResource{Name: get("Name"), Driver: get("Driver")})
+		list = append(list, NetResource{Name: get("Name"), Driver: get("Driver"), Scope: get("Scope")})
 	}
 	return list, nil
+}
+
+// VolumeRemove 删除数据卷。被容器占用的卷 docker 会拒绝,错误原样返回给用户。
+func VolumeRemove(name string) error {
+	if !regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`).MatchString(name) {
+		return fmt.Errorf("卷名不合法")
+	}
+	out, err := util.RunWithTimeout(15*time.Second, "docker", "volume", "rm", name)
+	if err != nil {
+		msg := strings.TrimSpace(out)
+		if msg == "" {
+			msg = err.Error()
+		}
+		return fmt.Errorf("%s", msg)
+	}
+	return nil
 }
 
 // ComposeBin 查找可用的 compose 命令(docker compose v2 优先,回退 docker-compose)

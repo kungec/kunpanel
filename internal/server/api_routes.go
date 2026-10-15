@@ -43,6 +43,7 @@ func (s *Server) registerAPI() {
 	m.Handle("DELETE /api/v1/docker/images/{id}", wrap(http.HandlerFunc(s.handleImageRemove)))
 	m.Handle("GET /api/v1/docker/networks", wrap(http.HandlerFunc(s.handleNetworks)))
 	m.Handle("GET /api/v1/docker/volumes", wrap(http.HandlerFunc(s.handleVolumes)))
+	m.Handle("POST /api/v1/docker/volumes/remove", wrap(http.HandlerFunc(s.handleVolumeRemove)))
 
 	// 任务(安装/部署进度)
 	m.Handle("GET /api/v1/tasks", wrap(http.HandlerFunc(s.handleTaskList)))

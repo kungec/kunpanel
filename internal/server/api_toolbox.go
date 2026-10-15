@@ -166,6 +166,55 @@ func (s *Server) handleFwToggle(w http.ResponseWriter, r *http.Request) {
 	OK(w, fwmgmt.Detect())
 }
 
+// handleFwDockerPorts 容器端口管控:列出发布端口与封禁状态
+func (s *Server) handleFwDockerPorts(w http.ResponseWriter, r *http.Request) {
+	OK(w, fwmgmt.DockerPorts())
+}
+
+// handleFwDockerBlock 封禁/解封容器端口的外部访问(DOCKER-USER 链)
+func (s *Server) handleFwDockerBlock(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Port  string `json:"port"`
+		Proto string `json:"proto"`
+		Block bool   `json:"block"`
+	}
+	if err := readJSON(r, &req); err != nil || req.Port == "" {
+		Fail(w, http.StatusBadRequest, "参数错误")
+		return
+	}
+	var err error
+	if req.Block {
+		err = fwmgmt.DockerBlock(req.Port, req.Proto)
+	} else {
+		err = fwmgmt.DockerUnblock(req.Port, req.Proto)
+	}
+	if err != nil {
+		Fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	OK(w, fwmgmt.DockerPorts())
+}
+
+// handleFwPingStatus / handleFwPing ping(ICMP)开关
+func (s *Server) handleFwPingStatus(w http.ResponseWriter, r *http.Request) {
+	OK(w, map[string]bool{"ping": fwmgmt.PingStatus()})
+}
+
+func (s *Server) handleFwPing(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		On bool `json:"on"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		Fail(w, http.StatusBadRequest, "参数错误")
+		return
+	}
+	if err := fwmgmt.SetPing(req.On); err != nil {
+		Fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	OK(w, map[string]bool{"ping": req.On})
+}
+
 // handleFwInstall 一键安装防火墙(异步任务)
 func (s *Server) handleFwInstall(w http.ResponseWriter, r *http.Request) {
 	var req struct {

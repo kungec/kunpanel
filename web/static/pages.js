@@ -4373,7 +4373,11 @@ PAGES.firewall = {
     if (st.kind !== "none") {
       html += '<div class="fw-add"><input class="input mono" id="fw-port" placeholder="端口,如 80 / 443 / 4000:4010 / 53/udp" style="width:280px">' +
         '<input class="input" id="fw-comment" placeholder="备注(可选)" style="width:200px">' +
-        '<button class="btn btn-primary" id="fw-allow">' + I("plus") + " 放行端口</button></div>";
+        '<button class="btn btn-primary" id="fw-allow">' + I("plus") + " 放行端口</button></div>" +
+        '<div class="fw-add" style="margin-top:-8px"><span class="help" style="margin:0">常用:</span>' +
+        [["80/tcp", "HTTP"], ["443/tcp", "HTTPS"], ["22/tcp", "SSH"], ["3306/tcp", "MySQL"], ["6379/tcp", "Redis"], ["8080/tcp", "8080"]].map(function(q) {
+          return '<span class="tag tag-info" style="cursor:pointer" data-fw-quick="' + q[0] + '">' + q[1] + " " + q[0] + "</span>";
+        }).join("") + "</div>";
       html += '<div class="table-wrap"><table class="table"><thead><tr>' +
         "<th>端口 / 规则</th><th style=\"width:90px\">协议</th><th style=\"width:100px\">动作</th><th style=\"width:150px\">来源</th><th style=\"width:100px\">操作</th></tr></thead><tbody>";
       var rules = st.rules || [];
@@ -4394,18 +4398,85 @@ PAGES.firewall = {
       });
       html += "</tbody></table></div>";
     }
+
+    // ping(ICMP)开关
+    html += '<div class="fw-add" style="margin-top:4px;align-items:center">' +
+      '<span class="help" style="margin:0">ICMP Ping 响应:</span><span id="fw-ping-state" class="help" style="margin:0">检测中…</span>' +
+      '<button class="btn btn-sm btn-plain" id="fw-ping-toggle">切换</button>' +
+      '<span class="help" style="margin:0">禁止 ping 可降低被扫描发现的概率(不影响正常服务;部分机房边缘设备会代答 ICMP,表现为外部仍可 ping 但内核已不响应)</span></div>';
+
+    // 容器端口管控(DOCKER-USER)
+    html += '<div id="fw-docker-section"></div>';
     body.innerHTML = html;
-    var allowBtn = qs("#fw-allow", body);
-    if (allowBtn) allowBtn.onclick = async function() {
-      var port = (qs("#fw-port", body).value || "").trim();
+
+    // ping 状态加载与切换
+    (async function() {
+      try {
+        var d = await api("/firewall/ping");
+        var el2 = qs("#fw-ping-state", body);
+        if (el2) el2.innerHTML = d.ping ? '<b style="color:var(--success,#16a34a)">允许</b>' : '<b style="color:var(--danger)">已禁止</b>';
+        var btn = qs("#fw-ping-toggle", body);
+        if (btn) btn.onclick = async function() {
+          try {
+            var cur = (await api("/firewall/ping")).ping;
+            var nd = await api("/firewall/ping", { method: "POST", body: { on: !cur } });
+            toast(nd.ping ? "已允许 ping" : "已禁止 ping");
+            btn.previousElementSibling && (btn.previousElementSibling.innerHTML = nd.ping ? '<b style="color:var(--success,#16a34a)">允许</b>' : '<b style="color:var(--danger)">已禁止</b>');
+          } catch (e) { toast(e.message, "error"); }
+        };
+      } catch (e) {}
+    })();
+
+    // 容器端口管控(DOCKER-USER)
+    (async function() {
+      var sec = qs("#fw-docker-section", body);
+      if (!sec) return;
+      var dp;
+      try { dp = await api("/firewall/docker-ports"); } catch (e) { sec.innerHTML = ""; return; }
+      if (!dp.available) { sec.innerHTML = ""; return; }
+      var h = '<div class="card" style="margin-top:14px"><div class="card-title"><span>容器端口管控</span><span class="help" style="margin:0">Docker 端口绕过系统防火墙,此处经 DOCKER-USER 链真正拦截外部访问;本机/内网访问不受影响;规则在面板重启后自动重放</span></div>';
+      h += '<div class="table-wrap"><table class="table"><thead><tr><th>容器</th><th>宿主机端口</th><th>协议</th><th style="width:110px">公网访问</th><th style="width:100px">操作</th></tr></thead><tbody>';
+      if (!dp.ports || !dp.ports.length) {
+        h += '<tr><td colspan="5" style="text-align:center;padding:26px;color:var(--text-3)">暂无映射到宿主机的容器端口</td></tr>';
+      }
+      (dp.ports || []).forEach(function(x) {
+        h += "<tr><td><b>" + esc(x.container) + "</b></td><td class=\"mono\">" + esc(x.host_port) + "</td><td>" + esc(x.proto.toUpperCase()) + "</td>" +
+          '<td>' + (x.blocked
+            ? '<span class="tag tag-danger">已封禁</span>'
+            : '<span class="tag tag-success">开放</span>') + "</td>" +
+          '<td><button class="btn btn-xs ' + (x.blocked ? "btn-plain" : "btn-danger-plain") + '" data-dfw="' + esc(x.host_port) + '" data-proto="' + esc(x.proto) + '" data-block="' + (!x.blocked) + '">' +
+          (x.blocked ? "解封" : "封禁公网") + "</button></td></tr>";
+      });
+      h += "</tbody></table></div></div>";
+      sec.innerHTML = h;
+      qsa("[data-dfw]", sec).forEach(function(b) {
+        b.onclick = async function() {
+          var port = b.getAttribute("data-dfw"), proto = b.getAttribute("data-proto");
+          var block = b.getAttribute("data-block") === "true";
+          if (block && !(await confirmDlg("确定<b>封禁</b>端口 " + esc(port) + " 的公网访问吗?<br><span style='font-size:12px;color:var(--text-3)'>本机与内网访问不受影响;规则持久化,面板重启自动重放。</span>", { danger: true }))) return;
+          try {
+            await api("/firewall/docker-block", { method: "POST", body: { port: port, proto: proto, block: block } });
+            toast(block ? "端口 " + port + " 已封禁公网访问" : "端口 " + port + " 已解封");
+            self.fetch(el);
+          } catch (e) { toast(e.message, "error"); }
+        };
+      });
+    })();
+    var doAllow = async function(port, comment) {
       if (!port) { toast("请输入端口", "error"); return; }
-      var comment = (qs("#fw-comment", body).value || "").trim();
       try {
         await api("/firewall/allow", { method: "POST", body: { port: port, comment: comment } });
         toast("端口 " + port + " 已放行");
         self.fetch(el);
       } catch (e) { toast(e.message, "error"); }
     };
+    var allowBtn = qs("#fw-allow", body);
+    if (allowBtn) allowBtn.onclick = async function() {
+      await doAllow((qs("#fw-port", body).value || "").trim(), (qs("#fw-comment", body).value || "").trim());
+    };
+    qsa("[data-fw-quick]", body).forEach(function(q) {
+      q.onclick = function() { doAllow(q.getAttribute("data-fw-quick"), "常用端口"); };
+    });
     qsa("[data-fw-del]", body).forEach(function(b) {
       b.onclick = async function() {
         var port = b.getAttribute("data-fw-del");

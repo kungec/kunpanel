@@ -18,6 +18,7 @@ import (
 
 	"kunpanel/internal/config"
 	"kunpanel/internal/cronx"
+	"kunpanel/internal/fwmgmt"
 	"kunpanel/internal/monhist"
 	"kunpanel/internal/panelupdate"
 	"kunpanel/internal/plugins"
@@ -104,6 +105,12 @@ func Run(o Options) error {
 	}
 
 	srv := server.New(server.Options{Version: o.Version, WebFS: webSub})
+
+	// 容器端口封禁规则重放(DOCKER-USER 重启后丢失;需 docker 就绪,稍延迟)
+	go func() {
+		time.Sleep(15 * time.Second)
+		fwmgmt.DockerReapply()
+	}()
 
 	// 面板在线更新:定时检查 GitHub 新版本,发现即写消息中心
 	panelupdate.SetCurrent(o.Version)

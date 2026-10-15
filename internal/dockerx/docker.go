@@ -2,6 +2,7 @@ package dockerx
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -1027,6 +1028,18 @@ func ComposeStream(dir string, w io.Writer, args ...string) error {
 	full = append(full, "--project-directory", dir)
 	full = append(full, args...)
 	return util.RunWithTimeoutWriter(20*time.Minute, w, full[0], full[1:]...)
+}
+
+// ExecInStdin 在容器内执行命令,通过 stdin 传入数据(用于写入容器内文件,避免超长命令行)
+func ExecInStdin(container string, data []byte, cmd ...string) error {
+	full := append([]string{"exec", "-i", container}, cmd...)
+	c := exec.Command("docker", full...)
+	c.Stdin = bytes.NewReader(data)
+	out, err := c.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%v: %s", err, tail(string(out), 300))
+	}
+	return nil
 }
 
 // ExecIn 在容器内执行命令并返回输出

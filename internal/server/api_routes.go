@@ -234,6 +234,8 @@ func (s *Server) registerAPI() {
 	m.Handle("GET /api/v1/waf", wrap(http.HandlerFunc(s.handleWafInfo)))
 	m.Handle("POST /api/v1/waf/settings", wrap(http.HandlerFunc(s.handleWafSettings)))
 	m.Handle("GET /api/v1/waf/logs", wrap(http.HandlerFunc(s.handleWafLogs)))
+	m.Handle("GET /api/v1/waf/apache", wrap(http.HandlerFunc(s.handleWafApacheGet)))
+	m.Handle("POST /api/v1/waf/apache", wrap(http.HandlerFunc(s.handleWafApacheSet)))
 	m.Handle("POST /api/v1/waf/logs/clear", wrap(http.HandlerFunc(s.handleWafLogsClear)))
 	m.Handle("GET /api/v1/waf/stats", wrap(http.HandlerFunc(s.handleWafStats)))
 

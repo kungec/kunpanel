@@ -127,3 +127,28 @@ func (s *Server) handleWafLogsClear(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleWafStats(w http.ResponseWriter, r *http.Request) {
 	OK(w, plugins.WafStats())
 }
+
+// ---------- WAF Apache 防护(PHP 容器 ModSecurity) ----------
+
+func (s *Server) handleWafApacheGet(w http.ResponseWriter, r *http.Request) {
+	OK(w, plugins.ApacheWafStatus())
+}
+
+func (s *Server) handleWafApacheSet(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		Fail(w, http.StatusBadRequest, "参数错误")
+		return
+	}
+	if !wafInstalledNow() {
+		Fail(w, http.StatusBadRequest, "WAF 插件未安装")
+		return
+	}
+	if err := plugins.ApacheWafToggle(req.Enabled); err != nil {
+		Fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	OK(w, plugins.ApacheWafStatus())
+}

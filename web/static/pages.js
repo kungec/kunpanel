@@ -2759,6 +2759,8 @@ PAGES.plugins = {
       '<textarea class="textarea mono" id="waf-custom-rules" rows="5" style="flex:1;max-width:520px;font-size:12px">' +
       esc((st.custom_rules || []).map(function(c) { return c.pattern + " | " + (c.label || ""); }).join("\n")) + "</textarea></div></div>" +
       '<div class="waf-set-sec" data-sec="enhance"><div class="waf-sec-head">' + I("bolt") + "增强防护</div>" +
+      '<div class="settings-row" style="margin-bottom:12px"><label style="align-items:flex-start;min-width:170px">Apache 防护(PHP 容器)<div class="settings-hint" style="margin:0">在 PHP 运行时容器内启用 ModSecurity:保护直连 Apache 的流量(IP/UA 黑白名单、CC、敏感文件、自定义规则)。面板站点流量默认先经 Nginx WAF(全量规则),此项为纵深防护,可选。</div></label>' +
+      '<div style="display:flex;align-items:center;gap:10px"><span class="switch" id="sw-apache"></span><span class="settings-hint" id="apache-status" style="margin:0">检测中…</span></div></div>' +
       '<div class="waf-rule-grid">' +
       '<div class="waf-rule-item"><label><b>拦截空 UA 请求</b><span class="settings-hint">正规浏览器必有 User-Agent,空 UA 多为脚本工具</span></label><span class="switch' + (st.empty_ua_block ? " on" : "") + '" id="sw-emptyua"></span></div>' +
       '<div class="waf-rule-item"><label><b>拦截 HTTP/1.0 请求</b><span class="settings-hint">现代浏览器均用 HTTP/1.1+,1.0 多为攻击工具</span></label><span class="switch' + (st.http10_block ? " on" : "") + '" id="sw-http10"></span></div>' +
@@ -2822,6 +2824,31 @@ PAGES.plugins = {
     bindSwitch("#sw-emptyua"); bindSwitch("#sw-http10"); bindSwitch("#sw-autoban");
     bindSwitch("#sw-dirscan"); bindSwitch("#sw-mwl"); bindSwitch("#sw-method");
     bindSwitch("#sw-spider"); bindSwitch("#sw-spiderdns");
+    // Apache 防护(独立开关,立即生效,不随下方保存)
+    (async function() {
+      var sw = qs("#sw-apache", body), st = qs("#apache-status", body);
+      if (!sw || !st) return;
+      try {
+        var d = await api("/waf/apache");
+        if (!d.available) { sw.style.display = "none"; st.textContent = "未检测到 PHP 运行时容器"; return; }
+        sw.classList.toggle("on", !!d.enabled);
+        st.textContent = d.enabled ? "ModSecurity 已启用" : "未启用";
+        sw.onclick = async function() {
+          var on = !sw.classList.contains("on");
+          sw.classList.toggle("on", on);
+          st.textContent = on ? "启用中…" : "禁用中…";
+          try {
+            var r2 = await api("/waf/apache", { method: "POST", body: { enabled: on } });
+            st.textContent = r2.enabled ? "ModSecurity 已启用" : "未启用";
+            toast(on ? "Apache 防护已启用" : "Apache 防护已关闭", on ? "success" : "info");
+          } catch (e2) {
+            sw.classList.toggle("on", !on);
+            st.textContent = on ? "未启用" : "ModSecurity 已启用";
+            toast(e2.message, "error", 6000);
+          }
+        };
+      } catch (e) { st.textContent = "状态获取失败"; }
+    })();
     qsa("[data-mode]", body).forEach(function(c) {
       c.onclick = function() {
         qsa("[data-mode]", body).forEach(function(x) { x.classList.remove("active"); });

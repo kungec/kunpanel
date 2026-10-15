@@ -620,7 +620,12 @@ func SaveWafSettings(s WafSettings) error {
 	if c.RuleGroups == nil {
 		c.RuleGroups = DefaultRuleGroups()
 	}
-	return saveWafConfig(c)
+	if err := saveWafConfig(c); err != nil {
+		return err
+	}
+	// Apache(ModSecurity)防护已启用时,同步最新规则
+	ApplyApacheWafRules()
+	return nil
 }
 
 // ---------- 安装 / 卸载 ----------

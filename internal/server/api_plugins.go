@@ -1,6 +1,8 @@
 package server
 
 import (
+	"sync"
+	"time"
 	"fmt"
 	"io"
 	"net/http"
@@ -42,7 +44,22 @@ func (s *Server) handlePluginAction(w http.ResponseWriter, r *http.Request) {
 	OK(w, t)
 }
 
+var (
+	wafInfoMu    sync.Mutex
+	wafInfoCache map[string]any
+	wafInfoAt    time.Time
+)
+
 func (s *Server) handleWafInfo(w http.ResponseWriter, r *http.Request) {
+	// 3s 缓存:stats 读日志文件 + 状态检测含多次 exec,高频轮询下开销集中
+	wafInfoMu.Lock()
+	if wafInfoCache != nil && time.Since(wafInfoAt) < 3*time.Second {
+		c := wafInfoCache
+		wafInfoMu.Unlock()
+		OK(w, c)
+		return
+	}
+	wafInfoMu.Unlock()
 	list := plugins.List()
 	var waf *plugins.Info
 	for i := range list {
@@ -54,12 +71,17 @@ func (s *Server) handleWafInfo(w http.ResponseWriter, r *http.Request) {
 		OK(w, map[string]any{"installed": false})
 		return
 	}
-	OK(w, map[string]any{
+	out := map[string]any{
 		"installed": true,
 		"active":    waf.Active,
 		"settings":  plugins.GetWafSettings(),
 		"stats":     plugins.WafStats(),
-	})
+	}
+	wafInfoMu.Lock()
+	wafInfoCache = out
+	wafInfoAt = time.Now()
+	wafInfoMu.Unlock()
+	OK(w, out)
 }
 
 func (s *Server) handleWafSettings(w http.ResponseWriter, r *http.Request) {

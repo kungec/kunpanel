@@ -156,7 +156,29 @@ func RewriteAllConfs() error {
 }
 
 // DetectNginx 探测可用的 nginx:面板管理的 openresty/nginx 容器 > 宿主机 nginx
+var (
+	ngDetMu      sync.Mutex
+	ngDetCache   ReloadMode
+	ngDetCacheAt time.Time
+)
+
+// DetectNginx 检测网关(容器/宿主机),带 5s 缓存避免高频 docker exec
 func DetectNginx() ReloadMode {
+	ngDetMu.Lock()
+	if time.Since(ngDetCacheAt) < 5*time.Second {
+		m := ngDetCache
+		ngDetMu.Unlock()
+		return m
+	}
+	ngDetMu.Unlock()
+	m := detectNginxReal()
+	ngDetMu.Lock()
+	ngDetCache, ngDetCacheAt = m, time.Now()
+	ngDetMu.Unlock()
+	return m
+}
+
+func detectNginxReal() ReloadMode {
 	// 面板管理的容器(应用商店的 OpenResty 与 Nginx 均可)
 	for _, name := range []string{"kun-openresty", "kun-nginx"} {
 		if out, err := exec.Command("docker", "ps", "--filter", "name="+name, "--format", "{{.ID}}").CombinedOutput(); err == nil && strings.TrimSpace(string(out)) != "" {

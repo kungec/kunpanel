@@ -7,15 +7,47 @@ package plugins
 
 import (
 	"fmt"
+	"sync"
 	"strings"
+	"time"
 
 	"kunpanel/internal/dockerx"
 )
 
 const apacheWafContainer = "kun-php"
 
-// ApacheWafStatus Apache 防护状态(供 API/前端)
+var (
+	apacheStatusMu    sync.Mutex
+	apacheStatusCache map[string]any
+	apacheStatusAt    time.Time
+)
+
+// ApacheWafStatus Apache 防护状态(供 API/前端),5s 缓存
 func ApacheWafStatus() map[string]any {
+	apacheStatusMu.Lock()
+	if apacheStatusCache != nil && time.Since(apacheStatusAt) < 5*time.Second {
+		c := apacheStatusCache
+		apacheStatusMu.Unlock()
+		return c
+	}
+	apacheStatusMu.Unlock()
+
+	out := apacheWafStatusReal()
+	apacheStatusMu.Lock()
+	apacheStatusCache = out
+	apacheStatusAt = time.Now()
+	apacheStatusMu.Unlock()
+	return out
+}
+
+// InvalidateApacheStatus 状态变更(启停/规则写入)后调用
+func InvalidateApacheStatus() {
+	apacheStatusMu.Lock()
+	apacheStatusAt = time.Time{}
+	apacheStatusMu.Unlock()
+}
+
+func apacheWafStatusReal() map[string]any {
 	out := map[string]any{
 		"available": false, "installed": false, "enabled": false,
 	}
@@ -143,7 +175,9 @@ func ApacheWafToggle(enabled bool) error {
 		}
 	}
 	conf := GenerateApacheWafConf(loadWafConfig().WafSettings)
-	return apacheWafWriteRules(conf, enabled)
+	err := apacheWafWriteRules(conf, enabled)
+	defer InvalidateApacheStatus()
+	return err
 }
 
 // apacheWafWriteRules 写规则文件并生效;enabled=false 时引擎 Off(规则保留)

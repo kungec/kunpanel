@@ -120,10 +120,12 @@ func UpgradeNginxForWaf(w io.Writer) error {
 
 // gatewayContainer 当前网站网关容器名(kun-openresty 或 kun-nginx),空串表示未运行
 func gatewayContainer() string {
-	if dockerx.ContainerRunning("kun-openresty") {
+	// 批量快照(3s 缓存),替代逐容器 exec
+	states := dockerx.ContainerStates()
+	if states["kun-openresty"] == "running" {
 		return "kun-openresty"
 	}
-	if dockerx.ContainerRunning("kun-nginx") {
+	if states["kun-nginx"] == "running" {
 		return "kun-nginx"
 	}
 	return ""

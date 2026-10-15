@@ -100,6 +100,39 @@ const (
 	listTTL   = 5 * time.Second
 )
 
+// StartCacheRefresher 后台主动刷新快照缓存:让用户点击容器页/镜像页时
+// 永远命中热缓存(SWR 仅在过期后首个请求等待,主动刷新消除该等待)
+func StartCacheRefresher(stop <-chan struct{}) {
+	go func() {
+		time.Sleep(2 * time.Second)
+		tick := time.NewTicker(3 * time.Second)
+		defer tick.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-tick.C:
+				st := containerStatesReal()
+				dockerSnapMu.Lock()
+				statesCache, statesCacheAt = st, time.Now()
+				dockerSnapMu.Unlock()
+				cl, err := containersReal()
+				if err == nil {
+					dockerSnapMu.Lock()
+					containersCache, containersCacheAt = cl, time.Now()
+					dockerSnapMu.Unlock()
+				}
+				imgs, err := imagesReal()
+				if err == nil {
+					dockerSnapMu.Lock()
+					imagesCache, imagesCacheAt = imgs, time.Now()
+					dockerSnapMu.Unlock()
+				}
+			}
+		}
+	}()
+}
+
 // InvalidateDockerCache 容器/镜像/应用操作成功后调用,下次读取立即取新数据
 func InvalidateDockerCache() {
 	dockerSnapMu.Lock()

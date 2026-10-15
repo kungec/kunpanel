@@ -2737,6 +2737,16 @@ PAGES.plugins = {
       '<input class="input" id="autoban-threshold" type="number" value="' + (st.auto_ban_threshold || 50) + '" style="max-width:120px" title="24 小时违规次数阈值"><span class="help" style="margin:0">次(24h)</span>' +
       '<button class="btn btn-sm btn-plain" id="autoban-clear">清空清单</button></div>' +
       '<div class="settings-row"><label>自动黑名单</label><div class="help" style="margin:0" id="autoban-list">加载中…</div></div></div>' +
+      '<div class="settings-section"><div class="settings-section-title">敏感路径限速<span class="help" style="margin:0">对指定 URL 前缀做独立 IP 频率限制(防暴力破解登录/API);每行一条,格式:路径 | 限制次数 | 窗口秒</span></div>' +
+      '<textarea class="textarea mono" id="url-rules" rows="5" style="max-width:520px;font-size:12px">' +
+      esc((st.url_rate_rules || []).map(function(r) { return r.path + " | " + r.limit + " | " + (r.window || 60); }).join("\n")) + "</textarea></div>" +
+      '<div class="settings-section"><div class="settings-section-title">目录扫描防御<span class="help" style="margin:0">窗口期内不同 URI 数量超阈值自动封禁(防目录暴力枚举/扫描器)</span></div>' +
+      '<div class="settings-row"><label style="min-width:170px">启用目录扫描防御</label><label class="radio-line"><input type="checkbox" id="dirscan-enable" ' + (st.dirscan_enable ? "checked" : "") + "> 启用</label></div>" +
+      '<div class="settings-row"><label style="min-width:170px">URI 数量阈值</label><input class="input" id="dirscan-threshold" type="number" value="' + (st.dirscan_threshold || 30) + '" style="max-width:120px"><span class="help" style="margin:0">个 / 窗口</span></div>' +
+      '<div class="settings-row"><label style="min-width:170px">统计窗口(秒)</label><input class="input" id="dirscan-window" type="number" value="' + (st.dirscan_window || 60) + '" style="max-width:120px"></div></div>' +
+      '<div class="settings-section"><div class="settings-section-title">HTTP 方法白名单<span class="help" style="margin:0">仅允许列表内方法,其余返回 405(比黑名单更安全);每行一个,大写</span></div>' +
+      '<div class="settings-row"><label style="min-width:170px">启用方法白名单</label><label class="radio-line"><input type="checkbox" id="mwl-enable" ' + (st.method_whitelist_enable ? "checked" : "") + "> 启用</label></div>" +
+      '<textarea class="textarea mono" id="mwl-list" rows="4" style="max-width:520px;font-size:12px">' + esc((st.method_whitelist || ["GET","POST","HEAD","OPTIONS"]).join("\n")) + "</textarea></div>" +
       '<div class="settings-section"><div class="settings-section-title">搜索引擎蜘蛛白名单<span class="help" style="margin:0">启用的爬虫完全跳过检测:CC 人机验证、临时封禁都不会针对它们,保护 SEO 收录</span></div>' +
       '<div class="settings-row"><label style="min-width:170px">启用蜘蛛白名单</label><label class="radio-line"><input type="checkbox" id="spider-enable" ' + (st.spider_white_enable ? "checked" : "") + "> 启用</label></div>" +
       '<div class="settings-row"><label style="align-items:flex-start">UA 特征(正则)<div class="settings-hint" style="margin:0">每行一条,匹配 User-Agent 即放行</div></label>' +
@@ -2777,6 +2787,16 @@ PAGES.plugins = {
       self.st.method_block_enable = qs("#method-enable", body).checked;
       self.st.empty_ua_block = qs("#emptyua-block", body).checked;
       self.st.http10_block = qs("#http10-block", body).checked;
+      self.st.url_rate_rules = (qs("#url-rules", body).value || "").split("\n").map(function(line) {
+        var parts = line.split("|").map(function(x) { return x.trim(); });
+        if (!parts[0]) return null;
+        return { path: parts[0], limit: Number(parts[1]) || 10, window: Number(parts[2]) || 60 };
+      }).filter(Boolean);
+      self.st.dirscan_enable = qs("#dirscan-enable", body).checked;
+      self.st.dirscan_threshold = Number(qs("#dirscan-threshold", body).value) || 30;
+      self.st.dirscan_window = Number(qs("#dirscan-window", body).value) || 60;
+      self.st.method_whitelist_enable = qs("#mwl-enable", body).checked;
+      self.st.method_whitelist = (qs("#mwl-list", body).value || "").split("\n").map(function(x) { return x.trim().toUpperCase(); }).filter(Boolean);
       // 自动封禁清单加载/清空
       (async function() {
         try {

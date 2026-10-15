@@ -356,7 +356,107 @@ local function cc_captcha_verify(conf)
 end
 
 -- CC 防护
+-- ===== 敏感路径限速:对指定 URL 前缀做独立 IP 频率限制 =====
+local function url_rate_check(conf)
+    local rules = conf.url_rate_rules
+    if type(rules) ~= "table" then return end
+    local dict = ngx.shared.kunwaf_cc
+    if not dict then return end
+    for _, rule in ipairs(rules) do
+        if rule.path and rule.limit and rule.limit > 0 then
+            local prefix = rule.path
+            if string.sub(uri, 1, #prefix) == prefix then
+                local window = tonumber(rule.window) or 60
+                local bucket = math.floor(ngx.now() / window)
+                local key = "ur:" .. ip .. ":" .. bucket .. ":" .. prefix
+                local newval = dict:incr(key, 1, 0, window * 3)
+                if newval and newval > (tonumber(rule.limit) or 10) then
+                    write_log("url_rate", prefix .. " " .. newval .. "/" .. window .. "s")
+                    ngx.status = 429
+                    ngx.header.content_type = "text/plain"
+                    ngx.say("429 Too Many Requests")
+                    return ngx.exit(429)
+                end
+                break
+            end
+        end
+    end
+end
+
+-- ===== 目录扫描防御:统计窗口内不同 URI 数量,超高即判定为暴力枚举 =====
+local function dirscan_check(conf)
+    if not conf.dirscan_enable then return end
+    local dict = ngx.shared.kunwaf_cc
+    if not dict then return end
+    local window = tonumber(conf.dirscan_window) or 60
+    local threshold = tonumber(conf.dirscan_threshold) or 30
+    local bucket = math.floor(ngx.now() / window)
+    local base = "ds:" .. ip .. ":" .. bucket
+    local uri_key = base .. ":" .. ngx.md5(uri)
+    if not dict:get(uri_key) then
+        dict:set(uri_key, 1, window * 3)
+        local cnt_key = base .. ":count"
+        local newval = dict:incr(cnt_key, 1, 0, window * 3)
+        if newval and newval > threshold then
+            write_log("dirscan", newval .. " uris/" .. window .. "s")
+            if conf.mode ~= "monitor" then
+                local bd = ngx.shared.kunwaf_ban
+                if bd and conf.ip_ban_enable then
+                    bd:set("b:" .. ip, true, conf.ip_ban_duration or 600)
+                end
+                ngx.status = 403
+                ngx.header.content_type = "text/plain"
+                ngx.say("403 Forbidden (scanning detected)")
+                return ngx.exit(403)
+            end
+        end
+    end
+end
+
+-- ===== HTTP 方法白名单 =====
+local function method_whitelist_check(conf)
+    if not conf.method_whitelist_enable then return end
+    local wl = conf.method_whitelist
+    if type(wl) ~= "table" or #wl == 0 then return end
+    local method = ngx.req.get_method()
+    for _, m in ipairs(wl) do
+        if method == m then return end
+    end
+    write_log("method_wl", method)
+    ngx.status = 405
+    ngx.header.content_type = "text/plain"
+    ngx.say("405 Method Not Allowed")
+    return ngx.exit(405)
+end
+
 local function cc_check(conf)
+    if not conf.cc_enable then return end
+    local dict = ngx.shared.kunwaf_cc
+    if not dict then return end
+    local window = tonumber(conf.cc_interval) or 10
+    local limit = tonumber(conf.cc_limit) or 120
+    local bucket = math.floor(ngx.now() / window)
+    local key = ip .. "|" .. bucket
+    local newval = dict:incr(key, 1, 0, window * 3)
+    if newval and newval > limit then
+        write_log("cc", newval .. "/" .. window .. "s")
+        if conf.mode == "alert" then return end
+        local ccmode = conf.cc_mode or "rate"
+        if ccmode ~= "rate" then
+            if cc_cookie_valid(conf) then return end
+            return serve_challenge(conf, ccmode)
+        end
+        ngx.status = 403
+        ngx.header.content_type = "text/plain"
+        ngx.say("403 Too Many Requests")
+        return ngx.exit(403)
+    end
+end
+
+local function url_rate_check(conf)
+dirscan_check(conf)
+method_whitelist_check(conf)
+cc_check(conf)
     if not conf.cc_enable then return end
     local dict = ngx.shared.kunwaf_cc
     if not dict then return end

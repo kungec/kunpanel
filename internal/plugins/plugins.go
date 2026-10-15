@@ -139,11 +139,27 @@ type WafSettings struct {
 	// 蜜罐诱捕:访问 honeypot_paths 中路径(如假后台)的 IP 立即长期封禁
 	HoneypotEnable bool     `json:"honeypot_enable"`
 	HoneypotPaths  []string `json:"honeypot_paths"`
+	// 敏感路径限速:对指定 URL 前缀做独立 IP 频率限制(防暴力破解登录/API)
+	URLRateRules []URLRateRule `json:"url_rate_rules"`
+	// 目录扫描防御:窗口内不同 URI 数量超过阈值自动封禁
+	DirscanEnable    bool `json:"dirscan_enable"`
+	DirscanThreshold int  `json:"dirscan_threshold"` // 窗口内不同 URI 数量阈值
+	DirscanWindow    int  `json:"dirscan_window"`    // 窗口秒数
+	// HTTP 方法白名单:仅允许列表内方法(比黑名单更安全)
+	MethodWlEnable bool     `json:"method_whitelist_enable"`
+	MethodWlList   []string `json:"method_whitelist"`
 }
 
 // DefaultRuleGroups 默认规则组(全部启用)
 func DefaultRuleGroups() map[string]bool {
 	return map[string]bool{"sql": true, "xss": true, "lfi": true, "cmd": true, "scan": true, "webshell": true}
+}
+
+// URLRateRule 敏感路径限速规则
+type URLRateRule struct {
+	Path   string `json:"path"`   // URL 前缀,如 /login
+	Limit  int    `json:"limit"`  // 窗口内最大请求次数
+	Window int    `json:"window"` // 窗口秒数
 }
 
 // CustomRule 用户自定义检测规则
@@ -370,6 +386,12 @@ func saveWafConfig(c *wafConfigFile) error {
 	}
 	if c.CustomRules == nil {
 		c.CustomRules = []CustomRule{}
+	}
+	if c.URLRateRules == nil {
+		c.URLRateRules = []URLRateRule{}
+	}
+	if c.MethodWlList == nil {
+		c.MethodWlList = []string{}
 	}
 	if c.SiteOff == nil {
 		c.SiteOff = []string{}

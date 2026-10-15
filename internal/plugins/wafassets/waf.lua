@@ -19,6 +19,7 @@ local RULE_LABELS = {
     sensitive = "敏感文件", method = "危险方法", custom = "自定义规则",
     empty_ua = "空 UA 拦截", http10 = "HTTP/1.0 拦截", slider = "滑块验证",
     smuggle = "请求走私", honeypot = "蜜罐诱捕", webshell = "Webshell 木马",
+    encoding = "编码攻击", upload_block = "危险上传",
 }
 
 local MODE_LABELS = { block = "拦截", alert = "告警", monitor = "监控" }
@@ -677,13 +678,46 @@ add_target(uri)
 add_target(ngx.var.args or "")
 add_target(ua)
 add_target(ngx.var.http_referer or "")
+
+-- ===== 编码攻击检测:NULL 字节/双重编码/Unicode 混淆/超长编码 =====
+-- 检测目标:URI 与参数(最常被攻击的位置)
+local raw_uri = ngx.var.request_uri or ""
+if raw_uri:find("%00", 1, true) or raw_uri:find("\x00", 1, true) then
+    write_log("encoding", "null byte in URI")
+    block_or_alert(conf, "encoding", "NULL byte: " .. string.sub(raw_uri, 1, 200))
+elseif raw_uri:find("%25", 1, true) then
+    write_log("encoding", "double encoding in URI")
+    block_or_alert(conf, "encoding", "double-encode: " .. string.sub(raw_uri, 1, 200))
+end
+
 local method = ngx.req.get_method()
 if method == "POST" or method == "PUT" then
     pcall(function()
         ngx.req.read_body()
         local body = ngx.req.get_body_data()
-        if body and #body <= BODY_MAX then targets[#targets + 1] = body end
+        if body and #body <= BODY_MAX then
+            -- 危险上传文件名拦截:.php/.phtml/.php5/.jsp/.asp/.aspx/.exe 等
+            -- (在 multipart Content-Disposition filename= 字段中检测)
+            for fn in string.gmatch(body, 'filename%s*=%s*"([^"]*)"') do
+                local ext = string.match(string.lower(fn), "%.([%a%d]+)$")
+                if ext and DangerousUploadExt[ext] then
+                    write_log("upload_block", fn)
+                    block_or_alert(conf, "upload_block", "filename: " .. string.sub(fn, 1, 200))
+                    ngx.status = 403
+                    ngx.header.content_type = "text/plain"
+                    ngx.say("403 Forbidden (dangerous file upload blocked)")
+                    return ngx.exit(403)
+                end
+            end
+            targets[#targets + 1] = body
+        end
     end)
+end
+
+-- 危险上传扩展名集合
+DangerousUploadExt = {}
+for _, ext in ipairs({"php","php3","php4","php5","php7","phtml","pht","jsp","jspx","asp","aspx","ascx","exe","dll","so","sh","bat","cmd","cgi","pl","py","rb"}) do
+    DangerousUploadExt[ext] = true
 end
 
 local rg = conf.rule_groups or {}

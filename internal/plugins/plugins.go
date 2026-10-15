@@ -190,8 +190,10 @@ func defaultRules() map[string][]string {
 			`\(\s*select`,             // 子查询注入
 			`(or|and)\s+(substring|ascii|ord|mid|left|right|hex|if|elt)\s*\(`, // 盲注提取函数
 			`sleep\s*\(`,
+			`waitfor\s+delay`,
 			`benchmark\s*\(`,
 			`load_file\s*\(`,
+			`(char|chr|hex|unhex|conv)\s*\(`,
 			`into\s+(out|dump)file`,
 		},
 		"webshell": {

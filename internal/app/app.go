@@ -147,6 +147,17 @@ func Run(o Options) error {
 	// 面板在线更新:定时检查 GitHub 新版本,发现即写消息中心
 	panelupdate.SetCurrent(o.Version)
 	panelupdate.Start(stop)
+	// 站点日志自动清理:每日执行一次(启动 1 分钟后先跑一轮)
+	go func() {
+		recoverPanic("site-log-clean")
+		time.Sleep(time.Minute)
+		for {
+			if n, err := server.RunSiteLogClean(); err == nil && n > 0 {
+				log.Printf("[site-log-clean] 已截断 %d 个过期日志文件", n)
+			}
+			time.Sleep(24 * time.Hour)
+		}
+	}()
 
 	// 拼全面板地址(含随机入口;"-" 表示已关闭)
 	path := "/"

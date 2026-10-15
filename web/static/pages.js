@@ -352,170 +352,6 @@ PAGES.websites = {
     }
     load();
   },
-  logsDialog() {
-    const m = modal({
-      title: "站点日志(全部站点)", width: 860,
-      body: `
-        <div class="tabs" style="margin-bottom:12px">
-          <div class="tab active" data-t="access">访问日志</div>
-          <div class="tab" data-t="error">错误日志</div>
-        </div>
-        <div class="log-view" id="site-log-view" style="max-height:56vh">加载中...</div>`,
-      footer: '<button class="btn btn-sm btn-plain" data-act="refresh">刷新</button><button class="btn btn-primary" data-act="close">关 闭</button>',
-    });
-    var logType = "access";
-    var load = function () {
-      fetch("/api/v1/websites/nginx-logs?type=" + logType + "&tail=300", { headers: { Authorization: "Bearer " + localStorage.getItem(TOKEN_KEY) } })
-        .then(function (r) { return r.json(); })
-        .then(function (d) {
-          qs("#site-log-view", m.el).textContent = d.code === 0 ? (d.data.content || "(空)") : d.message;
-        });
-    };
-    load();
-    qsa(".tab", m.el).forEach(function (t) {
-      t.onclick = function () {
-        qsa(".tab", m.el).forEach(function (x) { x.classList.remove("active"); });
-        t.classList.add("active");
-        logType = t.dataset.t;
-        load();
-      };
-    });
-    qs('[data-act="refresh"]', m.el).onclick = load;
-    qs('[data-act="close"]', m.el).onclick = m.close;
-  },
-  async statsDialog() {
-    var H = { Authorization: "Bearer " + localStorage.getItem(TOKEN_KEY) };
-    var m = modal({
-      title: "网站访问统计", width: 760,
-      body: '<div id="ws-stats" style="min-height:200px"><div class="boot-loading" style="height:100px"><div class="spinner"></div><p>解析中...</p></div></div>',
-      footer: '<button class="btn btn-sm btn-plain" data-act="refresh">刷新</button><button class="btn btn-primary" data-act="close">关 闭</button>',
-    });
-    qs('[data-act="close"]', m.el).onclick = m.close;
-    var load = async function() {
-      var box = qs("#ws-stats", m.el);
-      try {
-        var d = await fetch("/api/v1/websites/web-stats?lines=10000", { headers: H }).then(function(x){ return x.json() });
-        if (d.code !== 0) { box.innerHTML = emptyState("warn", "加载失败", d.message || ""); return; }
-        var s = d.data;
-        box.innerHTML =
-          '<div class="grid-4" style="margin-bottom:16px">' +
-            '<div style="text-align:center"><div style="font-size:26px;font-weight:700;color:var(--primary)">' + s.total_pv + '</div><div style="font-size:12px;color:var(--text-3)">总请求(PV)</div></div>' +
-            '<div style="text-align:center"><div style="font-size:26px;font-weight:700;color:var(--success)">' + s.total_uv + '</div><div style="font-size:12px;color:var(--text-3)">独立 IP(UV)</div></div>' +
-            '<div style="text-align:center"><div style="font-size:26px;font-weight:700;color:var(--warning)">' + fmtBytes(s.total_bytes) + '</div><div style="font-size:12px;color:var(--text-3)">总流量</div></div>' +
-            '<div style="text-align:center"><div style="font-size:26px;font-weight:700;color:var(--danger)">' + (s.status_dist["4xx"]||0) + " / " + (s.status_dist["5xx"]||0) + '</div><div style="font-size:12px;color:var(--text-3)">4xx / 5xx</div></div>' +
-          "</div>" +
-          '<div class="grid-2" style="margin-top:12px">' +
-            '<div><div class="card-title" style="font-size:13px;margin-bottom:8px">Top 10 IP</div>' +
-            (s.top_ips||[]).map(function(r,i){ return '<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:13px;' + (i%2?'background:#f8f9fa33;':'') + '"><span class="mono">' + esc(r.key) + '</span><b>' + r.count + '</b></div>'; }).join("") +
-            '</div><div><div class="card-title" style="font-size:13px;margin-bottom:8px">Top 10 URI</div>' +
-            (s.top_uris||[]).map(function(r,i){ return '<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:13px;overflow:hidden"><span class="mono" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:240px">' + esc(r.key) + '</span><b>' + r.count + '</b></div>'; }).join("") +
-            "</div></div>";
-      } catch (e) { box.innerHTML = emptyState("warn", "加载失败", e.message); }
-    };
-    load();
-    qs('[data-act="refresh"]', m.el).onclick = load;
-  },
-  /* 网站全局设置(防恶意解析 / Gzip) */
-  async globalDialog(el) {
-    let ap = false, gz = false;
-    try {
-      const results = await Promise.all([api("/websites/anti-parsing"), api("/websites/gzip")]);
-      ap = !!results[0].enabled; gz = !!results[1].enabled;
-    } catch (e) {}
-    const m = modal({
-      title: "网站全局设置", width: 620,
-      body: `
-        <div class="settings-section"><div class="settings-section-title">防恶意解析</div>
-          <div class="form-item"><label style="display:flex;gap:10px;align-items:center"><span class="switch" id="gp-anti"></span><span>拦截未绑定的域名与裸 IP 访问</span></label>
-          <div class="help">开启后,别人把垃圾域名解析到本机 IP 或直接用 IP 访问时,连接将被直接断开(不返回任何内容),防止蹭流量/蹭证书;面板入口不受影响</div></div></div>
-        <div class="settings-section"><div class="settings-section-title">Gzip 压缩</div>
-          <div class="form-item"><label style="display:flex;gap:10px;align-items:center"><span class="switch" id="gp-gzip"></span><span>全站文本资源压缩传输</span></label>
-          <div class="help">HTML/CSS/JS/JSON/SVG/字体等启用 gzip,传输体积平均减少 60% 以上,回访加载更快;图片视频等已压缩格式不重复处理</div></div></div>
-        <div class="settings-section"><div class="settings-section-title">Nginx 管理</div>
-          <div class="form-item" style="margin-bottom:0"><a class="btn btn-sm btn-plain" href="#/apps" id="gp-nginx-link">${I("tool")} Nginx 主配置 / 负载状态 / 错误日志(在 应用商店→已安装 中管理)</a></div></div>`,
-      footer: '<button class="btn btn-plain" data-act="close">关 闭</button>',
-    });
-    qs("#gp-anti", m.el).classList.toggle("on", ap);
-    qs("#gp-gzip", m.el).classList.toggle("on", gz);
-    qs("#gp-anti", m.el).onclick = async function() {
-      const on = !this.classList.contains("on");
-      try {
-        await api("/websites/anti-parsing", { method: "POST", body: { enabled: on } });
-        this.classList.toggle("on", on);
-        toast(on ? "防恶意解析已开启" : "防恶意解析已关闭");
-      } catch (e) { toast(e.message, "error"); }
-    };
-    qs("#gp-gzip", m.el).onclick = async function() {
-      const on = !this.classList.contains("on");
-      try {
-        await api("/websites/gzip", { method: "POST", body: { enabled: on } });
-        this.classList.toggle("on", on);
-        toast(on ? "Gzip 压缩已开启" : "Gzip 压缩已关闭");
-      } catch (e) { toast(e.message, "error"); }
-    };
-    const nl = qs("#gp-nginx-link", m.el);
-    if (nl) nl.onclick = function(e) { e.preventDefault(); m.close(); location.hash = "#/apps"; };
-    qs('[data-act="close"]', m.el).onclick = m.close;
-  },
-  /* 编辑站点弹窗(代理目标 / 端口 / 备注) */
-  async editDialog(s, el) {
-    if (!Array.isArray(window.__wafSiteOff)) {
-      try { window.__wafSiteOff = (await api("/waf/site-off")).site_off || []; }
-      catch (e) { window.__wafSiteOff = []; }
-    }
-    const m = modal({
-      title: "编辑站点 · " + s.alias, width: 520,
-      body: `
-        <div class="form-item"><label>域名</label><input class="input" value="${esc(s.domain)}" disabled>
-          <div class="help">域名创建后不可修改;如需变更请新建站点</div></div>
-        ${s.type === "proxy" ? '<div class="form-item required"><label>代理目标</label><input class="input" id="w-edit-proxy" value="' + esc(s.proxy_to || "") + '" placeholder="如: http://127.0.0.1:8080"></div>' : ""}
-        <div class="form-item"><label>监听端口</label><input class="input" id="w-edit-port" type="number" value="${s.port || 80}"></div>
-        <div class="form-item"><label>备注</label><input class="input" id="w-edit-remark" value="${esc(s.remark || "")}" placeholder="站点用途说明"></div>
-        <div class="settings-section-title">WAF 防护<span class="help" style="margin:0">全站 WAF 开关在 安全→WAF 防火墙;此处控制单站</span></div>
-        <div class="form-item"><label class="radio-line"><input type="checkbox" id="w-waf-on" ${window.__wafSiteOff && window.__wafSiteOff.includes(s.domain) ? "" : "checked"}> 启用 WAF 防护(纯 API/内网站点可关闭)</label></div>
-        <div class="settings-section-title">密码访问(HTTP Basic Auth)</div>
-        <div class="form-item"><label class="radio-line"><input type="checkbox" id="w-auth-on" ${s.auth_enabled ? "checked" : ""}> 启用后访问站点需输入账号密码</label></div>
-        <div id="w-auth-fields" style="${s.auth_enabled ? "" : "display:none"}">
-          <div class="form-item"><label>用户名</label><input class="input" id="w-auth-user" value="${esc(s.auth_user || "")}" placeholder="如 admin"></div>
-          <div class="form-item"><label>密码</label><input class="input" id="w-auth-pass" type="password" placeholder="${s.auth_enabled ? "留空则沿用已有密码" : "至少 4 位"}"></div>
-        </div>`,
-      footer: '<button class="btn btn-plain" data-act="no">取 消</button><button class="btn btn-primary" data-act="yes">保 存</button>',
-    });
-    qs("#w-auth-on", m.el).onchange = function() { qs("#w-auth-fields", m.el).style.display = this.checked ? "" : "none"; };
-    qs('[data-act="no"]', m.el).onclick = m.close;
-    qs('[data-act="yes"]', m.el).onclick = async () => {
-      try {
-        await api("/websites/" + s.id, { method: "PUT", body: {
-          proxy_to: s.type === "proxy" ? qs("#w-edit-proxy", m.el).value.trim() : (s.proxy_to || ""),
-          port: Number(qs("#w-edit-port", m.el).value) || 80,
-          remark: qs("#w-edit-remark", m.el).value.trim(),
-        }});
-        // WAF 单站开关(与当前 site_off 状态有差异才调用)
-        const wafOn = qs("#w-waf-on", m.el).checked;
-        const wasOff = (window.__wafSiteOff || []).includes(s.domain);
-        if (wafOn === wasOff) {
-          /* 状态一致,不动 */
-        } else {
-          try {
-            await api("/waf/site-toggle", { method: "POST", body: { host: s.domain, enabled: wafOn } });
-            window.__wafSiteOff = wafOn ? (window.__wafSiteOff || []).filter((h) => h !== s.domain) : [...(window.__wafSiteOff || []), s.domain];
-          } catch (e) { toast("WAF 开关保存失败: " + e.message, "error"); }
-        }
-        // 密码访问单独保存
-        const authOn = qs("#w-auth-on", m.el).checked;
-        if (authOn !== !!s.auth_enabled || (authOn && qs("#w-auth-pass", m.el).value)) {
-          await api("/websites/" + s.id + "/auth", { method: "POST", body: {
-            enabled: authOn,
-            user: qs("#w-auth-user", m.el).value.trim(),
-            password: qs("#w-auth-pass", m.el).value,
-          }});
-        }
-        toast("站点已更新");
-        m.close();
-        this.render(el);
-      } catch (e) { toast(e.message, "error"); }
-    };
-  },
   addDialog(el) {
     var self = this;
     var m = modal({
@@ -911,12 +747,17 @@ PAGES.websites = {
     render();
   },
   logsDialog() {
+    var self = this;
     const m = modal({
       title: "站点日志(全部站点)", width: 860,
       body: `
-        <div class="tabs" style="margin-bottom:12px">
-          <div class="tab active" data-t="access">访问日志</div>
-          <div class="tab" data-t="error">错误日志</div>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
+          <div class="tabs" style="margin-bottom:0;flex:1">
+            <div class="tab active" data-t="access">访问日志</div>
+            <div class="tab" data-t="error">错误日志</div>
+          </div>
+          <button class="btn btn-sm btn-plain" data-act="autoclean">${I("clock")} 自动清理</button>
+          <button class="btn btn-sm btn-danger-plain" data-act="clear">${I("trash")} 清空当前日志</button>
         </div>
         <div class="log-view" id="site-log-view" style="max-height:56vh">加载中...</div>`,
       footer: '<button class="btn btn-sm btn-plain" data-act="refresh">刷新</button><button class="btn btn-primary" data-act="close">关 闭</button>',
@@ -940,6 +781,48 @@ PAGES.websites = {
     });
     qs('[data-act="refresh"]', m.el).onclick = load;
     qs('[data-act="close"]', m.el).onclick = m.close;
+    qs('[data-act="clear"]', m.el).onclick = async function () {
+      var name = logType === "access" ? "访问日志" : "错误日志";
+      if (!(await confirmDlg("清空全部站点的<b>" + name + "</b>?<br><span style='font-size:12px;color:var(--text-3)'>日志文件将被清空(保留文件本身),站点继续写入口常;此操作不可恢复。</span>", { danger: true }))) return;
+      var btn = this;
+      btn.disabled = true;
+      try {
+        await api("/websites/nginx-logs/clear", { method: "POST", body: { type: logType } });
+        toast("日志已清空");
+        load();
+      } catch (e) { toast(e.message, "error", 6000); }
+      btn.disabled = false;
+    };
+    qs('[data-act="autoclean"]', m.el).onclick = function () {
+      var cfg = modal({
+        title: "站点日志自动清理", width: 460,
+        body: '<div id="lgac-body">' + skeletonTable(2, 3) + "</div>",
+        footer: '<button class="btn btn-plain" data-act="close">取 消</button><button class="btn btn-primary" data-act="save">保 存</button>',
+      });
+      qs('[data-act="close"]', cfg.el).onclick = cfg.close;
+      (async function() {
+        var d = {};
+        try { d = await api("/websites/nginx-logs/autoclean"); } catch (e) { qs("#lgac-body", cfg.el).innerHTML = emptyState("warn", "加载失败", e.message); return; }
+        qs("#lgac-body", cfg.el).innerHTML =
+          '<div class="form-item"><label style="display:flex;align-items:center;gap:8px"><span class="switch' + (d.enabled ? " on" : "") + '" id="lgac-on"></span><span>启用每日自动清理</span></label>' +
+          '<div class="help">每天自动检查一次:修改时间超过保留天数的站点日志文件将被清空(文件保留,站点继续写入口常)</div></div>' +
+          '<div class="form-item"><label>日志保留天数</label><input class="input" id="lgac-days" type="number" value="' + (d.keep_days || 7) + '" style="max-width:140px"> <span class="help" style="margin:0">天(1-365)</span></div>' +
+          (d.last_run ? '<div class="help">上次执行:' + esc(d.last_run) + "</div>" : "");
+        var sw = qs("#lgac-on", cfg.el);
+        sw.onclick = function() { sw.classList.toggle("on"); };
+      })();
+      qs('[data-act="save"]', cfg.el).onclick = async function() {
+        var enabled = qs("#lgac-on", cfg.el).classList.contains("on");
+        var days = parseInt(qs("#lgac-days", cfg.el).value, 10) || 7;
+        var btn = this;
+        btn.disabled = true;
+        try {
+          var d = await api("/websites/nginx-logs/autoclean", { method: "POST", body: { enabled: enabled, keep_days: days } });
+          toast(enabled ? "自动清理已启用,本次已清理 " + (d.cleaned || 0) + " 个过期日志" : "自动清理已关闭");
+          cfg.close();
+        } catch (e) { toast(e.message, "error", 6000); btn.disabled = false; }
+      };
+    };
   },
   async statsDialog() {
     var H = { Authorization: "Bearer " + localStorage.getItem(TOKEN_KEY) };

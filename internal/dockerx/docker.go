@@ -79,9 +79,68 @@ func installedReal() (cliOK, engineOK bool) {
 	return
 }
 
+// ---- docker 快照缓存(SWR):容器页/商店列表/数据库页高频轮询,每次全量 exec
+// 在引擎繁忙时把面板拖慢;缓存 3~5 秒,容器/应用操作成功后主动失效保证即时性 ----
+var (
+	dockerSnapMu         sync.Mutex
+	statesCache          map[string]string
+	statesCacheAt        time.Time
+	statesRefreshing     bool
+	containersCache      []Container
+	containersCacheAt    time.Time
+	containersRefreshing bool
+	imagesCache          []Image
+	imagesCacheAt        time.Time
+	imagesRefreshing     bool
+)
+
+const (
+	statesTTL = 3 * time.Second
+	listTTL   = 5 * time.Second
+)
+
+// InvalidateDockerCache 容器/镜像/应用操作成功后调用,下次读取立即取新数据
+func InvalidateDockerCache() {
+	dockerSnapMu.Lock()
+	statesCacheAt = time.Time{}
+	containersCacheAt = time.Time{}
+	imagesCacheAt = time.Time{}
+	dockerSnapMu.Unlock()
+}
+
 // ContainerStates 一次 docker ps -a 返回全部容器状态(name → docker 状态字符串,
 // 如 running/exited/paused)。不在结果中 = 容器不存在(被删除)。
+// 带 3s SWR 缓存:有旧值立即返回并后台刷新,冷启动才同步执行。
 func ContainerStates() map[string]string {
+	dockerSnapMu.Lock()
+	if statesCache != nil && time.Since(statesCacheAt) < statesTTL {
+		c := statesCache
+		dockerSnapMu.Unlock()
+		return c
+	}
+	if statesCache != nil {
+		if !statesRefreshing {
+			statesRefreshing = true
+			go func() {
+				res := containerStatesReal()
+				dockerSnapMu.Lock()
+				statesCache, statesCacheAt, statesRefreshing = res, time.Now(), false
+				dockerSnapMu.Unlock()
+			}()
+		}
+		c := statesCache
+		dockerSnapMu.Unlock()
+		return c
+	}
+	dockerSnapMu.Unlock()
+	res := containerStatesReal()
+	dockerSnapMu.Lock()
+	statesCache, statesCacheAt = res, time.Now()
+	dockerSnapMu.Unlock()
+	return res
+}
+
+func containerStatesReal() map[string]string {
 	res := map[string]string{}
 	out, err := util.RunWithTimeout(10*time.Second, "docker", "ps", "-a", "--format", "{{.Names}}\t{{.State}}")
 	if err != nil {
@@ -218,6 +277,47 @@ func nonEmptyLines(s string) []string {
 }
 
 func Containers() ([]Container, error) {
+	dockerSnapMu.Lock()
+	if containersCache != nil && time.Since(containersCacheAt) < listTTL {
+		c := containersCache
+		dockerSnapMu.Unlock()
+		return c, nil
+	}
+	refreshing := containersRefreshing
+	if !refreshing {
+		containersRefreshing = true
+	}
+	hasOld := containersCache != nil
+	dockerSnapMu.Unlock()
+
+	if hasOld || refreshing {
+		// 有旧值:立即返回旧值,单飞后台刷新(与请求解耦,引擎繁忙不拖慢面板)
+		if !refreshing {
+			go func() {
+				res, err := containersReal()
+				dockerSnapMu.Lock()
+				if err == nil {
+					containersCache, containersCacheAt = res, time.Now()
+				}
+				containersRefreshing = false
+				dockerSnapMu.Unlock()
+			}()
+		}
+		dockerSnapMu.Lock()
+		c := containersCache
+		dockerSnapMu.Unlock()
+		return c, nil
+	}
+	res, err := containersReal()
+	dockerSnapMu.Lock()
+	if err == nil {
+		containersCache, containersCacheAt = res, time.Now()
+	}
+	dockerSnapMu.Unlock()
+	return res, err
+}
+
+func containersReal() ([]Container, error) {
 	out, err := util.RunWithTimeout(15*time.Second, "docker", "ps", "-a", "--format", "{{json .}}")
 	if err != nil {
 		return nil, fmt.Errorf("docker ps 失败: %v %s", err, out)
@@ -263,6 +363,7 @@ func cutID(id string) string {
 }
 
 func ContainerAction(id, action string) error {
+	defer InvalidateDockerCache()
 	switch action {
 	case "start", "stop", "restart", "pause", "unpause":
 	case "kill":
@@ -277,6 +378,7 @@ func ContainerAction(id, action string) error {
 }
 
 func ContainerRemove(id string, force bool) error {
+	defer InvalidateDockerCache()
 	args := []string{"rm"}
 	if force {
 		args = append(args, "-f")
@@ -301,6 +403,46 @@ func Logs(id string, tail int) (string, error) {
 }
 
 func Images() ([]Image, error) {
+	dockerSnapMu.Lock()
+	if imagesCache != nil && time.Since(imagesCacheAt) < listTTL {
+		c := imagesCache
+		dockerSnapMu.Unlock()
+		return c, nil
+	}
+	refreshing := imagesRefreshing
+	if !refreshing {
+		imagesRefreshing = true
+	}
+	hasOld := imagesCache != nil
+	dockerSnapMu.Unlock()
+
+	if hasOld || refreshing {
+		if !refreshing {
+			go func() {
+				res, err := imagesReal()
+				dockerSnapMu.Lock()
+				if err == nil {
+					imagesCache, imagesCacheAt = res, time.Now()
+				}
+				imagesRefreshing = false
+				dockerSnapMu.Unlock()
+			}()
+		}
+		dockerSnapMu.Lock()
+		c := imagesCache
+		dockerSnapMu.Unlock()
+		return c, nil
+	}
+	res, err := imagesReal()
+	dockerSnapMu.Lock()
+	if err == nil {
+		imagesCache, imagesCacheAt = res, time.Now()
+	}
+	dockerSnapMu.Unlock()
+	return res, err
+}
+
+func imagesReal() ([]Image, error) {
 	out, err := util.RunWithTimeout(15*time.Second, "docker", "images", "--format", "{{json .}}")
 	if err != nil {
 		return nil, fmt.Errorf("docker images 失败: %s", out)
@@ -849,6 +991,7 @@ func tail(s string, n int) string {
 
 // ComposeStream 流式执行 docker compose,输出实时写入 w(任务日志可见)
 func ComposeStream(dir string, w io.Writer, args ...string) error {
+	defer InvalidateDockerCache()
 	bin, err := ComposeBin()
 	if err != nil {
 		return err

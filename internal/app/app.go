@@ -27,6 +27,7 @@ import (
 	"kunpanel/internal/system"
 	"kunpanel/internal/upmon"
 	"kunpanel/internal/util"
+	"kunpanel/internal/dockerx"
 	"kunpanel/internal/websites"
 )
 
@@ -147,6 +148,13 @@ func Run(o Options) error {
 	// 面板在线更新:定时检查 GitHub 新版本,发现即写消息中心
 	panelupdate.SetCurrent(o.Version)
 	panelupdate.Start(stop)
+	// Docker 快照与引擎信息预热:避免重启后首个用户点概览/商店时同步等子进程
+	go func() {
+		recoverPanic("docker-warmup")
+		time.Sleep(2 * time.Second)
+		dockerx.Info()
+		dockerx.ContainerStates()
+	}()
 	// 站点日志自动清理:每日执行一次(启动 1 分钟后先跑一轮)
 	go func() {
 		recoverPanic("site-log-clean")

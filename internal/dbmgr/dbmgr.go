@@ -40,8 +40,10 @@ var supported = []Instance{
 func Instances() []Instance {
 	out := make([]Instance, len(supported))
 	copy(out, supported)
+	// 一次 docker ps 批量取状态(此前逐实例起子进程)
+	states := dockerx.ContainerStates()
 	for i := range out {
-		out[i].Running = dockerx.ContainerRunning("kun-" + out[i].Key)
+		out[i].Running = states["kun-"+out[i].Key] == "running"
 	}
 	return out
 }

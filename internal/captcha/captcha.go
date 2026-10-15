@@ -133,25 +133,26 @@ func equalFoldASCII(a, b string) bool {
 }
 
 func renderPNG(codeStr string) string {
+	// 2x 高清(300x96,字符 2x 点阵):Windows 笔记本普遍 125%/150% DPI 缩放,
+	// 1x 位图被插值放大后字符模糊难辨,是"老是提示验证码错误"的主要来源
 	const (
-		w, h = 150, 48
-		amp    = 1.8
-		period = 18.0
+		w, h   = 300, 96
+		amp    = 3.6
+		period = 36.0
 	)
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
 	bg := color.RGBA{255, 255, 255, 255}
 	drawFill(img, bg)
 
 	// 极少干扰:1条线 + 少量噪点,全部在底层
-	drawLine(img, randInt(0, w/3), randInt(4, h-4), randInt(w*2/3, w), randInt(4, h-4), color.RGBA{0, 102, 255, 80})
+	drawLine(img, randInt(0, w/3), randInt(8, h-8), randInt(w*2/3, w), randInt(8, h-8), color.RGBA{0, 102, 255, 80})
 
-	// 大字体高对比绘制
-	x := 10
+	// 大字体高对比绘制(2x 点阵)
+	x := 20
 	for _, ch := range codeStr {
-		c := color.RGBA{20, 30, 60, 255} // 深色
-		y := h/2 + 6 + randInt(-2, 2)
-		drawChar(img, string(ch), x+randInt(-1, 1), y, c)
-		x += 34
+		y := h/2 + 12 + randInt(-4, 4)
+		drawChar2x(img, string(ch), x+randInt(-2, 2), y, color.RGBA{20, 30, 60, 255})
+		x += 68
 	}
 
 	// 轻微波浪扭曲
@@ -162,6 +163,31 @@ func renderPNG(codeStr string) string {
 	return base64.StdEncoding.EncodeToString(buf.Bytes())
 }
 
+// drawChar2x 把点阵字符按 2x2 像素块放大绘制(基础点阵 7x13 → 视觉 14x26)
+func drawChar2x(img *image.RGBA, ch string, x, y int, c color.RGBA) {
+	tmp := image.NewRGBA(image.Rect(0, 0, 12, 15))
+	d := &font.Drawer{
+		Dst:  tmp,
+		Src:  image.NewUniform(c),
+		Face: basicfont.Face7x13,
+		Dot:  fixed.P(2, 13),
+	}
+	d.DrawString(ch)
+	b := tmp.Bounds()
+	for yy := b.Min.Y; yy < b.Max.Y; yy++ {
+		for xx := b.Min.X; xx < b.Max.X; xx++ {
+			if _, _, _, a := tmp.At(xx, yy).RGBA(); a == 0 {
+				continue
+			}
+			for dy := 0; dy < 2; dy++ {
+				for dx := 0; dx < 2; dx++ {
+					img.Set(x+(xx-b.Min.X)*2+dx, y+(yy-b.Min.Y)*2+dy, c)
+				}
+			}
+		}
+	}
+}
+
 
 func drawFill(img *image.RGBA, c color.RGBA) {
 	b := img.Bounds()
@@ -170,17 +196,6 @@ func drawFill(img *image.RGBA, c color.RGBA) {
 			img.Set(x, y, c)
 		}
 	}
-}
-
-// drawChar 用 basicfont 点阵绘制单字符(不产生任何文本元数据)
-func drawChar(img *image.RGBA, ch string, x, y int, c color.RGBA) {
-	d := &font.Drawer{
-		Dst:  img,
-		Src:  image.NewUniform(c),
-		Face: basicfont.Face7x13,
-		Dot:  fixed.P(x, y),
-	}
-	d.DrawString(ch)
 }
 
 func drawLine(img *image.RGBA, x0, y0, x1, y1 int, c color.RGBA) {

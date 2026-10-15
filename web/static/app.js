@@ -145,9 +145,11 @@ const App = {
         }
         loginSuccess(d);
       } catch (e) {
-        toast(e.message, "error");
+        // 验证码是一次性的:输错即作废,后端返回错误时验证码图已自动更换
+        toast(e.message.indexOf("验证码") >= 0 ? e.message + "(已自动更换新图,请输入新图中的字符)" : e.message, "error", 6000);
         qs("#login-captcha", app).value = "";
         loadCaptcha();
+        qs("#login-captcha", app).focus();
       }
       btn.disabled = false; btn.textContent = "登 录";
     };

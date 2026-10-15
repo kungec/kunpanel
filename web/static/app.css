@@ -137,7 +137,7 @@ html[data-theme="dark"] .login-card { background: rgba(27,31,38,.94); border-col
 .captcha-row { display: flex; gap: 10px; }
 .captcha-row .input { flex: 1; }
 .captcha-img {
-  width: 132px; height: 42px; flex: none; border: 1px solid var(--border); border-radius: var(--radius-xs);
+  width: 150px; height: 48px; flex: none; border: 1px solid var(--border); border-radius: var(--radius-xs);
   overflow: hidden; cursor: pointer; display: flex; align-items: center; justify-content: center;
   background: #fff; transition: border-color .15s, box-shadow .15s;
 }

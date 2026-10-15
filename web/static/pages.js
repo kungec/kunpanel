@@ -3955,7 +3955,7 @@ PAGES.files = {
       } else {
         // 图片直接预览,其余走编辑器
         if (/\.(png|jpe?g|gif|webp|svg|ico|bmp)$/i.test(path)) { self.imagePreview(path); return; }
-        self.editFile(path);
+        self.editFile(path, this);
       }
     };
     qsa("[data-fm-open]", el).forEach(function(a) {
@@ -4075,7 +4075,7 @@ PAGES.files = {
     if (es) es.onclick = function() { self.searchMode = ""; self.searchQ = ""; refresh(); };
     // 搜索结果操作
     qsa("[data-fm-edit]", el).forEach(function(b) {
-      b.onclick = function() { self.editFile(b.getAttribute("data-fm-edit")); };
+      b.onclick = function() { self.editFile(b.getAttribute("data-fm-edit"), b); };
     });
     qsa("[data-fm-loc]", el).forEach(function(b) {
       b.onclick = function() {
@@ -4288,39 +4288,66 @@ PAGES.files = {
       if (box) box.innerHTML = '<div class="help" style="padding:30px">加载失败: ' + esc(e.message) + "</div>";
     }
   },
-  async editFile(path) {
+  async editFile(path, btn) {
     var self = this;
-    var content = "";
-    try {
-      var d = await api("/files/content?path=" + encodeURIComponent(path));
-      content = d.content || "";
-    } catch (e) { toast(e.message, "error"); return; }
-    var useCM = typeof CodeMirror !== "undefined" && content.length < 2 * 1024 * 1024;
+    // 防重复点击:大文件拉取+渲染需要数秒,期间重复点击只会叠加弹窗
+    if (self._fmEditing) { toast("文件正在打开中,请稍候...", "info"); return; }
+    self._fmEditing = true;
+    if (btn) {
+      btn.disabled = true;
+      btn.dataset.orig = btn.innerHTML;
+      btn.innerHTML = '<span class="spinner" style="width:11px;height:11px;border-width:2px;margin:0;border-color:rgba(0,0,0,.12);border-top-color:var(--text-3)"></span> 打开中';
+    }
+    // 先弹加载态弹窗,内容到位后再填充编辑器
     var m = modal({
       title: "编辑: " + basename(path),
       width: 1080,
-      body:
-        '<div class="cm-toolbar">' +
-        (useCM
-          ? '<button class="btn btn-sm btn-plain" id="cme-save">' + I("edit") + " 保存 <span class=help style=margin:0>Ctrl+S</span></button>" +
-            '<button class="btn btn-sm btn-plain" id="cme-history">' + I("clock") + " 历史版本</button>" +
-            '<button class="btn btn-sm btn-plain" id="cme-find">查找 <span class=help style=margin:0>Ctrl+F</span></button>' +
-            '<button class="btn btn-sm btn-plain" id="cme-fullscreen">全屏</button>'
-          : "") +
-        '<span class="help mono" id="cme-status" style="margin:0 0 0 auto"></span></div>' +
-        '<div id="cme-host"><textarea class="textarea mono" id="fm-editor" rows="22" spellcheck="false" style="font-size:12.5px;line-height:1.55">' + esc(content) + "</textarea></div>",
+      body: '<div class="boot-loading" style="height:320px"><div class="spinner" style="width:34px;height:34px;border-width:3px;border-color:rgba(0,0,0,.1);border-top-color:var(--primary)"></div><div style="margin-top:14px;color:var(--text-3);font-size:13px">正在加载文件内容,大文件可能需要几秒...</div></div>',
       footer: '<span class="fm-editor-path mono" style="margin-right:auto;font-size:11px;color:var(--text-3)">' + esc(path) + "</span>" +
-        '<button class="btn btn-plain" data-act="no">取 消</button><button class="btn btn-primary" data-act="save">' + I("edit") + " 保存</button>",
+        '<button class="btn btn-plain" data-act="no">取 消</button>',
     });
+    qs('[data-act="no"]', m.el).onclick = function() { m.close(); };
+    var restoreBtn = function() {
+      if (btn) { btn.disabled = false; btn.innerHTML = btn.dataset.orig; }
+    };
+    var content = "";
+    try {
+      var d = await api("/files/content?path=" + encodeURIComponent(path), { timeout: 0 });
+      content = d.content || "";
+    } catch (e) {
+      m.close();
+      self._fmEditing = false;
+      restoreBtn();
+      toast(e.message, "error", 6000);
+      return;
+    }
+    var useCM = typeof CodeMirror !== "undefined" && content.length < 2 * 1024 * 1024;
+    // 内容到位:替换弹窗主体为编辑器
+    qs(".modal-body", m.el).innerHTML =
+      '<div class="cm-toolbar">' +
+      (useCM
+        ? '<button class="btn btn-sm btn-plain" id="cme-save">' + I("edit") + " 保存 <span class=help style=margin:0>Ctrl+S</span></button>" +
+          '<button class="btn btn-sm btn-plain" id="cme-history">' + I("clock") + " 历史版本</button>" +
+          '<button class="btn btn-sm btn-plain" id="cme-find">查找 <span class=help style=margin:0>Ctrl+F</span></button>' +
+          '<button class="btn btn-sm btn-plain" id="cme-fullscreen">全屏</button>'
+        : "") +
+      '<span class="help mono" id="cme-status" style="margin:0 0 0 auto"></span></div>' +
+      '<div id="cme-host"><textarea class="textarea mono" id="fm-editor" rows="22" spellcheck="false" style="font-size:12.5px;line-height:1.55">' + esc(content) + "</textarea></div>";
+    qs(".modal-footer", m.el).innerHTML =
+      '<span class="fm-editor-path mono" style="margin-right:auto;font-size:11px;color:var(--text-3)">' + esc(path) + "</span>" +
+      '<button class="btn btn-plain" data-act="no">取 消</button><button class="btn btn-primary" data-act="save">' + I("edit") + " 保存</button>";
     var getValue = function() {
       return (useCM && window.__cme) ? window.__cme.getValue() : qs("#fm-editor", m.el).value;
     };
     var doSave = async function() {
+      var sb = qs('[data-act="save"]', m.el);
+      if (sb) { sb.disabled = true; sb.innerHTML = "保存中..."; }
       try {
-        await api("/files/save", { method: "POST", body: { path: path, content: getValue() } });
+        await api("/files/save", { method: "POST", body: { path: path, content: getValue() }, timeout: 0 });
         toast("已保存(旧版本已存入历史)");
         if (useCM && window.__cme) window.__cme.markClean();
-      } catch (e) { toast(e.message, "error"); }
+      } catch (e) { toast(e.message, "error", 6000); }
+      if (sb) { sb.disabled = false; sb.innerHTML = I("edit") + " 保存"; }
     };
     if (useCM) {
       var dark = document.documentElement.getAttribute("data-theme") === "dark";
@@ -4375,8 +4402,9 @@ PAGES.files = {
     var saveBtn = qs('[data-act="save"]', m.el);
     if (saveBtn) saveBtn.onclick = doSave;
     qs('[data-act="no"]', m.el).onclick = function() { m.close(); };
+    self._fmEditing = false;
+    restoreBtn();
   },
-
   /* 历史版本列表 / 查看 / 恢复 */
   async historyDialog(path, cm) {
     var items = [];

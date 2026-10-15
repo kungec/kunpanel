@@ -18,6 +18,7 @@ local RULE_LABELS = {
     ip_black = "IP 黑名单", ua_black = "UA 黑名单", ip_ban = "IP 临时封禁",
     sensitive = "敏感文件", method = "危险方法", custom = "自定义规则",
     empty_ua = "空 UA 拦截", http10 = "HTTP/1.0 拦截", slider = "滑块验证",
+    smuggle = "请求走私", honeypot = "蜜罐诱捕", webshell = "Webshell 木马",
 }
 
 local MODE_LABELS = { block = "拦截", alert = "告警", monitor = "监控" }
@@ -163,6 +164,21 @@ local function block_or_alert(conf, rule, detail)
         return  -- 告警模式放行
     end
     write_log(rule, detail)
+    -- 违规升级封禁:拦截/告警模式下,同一 IP 连续命中达阈值即自动临时封禁
+    -- (此前仅告警模式计数,拦截模式的持续攻击者不会升级封禁)
+    if conf.ip_ban_enable then
+        local vdict = ngx.shared.kunwaf_viol
+        if vdict then
+            local vkey = "v:" .. (ngx.var.remote_addr or "")
+            local newval = vdict:incr(vkey, 1, 0, 3600)
+            if newval and newval >= (conf.ip_ban_threshold or 10) then
+                local banDict2 = ngx.shared.kunwaf_ban
+                if banDict2 then banDict2:set("b:" .. (ngx.var.remote_addr or ""), true, conf.ip_ban_duration or 600) end
+                vdict:delete(vkey)
+                write_log("ip_ban", "auto ban after " .. tostring(newval) .. " blocks")
+            end
+        end
+    end
     ngx.status = 403
     ngx.header.content_type = "text/html; charset=utf-8"
     local ip = ngx.var.remote_addr or ""
@@ -380,6 +396,44 @@ local host = ngx.var.host
 -- 站点级 WAF 开关:site_off 列表中的 host 不启用 WAF(纯 API/内网站点)
 for _, off in ipairs(conf.site_off or {}) do
     if off == host then return end
+end
+
+-- 蜜罐诱捕:访问假后台/敏感伪装路径的 IP 立即长期封禁(默认 24h)
+-- 注意:此处 banDict 尚未声明(声明在下方 CC 区),必须直接取 shared dict
+if conf.honeypot_enable and type(conf.honeypot_paths) == "table" then
+    for _, hp in ipairs(conf.honeypot_paths) do
+        if hp ~= "" and string.sub(uri, 1, #hp) == hp then
+            local hb = ngx.shared.kunwaf_ban
+            if hb then hb:set("b:" .. ip, true, 86400) end
+            write_log("honeypot", uri)
+            ngx.status = 404
+            ngx.header.content_type = "text/html; charset=utf-8"
+            ngx.say('<!DOCTYPE html><html><head><title>404 Not Found</title></head><body><center><h1>404 Not Found</h1><hr>nginx</center></body></html>')
+            return ngx.exit(404)
+        end
+    end
+end
+
+-- HTTP 请求走私检测:CL/TE 头冲突、重复 Content-Length、未知 Transfer-Encoding
+-- (RE2 兼容写法;命中直接 400,此类请求无法被可靠路由,不提供放行模式)
+do
+    local h_cl = ngx.var.http_content_length
+    local h_te = ngx.var.http_transfer_encoding
+    if h_cl then
+        local n = select(2, string.gsub(h_cl, ",", ""))
+        if string.match(h_cl, "^%s*%d+%s*$") == nil or n and n > 0 then
+            write_log("smuggle", "conflicting content-length: " .. string.sub(h_cl, 1, 60))
+            return ngx.exit(400)
+        end
+    end
+    if h_te and h_cl then
+        write_log("smuggle", "both TE and CL present")
+        return ngx.exit(400)
+    end
+    if h_te and not string.match(string.lower(h_te), "chunked") and not string.match(string.lower(h_te), "identity") then
+        write_log("smuggle", "unknown transfer-encoding")
+        return ngx.exit(400)
+    end
 end
 
 -- 自动封禁黑名单:面板按违规频次自动维护,与手工 ip_black 分列

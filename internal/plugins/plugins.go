@@ -136,11 +136,14 @@ type WafSettings struct {
 	AutoBanEnable    bool     `json:"auto_ban_enable"`
 	AutoBanThreshold int      `json:"auto_ban_threshold"` // 24h 违规次数阈值
 	AutoBlackList    []string `json:"auto_black_list"`    // 自动封禁的 IP(由面板维护,UI 只读)
+	// 蜜罐诱捕:访问 honeypot_paths 中路径(如假后台)的 IP 立即长期封禁
+	HoneypotEnable bool     `json:"honeypot_enable"`
+	HoneypotPaths  []string `json:"honeypot_paths"`
 }
 
 // DefaultRuleGroups 默认规则组(全部启用)
 func DefaultRuleGroups() map[string]bool {
-	return map[string]bool{"sql": true, "xss": true, "lfi": true, "cmd": true, "scan": true}
+	return map[string]bool{"sql": true, "xss": true, "lfi": true, "cmd": true, "scan": true, "webshell": true}
 }
 
 // CustomRule 用户自定义检测规则
@@ -174,6 +177,20 @@ func defaultRules() map[string][]string {
 			`benchmark\s*\(`,
 			`load_file\s*\(`,
 			`into\s+(out|dump)file`,
+		},
+		"webshell": {
+			`eval\s*\(\s*\$(_POST|_GET|_REQUEST|GLOBALS)`,
+			`assert\s*\(\s*\$(_POST|_GET|_REQUEST)`,
+			`(include|require)(\s|\()?\s*\$(_POST|_GET|_REQUEST)`,
+			`base64_decode\s*\(\s*(gzinflate|str_rot13|eval|\$)`,
+			`preg_replace\s*\(\s*["'].*\/e`,
+			`(system|shell_exec|passthru|proc_open|popen)\s*\(`,
+			`\$\{(?=.*JQR)`,
+			`\b(gzuncompress|str_rot13|array_map|call_user_func|array_filter)\s*\(\s*(base64_decode|\$_(GET|POST|REQUEST|COOKIE))`,
+			`<\?php[\s\S]{0,200}(eval|assert|system)\s*\(`,
+			`request\.getParameter.*?(Runtime|exec|getRuntime)`,
+			`ProcessBuilder|java\.lang\.Runtime`,
+			`(Invoke-Expression|IEX\s+\(|DownloadString)`,
 		},
 		"xss": {
 			`<\s*script`,
@@ -268,6 +285,11 @@ func loadWafConfig() *wafConfigFile {
 			def := defaultWafConfig()
 			if _, ok := c.Rules["sensitive"]; !ok {
 				c.Rules["sensitive"] = def.Rules["sensitive"]
+				migrated = true
+			}
+			// 规则迁移(第五轮):webshell 木马检测组,存量配置补默认
+			if _, ok := c.Rules["webshell"]; !ok {
+				c.Rules["webshell"] = def.Rules["webshell"]
 				migrated = true
 			}
 			// 规则迁移(第三轮渗透修复):sql 组补内联注释/子查询/盲注函数检测,存量配置追加缺失项

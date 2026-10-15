@@ -2712,7 +2712,7 @@ PAGES.plugins = {
   tabGlobal(body) {
     var self = this;
     var st = this.st;
-    var grp = [["sql", "SQL 注入", "拦截 union select、sleep() 等注入特征"], ["xss", "XSS 跨站", "拦截 script 标签、事件注入等"], ["lfi", "文件包含", "拦截目录穿越、/etc/passwd 等"], ["cmd", "命令执行", "拦截 cat /etc、system() 等"], ["scan", "扫描器", "拦截常见扫描器 UA 与探测行为"], ["sensitive", "敏感文件", "拦截 .git/.env/.sql 备份等敏感文件泄露"]];
+    var grp = [["sql", "SQL 注入", "拦截 union select、sleep() 等注入特征"], ["xss", "XSS 跨站", "拦截 script 标签、事件注入等"], ["lfi", "文件包含", "拦截目录穿越、/etc/passwd 等"], ["cmd", "命令执行", "拦截 cat /etc、system() 等"], ["scan", "扫描器", "拦截常见扫描器 UA 与探测行为"], ["sensitive", "敏感文件", "拦截 .git/.env/.sql 备份等敏感文件泄露", ["webshell", "Webshell 木马", "拦截 eval($_POST)、一句话木马上传、反序列化等"]]];
     var modeCards = ["block", "alert", "monitor"].map(function(m) {
       var on = st.mode === m;
       return '<div class="waf-mode-card ' + (on ? "active" : "") + '" data-mode="' + m + '"><b>' + self.MODE_INFO[m].name + "</b><div>" + self.MODE_INFO[m].desc + "</div></div>";

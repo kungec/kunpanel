@@ -2,6 +2,7 @@ package appstore
 
 import (
 	"net/http"
+	"os/exec"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -432,6 +433,50 @@ func builtinTemplates() []Template {
                 return "http://<IP>:" + pval(p, "Port", "8080")
             },
         },
+        {
+            Key: "nat-cloud", Name: "NAT Cloud", Category: "建站", Icon: "cloud", Version: "latest",
+            Desc: "NAT VPS 销售与自动化开通系统:套餐销售/LXC 节点全自动交付/计费/工单/实名/返利/开放 API",
+            Params: []Param{
+                {Key: "Port", Label: "监听端口", Default: "8082"},
+                {Key: "DBRootPassword", Label: "MySQL root 密码", Default: "Kun@NC2026"},
+            },
+            ComposeFrom: func(p map[string]string) string {
+                port := pval(p, "Port", "8082")
+                return `services:
+  web:
+    image: php:8.2-apache
+    container_name: natcloud-web
+    ports:
+      - "` + port + `:80"
+    volumes:
+      - ./app:/var/www/html/app
+      - ./public:/var/www/html
+      - ./cron:/var/www/html/cron
+      - nc_data:/var/www/html/data
+    depends_on:
+      - db
+    restart: unless-stopped
+  db:
+    image: mariadb:10.11
+    container_name: natcloud-db
+    environment:
+      MYSQL_DATABASE: natcloud
+      MYSQL_ROOT_PASSWORD: ` + pval(p, "DBRootPassword", "Kun@NC2026") + `
+      TZ: Asia/Shanghai
+    volumes:
+      - nc_db:/var/lib/mysql
+      - ./schema.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    restart: unless-stopped
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_general_ci
+volumes:
+  nc_data:
+  nc_db:
+`
+            },
+            WebURL: func(p map[string]string) string {
+                return "http://<IP>:" + pval(p, "Port", "8082")
+            },
+        },
 		{
 			Key: "npm", Name: "Nginx Proxy Manager", Category: "Web服务器", Icon: "shuffle", Version: "latest",
 			Desc: "可视化反向代理管理,自动申请 SSL 证书",
@@ -630,6 +675,13 @@ func Install(key string, params map[string]string) error {
 		}
 	}
 
+	// NAT Cloud:下载源码和 schema.sql 供 MySQL 首次启动自动导入
+	if key == "nat-cloud" {
+		if err := installNatCloud(dir); err != nil {
+			return fmt.Errorf("NAT Cloud 初始化失败: %w", err)
+		}
+	}
+
 	list := loadInstances()
 	for i := range list {
 		if list[i].Key == key {
@@ -656,6 +708,62 @@ func installKunfaka(dir string, params map[string]string) error {
 	if err := util.AtomicWriteString(filepath.Join(dir, "database.sql"), string(sqlData), 0o644); err != nil {
 		return err
 	}
+	return nil
+}
+
+// installNatCloud 下载 nat-cloud 源码包并解压到 compose 目录
+func installNatCloud(dir string) error {
+	tarURL := "https://github.com/kungec/nat-cloud/archive/refs/heads/main.tar.gz"
+	data, err := downloadFile(tarURL, 60*time.Second)
+	if err != nil {
+		return fmt.Errorf("下载源码包失败: %w", err)
+	}
+	tmp := filepath.Join(dir, ".tmp_install")
+	_ = os.RemoveAll(tmp)
+	_ = os.MkdirAll(tmp, 0o755)
+	tgz := filepath.Join(tmp, "src.tar.gz")
+	if err := os.WriteFile(tgz, data, 0o644); err != nil {
+		return err
+	}
+	cmd := exec.Command("tar", "-xzf", tgz, "-C", tmp, "--strip-components=1")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		_ = os.RemoveAll(tmp)
+		return fmt.Errorf("解压失败: %v %s", err, strings.TrimSpace(string(out)))
+	}
+	// 复制源码目录和文件到 compose 目录
+	for _, name := range []string{"app", "public", "cron", "install"} {
+		srcDir := filepath.Join(tmp, name)
+		dstDir := filepath.Join(dir, name)
+		if _, err := os.Stat(srcDir); err == nil {
+			filepath.WalkDir(srcDir, func(p string, d os.DirEntry, err error) error {
+				if err != nil {
+					return err
+				}
+				rel, _ := filepath.Rel(srcDir, p)
+				dst := filepath.Join(dstDir, rel)
+				if d.IsDir() {
+					return os.MkdirAll(dst, 0o755)
+				}
+				data, err := os.ReadFile(p)
+				if err != nil {
+					return err
+				}
+				return os.WriteFile(dst, data, 0o644)
+			})
+		}
+	}
+	for _, f := range []string{"index.php", "router.php", ".htaccess", ".env.example"} {
+		src := filepath.Join(tmp, f)
+		if _, err := os.Stat(src); err == nil {
+			data, _ := os.ReadFile(src)
+			_ = util.AtomicWriteString(filepath.Join(dir, f), string(data), 0o644)
+		}
+	}
+	// schema.sql 从 install/ 移到顶层
+	if sb, err := os.ReadFile(filepath.Join(dir, "install", "schema.sql")); err == nil {
+		_ = util.AtomicWrite(filepath.Join(dir, "schema.sql"), sb, 0o644)
+	}
+	_ = os.RemoveAll(tmp)
 	return nil
 }
 

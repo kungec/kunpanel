@@ -221,7 +221,7 @@ PAGES.websites = {
               if (days < 30) return '<span class="tag tag-warning">' + days + " 天后到期</span>";
               return '<span class="tag tag-success">' + days + " 天</span>";
             } },
-          { title: "创建时间", width: "110px", render: (r) => fmTimeShort(r.created_at) },
+          { title: "创建时间", width: "110px", render: (r) => { var d = new Date(r.created_at); return isNaN(d) ? "-" : (d.getMonth()+1 + "/" + d.getDate() + " " + String(d.getHours()).padStart(2,"0") + ":" + String(d.getMinutes()).padStart(2,"0")); } },
           { title: "操作", width: "330px", render: (r) =>
             '<div class="ops"><button class="btn btn-xs btn-primary" data-files="' + r.id + '" title="管理网站文件">' + I("folderOpen") + ' 文件</button>' +
             '<button class="btn btn-xs btn-plain" data-visit="' + r.id + '">访问</button>' +

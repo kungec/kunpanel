@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -65,6 +67,8 @@ func Load() (*Manager, error) {
 				_ = M.Save()
 				fmt.Println("已为面板自动生成随机安全入口:/", M.Cfg.Entrance, "(可在面板设置中修改或关闭)")
 			}
+			// 每次启动确保监听端口在系统防火墙已放行(幂等;升级/迁移后端口不符的场景自愈)
+			OpenFirewallPort(M.Cfg.Port)
 			return M, nil
 		}
 	}
@@ -104,6 +108,9 @@ func Load() (*Manager, error) {
 		return nil, err
 	}
 
+	// 首次安装:尽力放行系统防火墙(ufw/firewalld),否则随机端口会被拦截导致面板无法访问
+	OpenFirewallPort(cfg.Port)
+
 	// 初始密码落盘,便于安装脚本读取展示
 	addr := fmt.Sprintf("http://<服务器IP>:%d", cfg.Port)
 	if cfg.Entrance != "" && cfg.Entrance != "-" {
@@ -120,6 +127,36 @@ func Load() (*Manager, error) {
 	fmt.Printf("  密码:     %s\n", pwd)
 	fmt.Println("==============================================")
 	return M, nil
+}
+
+// OpenFirewallPort 尽力而为放行面板端口:检测 ufw/firewalld 并放行,失败静默
+// (供首次初始化与修改端口场景调用;不依赖 fwmgmt,避免反向依赖)
+func OpenFirewallPort(port int) {
+	if runtime.GOOS != "linux" || port <= 0 || port > 65535 {
+		return
+	}
+	spec := fmt.Sprintf("%d/tcp", port)
+	if _, err := exec.LookPath("ufw"); err == nil {
+		// 用退出码判断(不依赖 locale 的状态文本;inactive 时 allow 无副作用)
+		if err := exec.Command("ufw", "status").Run(); err == nil {
+			if err := exec.Command("ufw", "allow", spec).Run(); err == nil {
+				// 放行后校验确实生效
+				if out, err := exec.Command("ufw", "status").CombinedOutput(); err == nil && strings.Contains(string(out), spec) {
+					fmt.Println("已放行系统防火墙(ufw)端口", spec)
+				}
+			}
+			return
+		}
+	}
+	if _, err := exec.LookPath("firewall-cmd"); err == nil {
+		// firewalld:用退出码 + 输出非空判断(中文环境 --state 输出 running 一致)
+		if out, err := exec.Command("firewall-cmd", "--state").CombinedOutput(); err == nil && strings.TrimSpace(string(out)) == "running" {
+			if err := exec.Command("firewall-cmd", "--permanent", "--add-port", spec).Run(); err == nil {
+				_ = exec.Command("firewall-cmd", "--reload").Run()
+				fmt.Println("已放行系统防火墙(firewalld)端口", spec)
+			}
+		}
+	}
 }
 
 // normalizeEntrance 归一化入口:小写、去空白与斜杠;off/- 表示关闭;非法字符回退为随机生成

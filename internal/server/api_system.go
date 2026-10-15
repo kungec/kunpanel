@@ -127,6 +127,8 @@ func (s *Server) handleSaveSettings(w http.ResponseWriter, r *http.Request) {
 		if req.Port > 0 && req.Port < 65536 && req.Port != c.Port {
 			c.Port = req.Port
 			restartNeeded = true
+			// 端口变更:提前放行新端口的系统防火墙(避免重启后失联)
+			config.OpenFirewallPort(req.Port)
 		}
 		if req.Username != "" {
 			c.Username = req.Username
@@ -145,7 +147,12 @@ func (s *Server) handleSaveSettings(w http.ResponseWriter, r *http.Request) {
 		msg += ",请通过 http://<IP>:" + strconv.Itoa(config.M.Get().Port) + "/" + entrance + " 访问面板"
 	}
 	if restartNeeded {
-		msg += ";端口修改将在重启面板后生效"
+		// 端口变更:新端口防火墙已提前放行,自动重启生效(避免用户忘记重启导致失联)
+		msg += ";端口已修改,面板将在 2 秒后自动重启"
+		go func() {
+			time.Sleep(2 * time.Second)
+			_ = exec.Command("systemctl", "restart", "kunpanel").Run()
+		}()
 	}
 	OK(w, map[string]any{"restart": restartNeeded, "message": msg, "entrance": entrance})
 }

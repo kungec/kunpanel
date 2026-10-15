@@ -294,15 +294,28 @@ else
 fi
 
 # ---------------- 防火墙放行(尽力而为) ----------------
+# 面板自身也会在首次初始化时放行(双层保险);此处等待并提取实际端口再次确认
 PORT_HINT=""
-if [[ -f "$KP_DIR/data/initial_password.txt" ]]; then
-  PORT_HINT=$(grep -oE 'http://<服务器IP>:[0-9]+' "$KP_DIR/data/initial_password.txt" 2>/dev/null | grep -oE '[0-9]+$' | head -1)
+if [[ -n "$KP_PORT" ]]; then
+  PORT_HINT="$KP_PORT"
+else
+  for i in {1..15}; do
+    if [[ -f "$KP_DIR/data/initial_password.txt" ]]; then
+      PORT_HINT=$(grep -oE 'http://<服务器IP>:[0-9]+' "$KP_DIR/data/initial_password.txt" 2>/dev/null | grep -oE '[0-9]+$' | head -1)
+      [[ -n "$PORT_HINT" ]] && break
+    fi
+    sleep 1
+  done
 fi
-PORT_HINT="${PORT_HINT:-20000}"
-if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
-  ufw allow "$PORT_HINT/tcp" >/dev/null 2>&1 && info "已放行 ufw 端口 $PORT_HINT"
-elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
-  firewall-cmd --permanent --add-port="$PORT_HINT/tcp" >/dev/null 2>&1 && firewall-cmd --reload >/dev/null 2>&1 && info "已放行 firewalld 端口 $PORT_HINT"
+if [[ -n "$PORT_HINT" ]]; then
+  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
+    ufw list 2>/dev/null | grep -q "$PORT_HINT/tcp" || ufw allow "$PORT_HINT/tcp" >/dev/null 2>&1
+    ufw status 2>/dev/null | grep -q "$PORT_HINT/tcp" && info "已放行 ufw 端口 $PORT_HINT" || warn "ufw 放行端口 $PORT_HINT 失败,请手动执行: ufw allow $PORT_HINT/tcp"
+  elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+    firewall-cmd --permanent --add-port="$PORT_HINT/tcp" >/dev/null 2>&1 && firewall-cmd --reload >/dev/null 2>&1 && info "已放行 firewalld 端口 $PORT_HINT"
+  fi
+else
+  warn "未能自动检测面板端口(面板可能尚未完成初始化),请从上方面板地址查看端口并手动放行防火墙"
 fi
 
 # ---------------- Docker(可选) ----------------

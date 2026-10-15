@@ -3853,7 +3853,7 @@ PAGES.files = {
         ? '<button class="btn btn-sm btn-plain" id="fm-exit-search">' + I("close") + " 退出搜索</button>"
         : '<button class="btn btn-sm btn-plain" id="fm-newfile">' + I("file") + " 新建文件</button>" +
           '<button class="btn btn-sm btn-plain" id="fm-newdir">' + I("folder") + " 新建目录</button>" +
-          '<button class="btn btn-sm btn-plain" id="fm-upload">' + I("upload") + " 上传</button>" +
+          '<button class="btn btn-sm btn-plain" id="fm-upload" title="也可直接把文件拖入下方列表上传">' + I("upload") + " 上传</button>" +
           '<button class="btn btn-sm btn-plain" id="fm-remote">' + I("download") + " 远程下载</button>" +
           '<button class="btn btn-sm btn-plain" id="fm-trash">' + I("trash") + " 回收站</button>") +
       '<span class="fm-sep"></span>' +
@@ -4322,14 +4322,18 @@ PAGES.files = {
       return;
     }
     var useCM = typeof CodeMirror !== "undefined" && content.length < 2 * 1024 * 1024;
-    // 内容到位:替换弹窗主体为编辑器
-    qs(".modal-body", m.el).innerHTML =
+    // 内容到位:替换弹窗主体为编辑器(cm-body = flex 布局,编辑器填满剩余高度)
+    var mbody = qs(".modal-body", m.el);
+    mbody.classList.add("cm-body");
+    mbody.innerHTML =
       '<div class="cm-toolbar">' +
       (useCM
         ? '<button class="btn btn-sm btn-plain" id="cme-save">' + I("edit") + " 保存 <span class=help style=margin:0>Ctrl+S</span></button>" +
           '<button class="btn btn-sm btn-plain" id="cme-history">' + I("clock") + " 历史版本</button>" +
           '<button class="btn btn-sm btn-plain" id="cme-find">查找 <span class=help style=margin:0>Ctrl+F</span></button>' +
-          '<button class="btn btn-sm btn-plain" id="cme-fullscreen">全屏</button>'
+          '<button class="btn btn-sm btn-plain" id="cme-fullscreen">全屏</button>' +
+          '<span class="cm-fontsize"><button class="btn btn-sm btn-plain" id="cme-fs-dec" title="减小字号">A-</button>' +
+          '<button class="btn btn-sm btn-plain" id="cme-fs-inc" title="增大字号">A+</button></span>'
         : "") +
       '<span class="help mono" id="cme-status" style="margin:0 0 0 auto"></span></div>' +
       '<div id="cme-host"><textarea class="textarea mono" id="fm-editor" rows="22" spellcheck="false" style="font-size:12.5px;line-height:1.55">' + esc(content) + "</textarea></div>";
@@ -4375,6 +4379,18 @@ PAGES.files = {
       });
       window.__cme = cm;
       qs("#fm-editor", m.el).style.display = "none"; // CM 已替代原生 textarea
+      // 字号调节(持久化,A- / A+)
+      var cmFs = parseInt(localStorage.getItem("kp_cm_fs") || "13", 10);
+      var applyFs = function() {
+        cmFs = Math.max(11, Math.min(20, cmFs));
+        cm.getWrapperElement().style.fontSize = cmFs + "px";
+        cm.refresh();
+        localStorage.setItem("kp_cm_fs", String(cmFs));
+      };
+      applyFs();
+      var dec = qs("#cme-fs-dec", m.el), inc = qs("#cme-fs-inc", m.el);
+      if (dec) dec.onclick = function() { cmFs -= 1; applyFs(); };
+      if (inc) inc.onclick = function() { cmFs += 1; applyFs(); };
       // 未保存改动保护:尝试关闭时若编辑器是脏的,弹确认
       m.setVeto(function() {
         if (cm.isClean()) return false;

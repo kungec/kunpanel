@@ -1364,6 +1364,15 @@ tr.fm-selected { background: var(--primary-light); }
 .cm-toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
 .cm-toolbar .help { font-size: 11px; }
 .CodeMirror { height: 58vh; border: 1px solid var(--border); border-radius: 8px; font-size: 12.5px; line-height: 1.55; background: var(--card); color: var(--text); }
+/* 编辑器弹窗:body 纵向 flex,编辑器填满剩余高度(最大化时不再留大片空白) */
+.modal-body.cm-body { display: flex; flex-direction: column; overflow: hidden; }
+.modal-body.cm-body .cm-toolbar { flex: none; }
+.modal-body.cm-body #cme-host { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.modal-body.cm-body #cme-host .CodeMirror { flex: 1; height: auto; min-height: 320px; }
+.modal-box.modal-max .modal-body.cm-body #cme-host .CodeMirror { min-height: 0; }
+.modal-body.cm-body #cme-host textarea { flex: 1; height: auto; min-height: 320px; }
+.cm-fontsize { display: inline-flex; gap: 4px; margin-left: 6px; }
+.cm-fontsize .btn { padding-left: 9px; padding-right: 9px; }
 .CodeMirror-gutters { background: var(--bg); border-right: 1px solid var(--border); }
 .CodeMirror-linenumber { color: var(--text-3); }
 .CodeMirror-fullscreen { z-index: 2400 !important; border: none !important; }

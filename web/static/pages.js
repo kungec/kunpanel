@@ -266,9 +266,8 @@ PAGES.websites = {
       footer: '<button class="btn btn-plain" data-act="close">关 闭</button>',
     });
     qs('[data-act="close"]', m.el).onclick = m.close;
-    var body = qs("#am-body", m.el);
+    var body = qs("#ssl-mgr-body", m.el); // 修复:此前误写 #am-body(从 PHP 管理弹窗复制的残留),写入 null 静默失败,弹窗永远停在骨架屏
     var self = this;
-    // 弹窗关闭时停掉状态轮询
     var origAmClose = m.close;
     m.close = function() {
       if (self._amPollTimer) { clearInterval(self._amPollTimer); self._amPollTimer = null; }

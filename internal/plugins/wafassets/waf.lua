@@ -17,6 +17,7 @@ local RULE_LABELS = {
     cmd = "命令执行", scan = "扫描器", cc = "CC 攻击",
     ip_black = "IP 黑名单", ua_black = "UA 黑名单", ip_ban = "IP 临时封禁",
     sensitive = "敏感文件", method = "危险方法", custom = "自定义规则",
+    empty_ua = "空 UA 拦截", http10 = "HTTP/1.0 拦截", slider = "滑块验证",
 }
 
 local MODE_LABELS = { block = "拦截", alert = "告警", monitor = "监控" }
@@ -207,6 +208,7 @@ local function cc_cookie_valid(conf)
     local ccm = conf.cc_mode or "rate"
     if ccm == "jump" and (now - issue_n) < 4 then return false end
     if ccm == "cf" and (now - issue_n) < 1 then return false end
+    if ccm == "slider" and (now - issue_n) < 1 then return false end
     if cc_hmac(conf, ip .. "|" .. issue) ~= sig then return false end
     return true
 end
@@ -277,6 +279,29 @@ local function serve_challenge(conf, kind)
             '<div class="cf-f"><b>CLOUDFLARE 风格</b><span>KunPanel WAF · 人机验证</span></div>'
         script = '<script>setTimeout(function(){document.cookie="kun_cc=' .. sig .. '.' .. issue .. ';Path=/;Max-Age=' .. ttl .. ';SameSite=Lax";location.replace("' .. host_uri .. '")},1200);</script>' ..
             '<noscript><meta http-equiv="refresh" content="3"></noscript>'
+    elseif kind == "slider" then
+        -- 滑块验证:拖动滑块到最右侧完成人机验证(真人拖动 ≥0.3s,服务端强制停留 ≥1s)
+        local sig = cc_hmac(conf, ip .. "|" .. issue)
+        local ttl = tonumber(conf.cc_clear_ttl) or 3600
+        inner = '<h1>滑动验证</h1><p>检测到异常请求频率,请按住滑块拖到最右侧</p>' ..
+            '<div id="sl-track"><div id="sl-fill"></div><div id="sl-handle"><span>»</span></div><div id="sl-tip">按住滑块,拖到最右侧</div></div>' ..
+            '<style>#sl-track{position:relative;width:260px;height:38px;margin:14px auto 4px;background:#eef1f6;border-radius:19px;overflow:hidden;text-align:left}' ..
+            '#sl-fill{position:absolute;left:0;top:0;height:100%;width:0;background:linear-gradient(90deg,#60a5fa,#3b82f6)}' ..
+            '#sl-handle{position:absolute;left:0;top:0;width:52px;height:38px;background:#3b82f6;border-radius:19px;cursor:grab;display:flex;align-items:center;justify-content:center;color:#fff;font-size:16px;user-select:none;touch-action:none}' ..
+            '#sl-tip{position:absolute;right:12px;top:50%;transform:translateY(-50%);color:#8a93a6;font-size:12px}' ..
+            '</style>' ..
+            '<script>(function(){' ..
+            'var t=document.getElementById("sl-track"),h=document.getElementById("sl-handle"),f=document.getElementById("sl-fill"),p=document.getElementById("sl-tip");' ..
+            'var max=0,sx=0,cur=0,drag=false;' ..
+            'function mx(){max=t.offsetWidth-h.offsetWidth;return max}' ..
+            'function dn(e){mx();drag=true;sx=(e.touches?e.touches[0].clientX:e.clientX)-cur;h.style.cursor="grabbing";if(p)p.style.opacity=0;e.preventDefault();}' ..
+            'function mv(e){if(!drag)return;var x=(e.touches?e.touches[0].clientX:e.clientX)-sx;if(x<0)x=0;if(x>max)x=max;cur=x;h.style.left=x+"px";f.style.width=(x+h.offsetWidth)+"px";if(x>=max)done();}' ..
+            'function up(){if(!drag)return;drag=false;if(cur<max){cur=0;h.style.left="0px";f.style.width="0px";}}' ..
+            'function done(){drag=false;document.cookie="kun_cc=' .. sig .. '.' .. issue .. ';Path=/;Max-Age=' .. ttl .. ';SameSite=Lax";location.replace("' .. host_uri .. '");}' ..
+            'h.addEventListener("mousedown",dn);h.addEventListener("touchstart",dn);' ..
+            'document.addEventListener("mousemove",mv);document.addEventListener("touchmove",mv);' ..
+            'document.addEventListener("mouseup",up);document.addEventListener("touchend",up);' ..
+            'mx();})();</script>'
     else -- js 无感验证
         local sig = cc_hmac(conf, ip .. "|" .. issue)
         inner = '<h1>安全验证中</h1><p>正在验证浏览器环境,请稍候…</p><div class="ring"></div>'
@@ -431,6 +456,20 @@ if in_list(ua, conf.ua_black) then
     write_log("ua_black", ua)
     ngx.status = 403; ngx.header.content_type = "text/plain"; ngx.say("403 Forbidden")
     return ngx.exit(403)
+end
+
+-- 空 UA 拦截(常见脚本工具特征;正规浏览器必有 UA)
+if conf.empty_ua_block and (ua == "" or ua == nil) then
+    write_log("empty_ua", "-")
+    ngx.status = 403; ngx.header.content_type = "text/plain"; ngx.say("403 Forbidden (empty UA)")
+    return ngx.exit(403)
+end
+
+-- HTTP/1.0 拦截(大量扫描器/攻击工具使用 HTTP/1.0 规避日志与特征)
+if conf.http10_block and ngx.var.server_protocol == "HTTP/1.0" then
+    write_log("http10", ngx.var.server_protocol)
+    ngx.status = 405; ngx.header.content_type = "text/plain"; ngx.say("405 HTTP/1.0 Not Allowed")
+    return ngx.exit(405)
 end
 
 -- 危险 HTTP 方法拦截(TRACE/TRACK/CONNECT 等)

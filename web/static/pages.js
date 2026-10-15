@@ -2712,6 +2712,9 @@ PAGES.plugins = {
       '<div class="settings-row"><label style="align-items:flex-start">规则列表<div class="settings-hint" style="margin:0">每行一条,格式:PCRE 正则 | 标签(可选)<br>示例:<code>\\.(bak|old|sql)$ | 备份文件探测</code></div></label>' +
       '<textarea class="textarea mono" id="waf-custom-rules" rows="6" style="max-width:520px;font-size:12px">' +
       esc((st.custom_rules || []).map(function(c) { return c.pattern + " | " + (c.label || ""); }).join("\n")) + "</textarea></div>" +
+      '<div class="settings-section"><div class="settings-section-title">增强防护</div>' +
+      '<div class="settings-row"><label style="min-width:170px">拦截空 UA 请求<div class="settings-hint" style="margin:0">正规浏览器必有 User-Agent;空 UA 多为脚本工具与扫描器</div></label><label class="radio-line"><input type="checkbox" id="emptyua-block" ' + (st.empty_ua_block ? "checked" : "") + "> 启用</label></div>" +
+      '<div class="settings-row"><label style="min-width:170px">拦截 HTTP/1.0 请求<div class="settings-hint" style="margin:0">现代浏览器均使用 HTTP/1.1+,HTTP/1.0 请求多为攻击工具</div></label><label class="radio-line"><input type="checkbox" id="http10-block" ' + (st.http10_block ? "checked" : "") + "> 启用</label></div></div>" +
       '<div class="settings-section"><div class="settings-section-title">搜索引擎蜘蛛白名单<span class="help" style="margin:0">启用的爬虫完全跳过检测:CC 人机验证、临时封禁都不会针对它们,保护 SEO 收录</span></div>' +
       '<div class="settings-row"><label style="min-width:170px">启用蜘蛛白名单</label><label class="radio-line"><input type="checkbox" id="spider-enable" ' + (st.spider_white_enable ? "checked" : "") + "> 启用</label></div>" +
       '<div class="settings-row"><label style="align-items:flex-start">UA 特征(正则)<div class="settings-hint" style="margin:0">每行一条,匹配 User-Agent 即放行</div></label>' +
@@ -2750,6 +2753,8 @@ PAGES.plugins = {
       self.st.spider_verify_dns = qs("#spider-dns", body).checked;
       self.st.spider_white = qs("#spider-list", body).value.split("\n").map(function(x) { return x.trim(); }).filter(Boolean);
       self.st.method_block_enable = qs("#method-enable", body).checked;
+      self.st.empty_ua_block = qs("#emptyua-block", body).checked;
+      self.st.http10_block = qs("#http10-block", body).checked;
       self.st.method_block_list = qs("#method-list", body).value.split("\n").map(function(x) { return x.trim(); }).filter(Boolean);
       self.save(body);
     };
@@ -2765,6 +2770,7 @@ PAGES.plugins = {
       { k: "cf", name: "Cloudflare 风格", desc: "全屏 Verifying 动画页后无感放行,观感最接近 CDN 厂商,对脚本工具极不友好" },
       { k: "click", name: "点击验证", desc: "需点击确认按钮后继续访问" },
       { k: "captcha", name: "算术验证码", desc: "需输入算式答案,防护强度最高" },
+      { k: "slider", name: "滑块验证", desc: "按住滑块拖到最右侧完成验证,真人体验好,脚本难以模拟拖动轨迹" },
     ];
     var modeCards = ccModes.map(function(mo) {
       var on = (st.cc_mode || "rate") === mo.k;

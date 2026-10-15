@@ -126,6 +126,9 @@ type WafSettings struct {
 	MethodBlockList   []string `json:"method_block_list"`
 	// 自定义检测规则(用户在面板增删,保存即热更新;命中走 拦截/告警/监控 全局模式)
 	CustomRules []CustomRule `json:"custom_rules"`
+	// 增强防护:空 UA 拦截(常见脚本工具特征)/ HTTP/1.0 请求拦截(扫描器常用)
+	EmptyUaBlock bool `json:"empty_ua_block"`
+	Http10Block  bool `json:"http10_block"`
 }
 
 // DefaultRuleGroups 默认规则组(全部启用)
@@ -383,7 +386,7 @@ func SaveWafSettings(s WafSettings) error {
 		return fmt.Errorf("CC 统计窗口应在 1-3600 秒之间")
 	}
 	switch s.CcMode {
-	case "", "rate", "jump", "js", "cf", "click", "captcha":
+	case "", "rate", "jump", "js", "cf", "slider", "click", "captcha":
 	default:
 		return fmt.Errorf("未知 CC 防御模式")
 	}

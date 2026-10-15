@@ -83,7 +83,52 @@ func (s *Server) handleFileSave(w http.ResponseWriter, r *http.Request) {
 		Fail(w, http.StatusBadRequest, "参数错误")
 		return
 	}
+	// 保存前留存历史版本(宝塔式,可在编辑器中回滚)
+	filemgr.Snapshot(req.Path)
 	if err := filemgr.Write(req.Path, req.Content); err != nil {
+		Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	OK(w, nil)
+}
+
+// handleFileHistory 列出文件编辑历史版本
+func (s *Server) handleFileHistory(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		Fail(w, http.StatusBadRequest, "缺少 path")
+		return
+	}
+	OK(w, filemgr.History(path))
+}
+
+// handleFileHistoryContent 读取历史版本内容
+func (s *Server) handleFileHistoryContent(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Query().Get("path")
+	ts := r.URL.Query().Get("ts")
+	if path == "" || ts == "" {
+		Fail(w, http.StatusBadRequest, "缺少参数")
+		return
+	}
+	data, err := filemgr.HistoryContent(path, ts)
+	if err != nil {
+		Fail(w, http.StatusNotFound, "历史版本不存在")
+		return
+	}
+	OK(w, map[string]string{"content": string(data)})
+}
+
+// handleFileHistoryRestore 恢复历史版本
+func (s *Server) handleFileHistoryRestore(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path string `json:"path"`
+		TS   string `json:"ts"`
+	}
+	if err := readJSON(r, &req); err != nil || req.Path == "" || req.TS == "" {
+		Fail(w, http.StatusBadRequest, "参数错误")
+		return
+	}
+	if err := filemgr.RestoreHistory(req.Path, req.TS); err != nil {
 		Fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}

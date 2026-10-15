@@ -1208,3 +1208,14 @@ tr.fm-selected { background: var(--primary-light); }
   .monitor-chip { display: none; }
   .topbar-title { max-width: 52vw; }
 }
+
+/* ================= CodeMirror 代码编辑器 ================= */
+.cm-toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+.cm-toolbar .help { font-size: 11px; }
+.CodeMirror { height: 58vh; border: 1px solid var(--border); border-radius: 8px; font-size: 12.5px; line-height: 1.55; background: var(--card); color: var(--text); }
+.CodeMirror-gutters { background: var(--bg); border-right: 1px solid var(--border); }
+.CodeMirror-linenumber { color: var(--text-3); }
+.CodeMirror-fullscreen { z-index: 2400 !important; border: none !important; }
+.CodeMirror-dialog { z-index: 2410 !important; }
+.cm-matchhighlight { background: var(--primary-light); }
+.CodeMirror-activeline-background { background: color-mix(in srgb, var(--primary) 6%, transparent); }

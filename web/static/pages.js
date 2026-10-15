@@ -1306,6 +1306,7 @@ PAGES.apps = {
         footer: '<button class="btn btn-plain" data-act="no">取 消</button><button class="btn btn-primary" data-act="yes">保存到应用商店</button>',
       });
       qs('[data-act="no"]', m.el).onclick = m.close;
+      cmUpgrade(qs("#ca-compose", m.el), "yaml");
       qs('[data-act="yes"]', m.el).onclick = async function() {
         try {
           await api("/apps/custom", { method: "POST", body: {
@@ -4063,27 +4064,129 @@ PAGES.files = {
     }
   },
   async editFile(path) {
+    var self = this;
     var content = "";
     try {
       var d = await api("/files/content?path=" + encodeURIComponent(path));
       content = d.content || "";
     } catch (e) { toast(e.message, "error"); return; }
+    var useCM = typeof CodeMirror !== "undefined" && content.length < 2 * 1024 * 1024;
     var m = modal({
       title: "编辑: " + basename(path),
-      width: 860,
-      body: '<textarea class="textarea mono" id="fm-editor" rows="22" spellcheck="false" style="font-size:12.5px;line-height:1.55">' + esc(content) + "</textarea>",
+      width: 960,
+      body:
+        '<div class="cm-toolbar">' +
+        (useCM
+          ? '<button class="btn btn-sm btn-plain" id="cme-save">' + I("edit") + " 保存 <span class=help style=margin:0>Ctrl+S</span></button>" +
+            '<button class="btn btn-sm btn-plain" id="cme-history">' + I("clock") + " 历史版本</button>" +
+            '<button class="btn btn-sm btn-plain" id="cme-find">查找 <span class=help style=margin:0>Ctrl+F</span></button>' +
+            '<button class="btn btn-sm btn-plain" id="cme-fullscreen">全屏</button>'
+          : "") +
+        '<span class="help mono" id="cme-status" style="margin:0 0 0 auto"></span></div>' +
+        '<div id="cme-host"><textarea class="textarea mono" id="fm-editor" rows="22" spellcheck="false" style="font-size:12.5px;line-height:1.55">' + esc(content) + "</textarea></div>",
       footer: '<span class="fm-editor-path mono" style="margin-right:auto;font-size:11px;color:var(--text-3)">' + esc(path) + "</span>" +
         '<button class="btn btn-plain" data-act="no">取 消</button><button class="btn btn-primary" data-act="save">' + I("edit") + " 保存</button>",
     });
-    qs('[data-act="save"]', m.el).onclick = async function() {
-      var val = qs("#fm-editor", m.el).value;
+    var getValue = function() {
+      return (useCM && window.__cme) ? window.__cme.getValue() : qs("#fm-editor", m.el).value;
+    };
+    var doSave = async function() {
       try {
-        await api("/files/save", { method: "POST", body: { path: path, content: val } });
-        toast("已保存");
-        m.close();
+        await api("/files/save", { method: "POST", body: { path: path, content: getValue() } });
+        toast("已保存(旧版本已存入历史)");
+        if (useCM && window.__cme) window.__cme.markClean();
       } catch (e) { toast(e.message, "error"); }
     };
+    if (useCM) {
+      var dark = document.documentElement.getAttribute("data-theme") === "dark";
+      var cm = CodeMirror(qs("#cme-host", m.el), {
+        value: content,
+        mode: cmModeOf(path),
+        theme: dark ? "material-darker" : "default",
+        lineNumbers: true,
+        styleActiveLine: true,
+        autoCloseBrackets: true,
+        matchBrackets: true,
+        indentUnit: 4,
+        tabSize: 4,
+        lineWrapping: false,
+        extraKeys: {
+          "Ctrl-S": function() { doSave(); },
+          "Cmd-S": function() { doSave(); },
+          "Ctrl-F": "findPersistent",
+          "Cmd-F": "findPersistent",
+          "Ctrl-/": "toggleComment",
+          "Cmd-/": "toggleComment",
+          "F11": function(c) { c.setOption("fullScreen", !c.getOption("fullScreen")); },
+          "Esc": function(c) { if (c.getOption("fullScreen")) c.setOption("fullScreen", false); },
+        },
+      });
+      window.__cme = cm;
+      qs("#fm-editor", m.el).style.display = "none"; // CM 已替代原生 textarea
+      var updStatus = function() {
+        var c = cm.getCursor();
+        var st = qs("#cme-status", m.el);
+        if (st) st.textContent = "行 " + (c.line + 1) + ", 列 " + (c.ch + 1) + " · " + cm.getValue().length + " 字符 · " + (cmModeOf(path) === "nginx" ? "nginx" : String(cm.getOption("mode") || ""));
+      };
+      updStatus();
+      cm.on("cursorActivity", updStatus);
+      var sv = qs("#cme-save", m.el);
+      if (sv) sv.onclick = function() { doSave(); };
+      var fs2 = qs("#cme-fullscreen", m.el);
+      if (fs2) fs2.onclick = function() { cm.setOption("fullScreen", !cm.getOption("fullScreen")); };
+      var fd2 = qs("#cme-find", m.el);
+      if (fd2) fd2.onclick = function() { cm.execCommand("findPersistent"); };
+      var histBtn = qs("#cme-history", m.el);
+      if (histBtn) histBtn.onclick = function() { self.historyDialog(path, cm); };
+    }
+    var saveBtn = qs('[data-act="save"]', m.el);
+    if (saveBtn) saveBtn.onclick = doSave;
     qs('[data-act="no"]', m.el).onclick = function() { m.close(); };
+  },
+
+  /* 历史版本列表 / 查看 / 恢复 */
+  async historyDialog(path, cm) {
+    var items = [];
+    try { items = (await api("/files/history?path=" + encodeURIComponent(path))) || []; }
+    catch (e) { toast(e.message, "error"); return; }
+    var m = modal({
+      title: "历史版本 · " + basename(path),
+      width: 640,
+      body: items.length
+        ? '<div class="table-wrap"><table class="table"><thead><tr><th>保存时间</th><th style="width:110px">大小</th><th style="width:170px">操作</th></tr></thead><tbody>' +
+          items.map(function(it) {
+            return '<tr><td>' + esc(it.time) + '</td><td>' + fmtBytes(it.size) + "</td>" +
+              '<td><button class="btn btn-xs btn-plain" data-hview="' + esc(it.ts) + '">查看</button>' +
+              '<button class="btn btn-xs btn-warning" data-hrestore="' + esc(it.ts) + '">恢复此版本</button></td></tr>';
+          }).join("") + "</tbody></table></div>" +
+          '<div class="help" style="margin-top:8px">恢复前会自动把当前内容存入历史,不会丢失改动。</div>'
+        : emptyState("clock", "暂无历史版本", "每次保存都会自动留存上一版"),
+      footer: '<button class="btn btn-plain" data-act="close">关 闭</button>',
+    });
+    qs('[data-act="close"]', m.el).onclick = m.close;
+    qsa("[data-hview]", m.el).forEach(function(b) {
+      b.onclick = async function() {
+        try {
+          var d = await api("/files/history/content?path=" + encodeURIComponent(path) + "&ts=" + encodeURIComponent(b.getAttribute("data-hview")));
+          window.open("", "_blank").document.write("<pre style=\"white-space:pre-wrap;font-size:12px\">" + d.content.replace(/&/g, "&amp;").replace(/</g, "&lt;") + "</pre>");
+        } catch (e) { toast(e.message, "error"); }
+      };
+    });
+    qsa("[data-hrestore]", m.el).forEach(function(b) {
+      b.onclick = async function() {
+        var ts = b.getAttribute("data-hrestore");
+        if (!(await confirmDlg("确定恢复到该版本吗?当前内容会先自动存入历史。"))) return;
+        try {
+          await api("/files/history/restore", { method: "POST", body: { path: path, ts: ts } });
+          toast("已恢复");
+          m.close();
+          if (cm) {
+            var d = await api("/files/content?path=" + encodeURIComponent(path));
+            cm.setValue(d.content || "");
+          }
+        } catch (e) { toast(e.message, "error"); }
+      };
+    });
   },
   /* 回收站弹窗 */
   async trashDialog(el) {
@@ -4991,3 +5094,23 @@ PAGES.docker = {
     });
   },
 };
+
+/* 按扩展名映射 CodeMirror 模式 */
+function cmModeOf(path) {
+  var ext = (path.split(".").pop() || "").toLowerCase();
+  var map = {
+    html: "htmlmixed", htm: "htmlmixed",
+    js: "javascript", mjs: "javascript",
+    json: { name: "javascript", json: true },
+    css: "css",
+    php: "application/x-httpd-php",
+    sql: "sql",
+    sh: "shell", bash: "shell",
+    md: "markdown", markdown: "markdown",
+    yml: "yaml", yaml: "yaml",
+    ini: "properties", conf: "nginx", env: "properties", cfg: "properties", htaccess: "properties",
+    py: "python",
+    xml: "xml", svg: "xml",
+  };
+  return map[ext] || (ext === "txt" ? "" : "text/plain");
+}

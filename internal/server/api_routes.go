@@ -72,6 +72,8 @@ func (s *Server) registerAPI() {
 	m.Handle("GET /api/v1/websites/nginx-logs/autoclean", wrap(http.HandlerFunc(s.handleNginxLogsAutoClean)))
 	m.Handle("POST /api/v1/websites/nginx-logs/autoclean", wrap(http.HandlerFunc(s.handleNginxLogsAutoClean)))
 	m.Handle("POST /api/v1/websites", wrap(http.HandlerFunc(s.handleSiteAdd)))
+	m.Handle("GET /api/v1/websites/{id}/subs", wrap(http.HandlerFunc(s.handleSubsGet)))
+	m.Handle("POST /api/v1/websites/{id}/subs", wrap(http.HandlerFunc(s.handleSubsSet)))
 	m.Handle("POST /api/v1/websites/{id}/toggle", wrap(http.HandlerFunc(s.handleSiteToggle)))
 	m.Handle("POST /api/v1/websites/{id}/ssl", wrap(http.HandlerFunc(s.handleSiteSSL)))
 	m.Handle("DELETE /api/v1/websites/{id}", wrap(http.HandlerFunc(s.handleSiteDelete)))

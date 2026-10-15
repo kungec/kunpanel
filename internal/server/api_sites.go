@@ -321,3 +321,44 @@ func (s *Server) handleSiteUpstreamsSave(w http.ResponseWriter, r *http.Request)
 	}
 	OK(w, nil)
 }
+
+// ---------- 子域名绑定 ----------
+
+func (s *Server) handleSubsGet(w http.ResponseWriter, r *http.Request) {
+	id, ok := safeID(r.PathValue("id"))
+	if !ok {
+		Fail(w, http.StatusBadRequest, "非法站点 ID")
+		return
+	}
+	site, err := websites.GetSite(id)
+	if err != nil {
+		Fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	OK(w, site.Subs)
+}
+
+func (s *Server) handleSubsSet(w http.ResponseWriter, r *http.Request) {
+	id, ok := safeID(r.PathValue("id"))
+	if !ok {
+		Fail(w, http.StatusBadRequest, "非法站点 ID")
+		return
+	}
+	var req struct {
+		Subs []websites.SiteSub `json:"subs"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		Fail(w, http.StatusBadRequest, "参数错误")
+		return
+	}
+	if err := websites.SetSiteSubs(id, req.Subs); err != nil {
+		Fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	site, err := websites.GetSite(id)
+	if err != nil {
+		Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	OK(w, site.Subs)
+}

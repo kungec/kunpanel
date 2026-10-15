@@ -80,6 +80,14 @@ type Site struct {
 	Remark         string `json:"remark"`
 	PhpKey    string    `json:"php_key,omitempty"` // 使用的 PHP 实例键(php/php82...;空=默认)
 	FpmPass   string    `json:"fpm_pass,omitempty"` // phpfpm 站点:fastcgi 上游(unix:... 或 host:port)
+	// 子域名绑定:子域名指向站点下的子目录(如 m.example.com → example.com/m)
+	Subs []SiteSub `json:"subs,omitempty"`
+}
+
+// SiteSub 子域名绑定
+type SiteSub struct {
+	SubDomain string `json:"sub_domain"` // 完整子域名(如 m.example.com)
+	Dir       string `json:"dir"`        // 相对站点 root 的子目录(空 = 站点根)
 }
 
 // Upstream 反代负载均衡后端
@@ -612,6 +620,62 @@ func writeConf(s *Site) error {
 		}
 	b.WriteString("}\n")
 
+	// 子域名绑定:每个绑定生成独立 server 块(共享主站 root 与安全特性)
+	if len(s.Subs) > 0 {
+		subRoot := s.Root
+		if mode.Mode == "container" && s.Type != "phpfpm" {
+			subRoot = "/var/www/" + s.ID
+		}
+		for _, sub := range s.Subs {
+			dir := subRoot
+			if sub.Dir != "" {
+				dir = strings.TrimSuffix(subRoot, "/") + "/" + sub.Dir
+			}
+			b.WriteString(fmt.Sprintf("\n# 子域名绑定 %s (由坤面板生成)\nserver {\n", sub.SubDomain))
+			b.WriteString(fmt.Sprintf("    listen %d;\n    server_name %s;\n", s.Port, sub.SubDomain))
+			if s.SslCertID != "" {
+				if crt, key, err := CertFilePaths(s.SslCertID); err == nil {
+					b.WriteString(fmt.Sprintf("    ssl_certificate %s;\n    ssl_certificate_key %s;\n", crt, key))
+				}
+			}
+			b.WriteString("    # ACME 证书签发验证\n    location ^~ /.well-known/acme-challenge/ {\n        root " + challengeRoot + ";\n    }\n")
+			if wafOn() {
+				b.WriteString("    access_by_lua_file /usr/local/kunwaf/waf.lua;\n")
+			}
+			fmt.Fprintf(&b, "    access_log /var/log/nginx/%s.access.log;\n", safeName+"."+strings.Split(sub.SubDomain, ".")[0])
+			idx := strings.TrimSpace(s.IndexFiles)
+			if idx == "" {
+				idx = "index.html index.htm"
+			}
+			b.WriteString(fmt.Sprintf("    root %s;\n    index %s;\n\n", dir, idx))
+			switch s.Type {
+			case "php":
+				b.WriteString(fmt.Sprintf("    location / {\n        proxy_pass %s;\n", strings.TrimSuffix(s.ProxyTo, "/") + "/" + sub.Dir + "/"))
+				b.WriteString(`        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_http_version 1.1;
+    }
+`)
+			case "phpfpm":
+				b.WriteString(fmt.Sprintf(`    location ~ \.php$ {
+        fastcgi_pass %s;
+        fastcgi_index index.php;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        fastcgi_param QUERY_STRING $query_string;
+        fastcgi_param REQUEST_METHOD $request_method;
+        fastcgi_param CONTENT_TYPE $content_type;
+        fastcgi_param CONTENT_LENGTH $content_length;
+    }
+`, s.FpmPass))
+				b.WriteString("    location / {\n        try_files $uri $uri/ =404;\n    }\n")
+			default:
+				b.WriteString("    location / {\n        try_files $uri $uri/ =404;\n    }\n")
+			}
+			b.WriteString("}\n")
+		}
+	}
+
 	// HTTP → HTTPS 强制跳转(独立 80 端口跳转块;仅当站点本身监听 80 且启用 HTTPS)
 	// 注意:return 不能放 server 级(会抢占 ACME 挑战路径),需包在 location / 内
 	if s.SslCertID != "" && s.SslRedirect && s.Port == 80 {
@@ -909,6 +973,55 @@ func PHPSitesUsing(phpKey string) []string {
 		}
 	}
 	return out
+}
+
+// SetSiteSubs 保存站点子域名绑定并重写配置
+func SetSiteSubs(id string, subs []SiteSub) error {
+	clean := make([]SiteSub, 0, len(subs))
+	seen := map[string]bool{}
+	for _, sub := range subs {
+		sub.SubDomain = strings.ToLower(strings.TrimSpace(sub.SubDomain))
+		sub.Dir = strings.Trim(strings.TrimSpace(sub.Dir), "/")
+		if sub.SubDomain == "" {
+			continue
+		}
+		if strings.ContainsAny(sub.SubDomain, "/ ;") {
+			return fmt.Errorf("子域名不合法: %s", sub.SubDomain)
+		}
+		if strings.Contains(sub.Dir, "..") {
+			return fmt.Errorf("子目录不合法: %s", sub.Dir)
+		}
+		key := sub.SubDomain
+		if seen[key] {
+			return fmt.Errorf("子域名重复: %s", key)
+		}
+		seen[key] = true
+		clean = append(clean, sub)
+	}
+	mu.Lock()
+	load()
+	var site *Site
+	for i := range list {
+		if list[i].ID == id {
+			site = &list[i]
+			break
+		}
+	}
+	if site == nil {
+		mu.Unlock()
+		return fmt.Errorf("站点不存在")
+	}
+	site.Subs = clean
+	if err := save(); err != nil {
+		mu.Unlock()
+		return err
+	}
+	cp := *site
+	mu.Unlock()
+	if err := writeConf(&cp); err != nil {
+		return err
+	}
+	return Reload()
 }
 
 // AppendRemark 追加站点备注(保留原内容)

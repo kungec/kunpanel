@@ -617,7 +617,8 @@ PAGES.websites = {
         '<div class="hub-tab" data-t="conf">配置文件</div>' +
         '<div class="hub-tab" data-t="auth">密码访问</div>' +
         '<div class="hub-tab" data-t="hotlink">防护与缓存</div>' +
-        '<div class="hub-tab" data-t="rewrite">伪静态</div></div>' +
+        '<div class="hub-tab" data-t="rewrite">伪静态</div>' +
+        '<div class="hub-tab" data-t="subs">子域名</div></div>' +
         '<div id="ws-body"></div>',
       footer: '<button class="btn btn-plain" data-act="close">关 闭</button>',
     });
@@ -683,7 +684,64 @@ PAGES.websites = {
       if (cur === "conf") return renderConf();
       if (cur === "hotlink") return renderHotlink();
       if (cur === "rewrite") return renderRewrite();
+      if (cur === "subs") return renderSubs();
       renderAuth();
+    }
+    function renderSubs() {
+      body.innerHTML = '<div id="ws-subs"><div class="boot-loading" style="height:80px"><div class="spinner"></div></div></div>';
+      api("/websites/" + s.id + "/subs").then(function(subs) {
+        var list = subs || [];
+        var html = '<div class="alert alert-info" style="margin-bottom:12px"><span class="alert-ico">' + I("info") + "</span>" +
+          "把其它子域名绑定到本站点的子目录:例如站点 example.com,绑定 <b>m.example.com → m</b> 后,访问 m.example.com 即打开 example.com/m 的内容。<br>" +
+          "请先把子域名解析到本服务器;如需独立证书,可单独为其创建站点。</div>" +
+          '<div id="subs-list"></div>' +
+          '<div class="settings-section"><div class="settings-section-title">添加绑定</div>' +
+          '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">' +
+          '<input class="input" id="sub-domain" placeholder="子域名,如 m.example.com" style="max-width:280px">' +
+          '<span style="color:var(--text-3)">→</span>' +
+          '<input class="input mono" id="sub-dir" placeholder="子目录,如 m(留空=站点根目录)" style="max-width:280px">' +
+          '<button class="btn btn-sm btn-primary" id="sub-add">' + I("plus") + " 添加</button></div>" +
+          '<div class="help">子域名会生成独立的 server 块(共享主站证书与 WAF);目录为站点根目录下的相对路径</div></div>';
+        var box = document.getElementById("ws-subs") || document.getElementById("ws-body");
+        box.innerHTML = html;
+        var renderList = function() {
+          var el0 = document.getElementById("subs-list");
+          if (!el0) return;
+          if (!list.length) { el0.innerHTML = '<div class="settings-section"><div class="help">暂无子域名绑定</div></div>'; return; }
+          el0.innerHTML = '<div class="settings-section"><div class="table-wrap"><table class="table"><thead><tr><th>子域名</th><th>绑定目录</th><th style="width:80px">操作</th></tr></thead><tbody>' +
+            list.map(function(x, i) {
+              return "<tr><td><b class=mono>" + esc(x.sub_domain) + "</b></td><td class=mono>" + esc(x.dir || "(站点根)") + '</td><td><button class="btn btn-xs btn-danger-plain" data-subdel="' + i + '">删除</button></td></tr>';
+            }).join("") + "</tbody></table></div></div>";
+          el0.querySelectorAll("[data-subdel]").forEach(function(btn) {
+            btn.onclick = function() {
+              list.splice(parseInt(btn.getAttribute("data-subdel"), 10), 1);
+              save(list);
+            };
+          });
+        };
+        var save = function(l) {
+          return api("/websites/" + s.id + "/subs", { method: "POST", body: { subs: l } }).then(function(ret) {
+            list = ret || [];
+            toast("已保存并生效");
+            renderList();
+          }).catch(function(e) { toast(e.message, "error", 6000); });
+        };
+        renderList();
+        var addBtn = document.getElementById("sub-add");
+        if (addBtn) addBtn.onclick = function() {
+          var dom = (document.getElementById("sub-domain") || {}).value || "";
+          var dir = (document.getElementById("sub-dir") || {}).value || "";
+          dom = dom.trim().toLowerCase(); dir = dir.trim().replace(/^\/+|\/+$/g, "");
+          if (!dom || dom.indexOf(".") < 0) { toast("请输入合法子域名", "error"); return; }
+          var dup = list.some(function(x) { return x.sub_domain === dom; });
+          if (dup) { toast("该子域名已存在", "error"); return; }
+          list.push({ sub_domain: dom, dir: dir });
+          save(list);
+        };
+      }).catch(function(e) {
+        var box = document.getElementById("ws-subs");
+        if (box) box.innerHTML = emptyState("warn", "加载失败", e.message);
+      });
     }
     function renderHotlink() {
       body.innerHTML = '<div class="settings-section"><div class="settings-section-title">资源防盗链</div>' +

@@ -852,6 +852,10 @@ func InstallEngine(mirror string, w io.Writer) error {
 			return ensureEngineRunning(w)
 		}
 		fmt.Fprintln(w, "官方脚本安装失败,尝试系统包管理器回退 ...")
+		// 磁盘满/权限是脚本写文件失败的常见原因,主动给出线索
+		if out, err := exec.Command("sh", "-c", "df -h / 2>/dev/null | tail -1").CombinedOutput(); err == nil {
+			fmt.Fprintf(w, ">> 当前磁盘状态: %s\n", strings.TrimSpace(string(out)))
+		}
 	} else {
 		if force == "" {
 			fmt.Fprintln(w, ">> 检测到 Docker 官方源不可达(国内机房常见),自动切换国内镜像源 ...")
@@ -890,20 +894,32 @@ func InstallEngine(mirror string, w io.Writer) error {
 	}
 
 	// 3) 包管理器回退(官方源可用但脚本失败 / 国内源全部失败)
+	// 核心引擎与 compose 拆分:官方源里 docker-compose-v2 等包可能不存在,
+	// 混在一起安装会因单个包缺失整体失败(引擎也装不上)
 	pm := DetectPkgManager()
 	if pm == "" {
 		return fmt.Errorf("未识别的发行版,请手动安装 Docker 后重试")
 	}
 	switch pm {
 	case "apt-get":
-		if err := pmInstall(pm, "docker.io", "docker-compose-v2"); err != nil {
-			return fmt.Errorf("apt 安装失败: %v", err)
+		if err := pmInstall(pm, "docker.io"); err != nil {
+			return fmt.Errorf("apt 安装 docker.io 失败: %v", err)
+		}
+		// compose 附加包逐个尝试(不同发行版名称不同),全失败仅警告
+		if pmInstallAny(pm, "docker-compose-v2", "docker-compose-plugin", "docker-compose") == 0 {
+			fmt.Fprintln(w, ">> 警告: compose 未安装(官方源无对应包),应用商店暂不可用;可在容器页安装 Docker 后重试")
 		}
 	case "dnf", "yum":
 		if err := pmInstall(pm, "docker"); err != nil {
-			_ = pmInstall(pm, "moby-engine", "docker-cli")
+			if err := pmInstall(pm, "moby-engine"); err != nil {
+				return fmt.Errorf("安装 docker/moby-engine 失败: %v", err)
+			}
+			_ = pmInstall(pm, "docker-cli")
 		}
-		// 尝试添加 docker-ce 官方源
+		if pmInstallAny(pm, "docker-compose-plugin", "docker-compose") == 0 {
+			fmt.Fprintln(w, ">> 警告: compose 未安装(官方源无对应包),应用商店暂不可用")
+		}
+		// 尝试添加 docker-ce 官方源补齐
 		_ = pmInstall(pm, "docker-ce", "docker-ce-cli", "containerd.io", "docker-compose-plugin")
 	case "apk":
 		if err := pmInstall(pm, "docker", "docker-cli-compose"); err != nil {
@@ -924,6 +940,17 @@ func InstallEngine(mirror string, w io.Writer) error {
 	return ensureEngineRunning(w)
 }
 
+
+// pmInstallAny 逐个尝试安装包,返回成功安装的个数(单包失败不中断后续)
+func pmInstallAny(pm string, pkgs ...string) int {
+	ok := 0
+	for _, p := range pkgs {
+		if err := pmInstall(pm, p); err == nil {
+			ok++
+		}
+	}
+	return ok
+}
 
 func pmInstall(pm string, pkgs ...string) error {
 	var cmd *exec.Cmd

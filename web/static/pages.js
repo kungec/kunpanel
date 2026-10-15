@@ -4293,7 +4293,7 @@ PAGES.files = {
     var useCM = typeof CodeMirror !== "undefined" && content.length < 2 * 1024 * 1024;
     var m = modal({
       title: "编辑: " + basename(path),
-      width: 960,
+      width: 1080,
       body:
         '<div class="cm-toolbar">' +
         (useCM

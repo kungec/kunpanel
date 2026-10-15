@@ -85,6 +85,7 @@ const ICONS = {
   folder: '<path d="M3.5 6.5A1.5 1.5 0 0 1 5 5h4.5l2 2.5H19a1.5 1.5 0 0 1 1.5 1.5v8.5A1.5 1.5 0 0 1 19 19H5a1.5 1.5 0 0 1-1.5-1.5v-11z"/>',
   folderOpen: '<path d="M3.5 6.5A1.5 1.5 0 0 1 5 5h4.5l2 2.5H19a1.5 1.5 0 0 1 1.5 1.5V11H3.7"/><path d="M3.7 11l-1.4 6.2A1.4 1.4 0 0 0 3.7 19h15.2a1.4 1.4 0 0 0 1.4-1.1L21.8 12a1 1 0 0 0-1-1.2H3.7z"/>',
   terminal: '<rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M7 9.5l3 2.8-3 2.8M12.5 15.5H17"/>',
+  maximize: '<path d="M4 9V5.5A1.5 1.5 0 0 1 5.5 4H9M15 4h3.5A1.5 1.5 0 0 1 20 5.5V9M20 15v3.5a1.5 1.5 0 0 1-1.5 1.5H15M9 20H5.5A1.5 1.5 0 0 1 4 18.5V15"/>',
   logs: '<path d="M7 3.5h7.5L19 8v11a1.5 1.5 0 0 1-1.5 1.5h-10A1.5 1.5 0 0 1 6 19V5A1.5 1.5 0 0 1 7.5 3.5z" transform="translate(-.5 0)"/><path d="M9 12h6M9 15.5h6M9 8.5h2.5"/>',
   gear: '<circle cx="12" cy="12" r="3.2"/><path d="M19.2 12a7.2 7.2 0 0 0-.14-1.4l2-1.55-2-3.46-2.36.95a7.3 7.3 0 0 0-2.42-1.4L14 2.6h-4l-.28 2.54a7.3 7.3 0 0 0-2.42 1.4l-2.36-.95-2 3.46 2 1.55a7.2 7.2 0 0 0 0 2.8l-2 1.55 2 3.46 2.36-.95a7.3 7.3 0 0 0 2.42 1.4L10 21.4h4l.28-2.54a7.3 7.3 0 0 0 2.42-1.4l2.36.95 2-3.46-2-1.55c.09-.46.14-.93.14-1.4z"/>',
   user: '<circle cx="12" cy="8" r="4"/><path d="M4.5 20.5c1.3-3.4 4.1-5 7.5-5s6.2 1.6 7.5 5"/>',
@@ -253,10 +254,19 @@ function modal({ title, body, footer, width = 540, onClose }) {
   const box = qs("#modal-box");
   box.style.width = Math.min(width, window.innerWidth - 24) + "px";
   box.innerHTML =
-    '<div class="modal-header"><h3>' + esc(title) + '</h3><span class="modal-close">' + I("close") + "</span></div>" +
+    '<div class="modal-header"><h3>' + esc(title) + '</h3><span class="modal-actions">' +
+    '<span class="modal-maxbtn" title="最大化 / 还原(双击标题栏同效)">' + I("maximize") + "</span>" +
+    '<span class="modal-close">' + I("close") + "</span></span></div>" +
     '<div class="modal-body">' + (body || "") + "</div>" +
     (footer ? '<div class="modal-footer">' + footer + "</div>" : "");
   mask.style.display = "flex";
+  const toggleMax = () => {
+    box.classList.toggle("modal-max");
+    // 尺寸变化后刷新 CodeMirror 等感知尺寸的组件
+    box.querySelectorAll(".CodeMirror").forEach((el) => { if (el.CodeMirror) el.CodeMirror.refresh(); });
+  };
+  qs(".modal-maxbtn", box).onclick = toggleMax;
+  qs(".modal-header h3", box).ondblclick = toggleMax;
   let vetoClose = null; // 返回 true 表示阻止本次关闭(未保存改动保护)
   const doClose = () => {
     mask.classList.add("closing");

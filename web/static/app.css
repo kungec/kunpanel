@@ -443,6 +443,12 @@ html[data-theme="dark"] .alert-info { background: rgba(99,102,241,.08); border-c
 .modal-close { cursor: pointer; color: var(--text-3); display: flex; padding: 5px; border-radius: var(--radius-xs); flex: none; transition: all .12s; }
 .modal-close svg { width: 15px; height: 15px; }
 .modal-close:hover { background: var(--bg); color: var(--text); }
+.modal-actions { display: flex; align-items: center; gap: 2px; flex: none; }
+.modal-maxbtn { cursor: pointer; color: var(--text-3); display: flex; padding: 5px; border-radius: var(--radius-xs); transition: all .12s; }
+.modal-maxbtn svg { width: 14px; height: 14px; }
+.modal-maxbtn:hover { background: var(--bg); color: var(--text); }
+.modal-box.modal-max { width: calc(100vw - 28px) !important; height: calc(100vh - 28px); max-height: none; }
+.modal-box.modal-max .modal-body { flex: 1; }
 .modal-body { padding: 20px 22px; overflow-y: auto; }
 .modal-footer { padding: 14px 22px; border-top: 1px solid var(--border-light); display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .log-view {

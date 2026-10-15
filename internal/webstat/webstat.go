@@ -161,9 +161,10 @@ func GetLogContent(container, logPath string, lines int) (string, error) {
 		// 还有独立的 *.access.log,docker logs 里完全没有这些内容(统计恒为 0);
 		// 官方镜像的 access.log 则是指向 /dev/stdout 的符号链接,docker exec tail 会
 		// 永久挂死。故只读「存在且非符号链接」的日志文件,读不到再回退 docker logs。
+		// 无论是否读到都以 0 退出:输出为空时由下方输出判空回退,避免把"读到"当错误码。
 		dir := path.Dir(logPath)
 		script := fmt.Sprintf(
-			`out=0; for f in %s %s/*.access.log; do if [ -f "$f" ] && [ ! -L "$f" ]; then tail -n %d "$f" && out=1; fi; done; exit $out`,
+			`for f in %s %s/*.access.log; do if [ -f "$f" ] && [ ! -L "$f" ]; then tail -n %d "$f"; fi; done; exit 0`,
 			logPath, dir, lines)
 		if out, err := util.RunWithTimeout(12*time.Second, "docker", "exec", container, "sh", "-c", script); err == nil && strings.TrimSpace(out) != "" {
 			return out, nil

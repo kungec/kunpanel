@@ -235,7 +235,7 @@ Environment=GIN_MODE=release
 # 安全加固
 NoNewPrivileges=true
 ProtectSystem=full
-ReadWritePaths=/etc/ssh -/etc/sysctl.d
+ReadWritePaths=/etc/ssh -/etc/sysctl.d /etc/ufw
 PrivateTmp=true
 ProtectKernelTunables=true
 ProtectControlGroups=true

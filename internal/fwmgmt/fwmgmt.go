@@ -210,6 +210,21 @@ func ValidatePort(p string) error {
 }
 
 // Allow 开放端口(可带 /tcp /udp 后缀)
+// ufwRun 执行 ufw 命令:失败时带输出报错并自动重试一次
+// (ufw 为 python 脚本且每次操作重建整个规则集,偶发 exit 1 为瞬态)
+func ufwRun(args ...string) (string, error) {
+	out, err := util.Run("ufw", args...)
+	if err != nil {
+		time.Sleep(1500 * time.Millisecond)
+		out2, err2 := util.Run("ufw", args...)
+		if err2 != nil {
+			return out2, fmt.Errorf("%v, 输出: %s", err2, strings.TrimSpace(out2))
+		}
+		return out2, nil
+	}
+	return out, nil
+}
+
 func Allow(port, comment string) error {
 	port = strings.TrimSpace(port)
 	if err := ValidatePort(strings.Split(port, "/")[0]); err != nil {
@@ -225,8 +240,8 @@ func Allow(port, comment string) error {
 		if comment != "" {
 			args = append(args, "comment", comment)
 		}
-		if _, err := util.Run("ufw", args...); err != nil {
-			return fmt.Errorf("ufw 失败: %v", err)
+		if _, err := ufwRun(args...); err != nil {
+			return err
 		}
 		return nil
 	case FIREWALLD:
@@ -260,8 +275,8 @@ func Deny(port string) error {
 	st := Detect()
 	switch st.Kind {
 	case UFW:
-		if _, err := util.Run("ufw", "delete", "allow", port); err != nil {
-			return fmt.Errorf("ufw 失败: %v", err)
+		if _, err := ufwRun("delete", "allow", port); err != nil {
+			return err
 		}
 		return nil
 	case FIREWALLD:

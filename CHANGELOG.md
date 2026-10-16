@@ -3,6 +3,19 @@
 所有重要变更都会记录在此文件中。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v2.71.7] - 2026-10-16
+
+### 修复(第十轮实测:防火墙规则增删整体失效)
+
+- **systemd 沙箱白名单缺 /etc/ufw**:面板加固(ProtectSystem=full)把 /etc
+  设为只读,而 ReadWritePaths 白名单漏了 /etc/ufw——防火墙页的**端口放行/
+  删除全部失败**(ufw 写 user.rules 报 not writable)。已加入白名单,
+  install.sh 同步;防火墙增删实测恢复
+- ufw 操作失败时错误信息带上命令输出(此前只有 exit code 无法诊断),
+  并对瞬态失败自动重试一次
+- 附带发现并说明:ufw 为 python 脚本,面板环境缺 locale 时部分发行版
+  会输出乱码但不影响操作(C.UTF-8 已在命令环境兜底)
+
 ## [v2.71.6] - 2026-10-16
 
 ### 修复(第九轮实测:容器编辑)

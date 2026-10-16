@@ -5547,6 +5547,7 @@ PAGES.docker = {
 
     var head = '<div class="card"><div class="card-title">Docker ' + esc(info.version || "") +
       '<div style="display:flex;gap:8px"><button class="btn btn-sm btn-plain" id="dk-refresh">' + I("refresh") + " 刷新</button>" +
+      '<button class="btn btn-sm btn-plain" id="dk-logrotate">' + I("gear") + ' 日志轮转</button>' +
       '<button class="btn btn-sm btn-plain" id="dk-prune">' + I("trash") + ' 清理悬空镜像</button></div></div>' +
       '<div class="kpi-strip" style="grid-template-columns:repeat(4,1fr)">' +
       '<div class="card kpi-card" style="cursor:default"><span class="kpi-ico" style="color:#0ea5e9">' + I("play") + '</span><div class="kpi-num"><b>' + (info.runningCount || 0) + "</b><span>运行中容器</span></div></div>" +
@@ -5561,14 +5562,43 @@ PAGES.docker = {
     head += '</div><div id="dk-body">' + skeletonTable(5, 5) + "</div></div>";
     el.innerHTML = head;
     qs("#dk-refresh", el).onclick = function() { self.render(el); };
-    qs("#dk-prune", el).onclick = async function() {
-      if (!(await confirmDlg("清理全部悬空镜像?不影响在用镜像。"))) return;
-      try {
-        var r = await api("/docker/prune", { method: "POST", body: {} });
-        toast("已清理,释放 " + (r.reclaimed || "0"), "success", 4000);
-        self.render(el);
-      } catch (e) { toast(e.message, "error"); }
-    };
+    qs("#dk-logrotate", el).onclick = async function() {
+        var st = {};
+        try { st = await api("/docker/log-rotate"); } catch (e) {}
+        var mm = modal({
+          title: "容器日志轮转", width: 560,
+          body: '<div class="alert alert-warning page-fade"><span class="alert-ico">' + I("warn") + "</span>" +
+            "容器日志默认不轮转,单个容器输出大量日志会<b>无限增长撑爆磁盘</b>。配置后对所有<b>新启动</b>的容器生效(已有容器需重建一次才生效)。</div>" +
+            '<div class="settings-section"><div class="settings-section-title">当前状态</div>' +
+            '<div class="help" style="margin:0">' + (st.configured ? "已配置:单容器 " + esc(st.max_size) + " × " + esc(String(st.max_file)) + " 个文件" : "未配置(日志无限增长)") + "</div></div>" +
+            '<div class="settings-section"><div class="settings-section-title">轮转参数</div>' +
+            '<div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap">' +
+            '<div><label>单文件上限</label><input class="input" id="lr-size" value="' + esc(st.max_size || "50m") + '" style="width:110px" placeholder="50m"></div>' +
+            '<div><label>保留文件数</label><input class="input" id="lr-files" type="number" value="' + (Number(st.max_file) || 3) + '" style="width:90px"></div></div>' +
+            '<div class="help" style="margin-top:6px">写入 /etc/docker/daemon.json</div></div>',
+          footer: '<button class="btn btn-plain" data-act="no">取 消</button><button class="btn btn-primary" data-act="yes">保存并重启 Docker</button>',
+        });
+        qs('[data-act="no"]', mm.el).onclick = mm.close;
+        qs('[data-act="yes"]', mm.el).onclick = async function() {
+          var files = Number(qs("#lr-files", mm.el).value) || 3;
+          if (!(await confirmDlg("保存配置并<b>重启 Docker</b>?<br><span style='font-size:12px;color:var(--danger)'>所有容器将重启几秒钟,网站短暂中断。</span>", { danger: true }))) return;
+          this.disabled = true; this.textContent = "执行中...";
+          try {
+            await api("/docker/log-rotate", { method: "POST", body: {
+              max_size: qs("#lr-size", mm.el).value.trim(), max_file: files, restart: true }, timeout: 60000 });
+            toast("日志轮转已配置,Docker 已重启");
+            mm.close(); self.render(el);
+          } catch (e) { toast(e.message, "error", 6000); this.disabled = false; this.textContent = "保存并重启 Docker"; }
+        };
+      };
+      qs("#dk-prune", el).onclick = async function() {
+        if (!(await confirmDlg("清理全部悬空镜像?不影响在用镜像。"))) return;
+        try {
+          var r = await api("/docker/prune", { method: "POST", body: {} });
+          toast("已清理,释放 " + (r.reclaimed || "0"), "success", 4000);
+          self.render(el);
+        } catch (e) { toast(e.message, "error"); }
+      };
     qsa(".hub-tab", el).forEach(function(t) {
       t.onclick = function() {
         self.tab = t.getAttribute("data-tab");

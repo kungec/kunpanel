@@ -277,6 +277,8 @@ func (s *Server) registerAPI() {
 	m.Handle("POST /api/v1/firewall/deny", wrap(http.HandlerFunc(s.handleFwDeny)))
 	m.Handle("POST /api/v1/firewall/toggle", wrap(http.HandlerFunc(s.handleFwToggle)))
 	m.Handle("POST /api/v1/firewall/install", wrap(http.HandlerFunc(s.handleFwInstall)))
+	m.Handle("GET /api/v1/docker/log-rotate", wrap(http.HandlerFunc(s.handleDockerLogRotateGet)))
+	m.Handle("POST /api/v1/docker/log-rotate", wrap(http.HandlerFunc(s.handleDockerLogRotateSet)))
 	m.Handle("GET /api/v1/firewall/docker-ports", wrap(http.HandlerFunc(s.handleFwDockerPorts)))
 	m.Handle("POST /api/v1/firewall/docker-block", wrap(http.HandlerFunc(s.handleFwDockerBlock)))
 	m.Handle("GET /api/v1/firewall/ping", wrap(http.HandlerFunc(s.handleFwPingStatus)))

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"time"
 
 	"kunpanel/internal/dockerx"
@@ -17,6 +18,67 @@ import (
 
 func (s *Server) handleDockerStatus(w http.ResponseWriter, r *http.Request) {
 	OK(w, dockerx.Info())
+}
+
+// handleDockerLogRotateGet 读取容器日志轮转配置状态
+func (s *Server) handleDockerLogRotateGet(w http.ResponseWriter, r *http.Request) {
+	st := map[string]any{"configured": false, "max_size": "", "max_file": ""}
+	if b, err := os.ReadFile("/etc/docker/daemon.json"); err == nil {
+		var d map[string]any
+		if json.Unmarshal(b, &d) == nil {
+			if opts, ok := d["log-opts"].(map[string]any); ok {
+				st["configured"] = true
+				if v, ok := opts["max-size"].(string); ok {
+					st["max_size"] = v
+				}
+				st["max_file"] = opts["max-file"]
+			}
+		}
+	}
+	OK(w, st)
+}
+
+// handleDockerLogRotateSet 写入容器日志轮转配置(restart=true 时重启 docker 对新容器生效)
+func (s *Server) handleDockerLogRotateSet(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		MaxSize string `json:"max_size"`
+		MaxFile int    `json:"max_file"`
+		Restart bool   `json:"restart"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		Fail(w, http.StatusBadRequest, "参数错误")
+		return
+	}
+	if req.MaxSize == "" {
+		req.MaxSize = "50m"
+	}
+	if req.MaxFile <= 0 || req.MaxFile > 10 {
+		req.MaxFile = 3
+	}
+	cf := "/etc/docker/daemon.json"
+	var d map[string]any
+	if b, err := os.ReadFile(cf); err == nil && json.Unmarshal(b, &d) == nil {
+		// 保留既有配置项
+	} else {
+		d = map[string]any{}
+	}
+	d["log-driver"] = "json-file"
+	d["log-opts"] = map[string]any{"max-size": req.MaxSize, "max-file": req.MaxFile}
+	b, _ := json.MarshalIndent(d, "", "  ")
+	if err := os.WriteFile(cf, b, 0o644); err != nil {
+		Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	restarted := false
+	if req.Restart {
+		if out, err := exec.Command("systemctl", "restart", "docker").CombinedOutput(); err != nil {
+			Fail(w, http.StatusInternalServerError, "docker 重启失败: "+strings.TrimSpace(string(out)))
+			return
+		}
+		time.Sleep(3 * time.Second)
+		restarted = true
+	}
+	OK(w, map[string]any{"written": true, "restarted": restarted})
 }
 
 // handleDockerStats 全部运行中容器的资源占用快照

@@ -356,6 +356,27 @@ if $KP_WITH_DOCKER; then
     elif have_openrc; then rc-update add docker boot 2>/dev/null || true; rc-service docker start 2>/dev/null || true
     fi
   fi
+  # 容器日志轮转:不配置的话容器 json.log 会无限增长撑爆磁盘(对所有新容器生效)
+  if [[ -f /etc/docker/daemon.json ]] && ! grep -q "max-size" /etc/docker/daemon.json 2>/dev/null; then
+    python3 - <<'PYD' 2>/dev/null || true
+import json
+p = '/etc/docker/daemon.json'
+try:
+    d = json.load(open(p))
+except Exception:
+    d = {}
+if 'log-driver' not in d:
+    d['log-driver'] = 'json-file'
+d.setdefault('log-opts', {})['max-size'] = '50m'
+d['log-opts']['max-file'] = '3'
+json.dump(d, open(p, 'w'), indent=2)
+print('daemon-log-opts-ok')
+PYD
+    if grep -q "max-size" /etc/docker/daemon.json 2>/dev/null; then
+      systemctl restart docker 2>/dev/null || true
+      ok "容器日志轮转已配置(单容器 50MB×3)"
+    fi
+  fi
 fi
 
 # ---------------- 等待就绪并输出信息 ----------------

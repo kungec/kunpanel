@@ -116,9 +116,16 @@ func load() {
 
 func save() error {
 	_ = os.MkdirAll(baseDir(), 0o755)
+	return saveChecked(false)
+}
+
+// saveChecked allowShrink=true 供用户主动的批量删除使用:防误删守卫只针对
+// "任何路径的漏加载/竞态把列表静默写没",不应拦下明确传入 ID 列表的删除
+func saveChecked(allowShrink bool) error {
+	_ = os.MkdirAll(baseDir(), 0o755)
 	// 保护:列表骤缩(丢一半以上且仍有站点)时拒写并保留现场,
 	// 防止任何路径的漏加载/竞态把用户站点列表静默写没(曾发生过 9→1 的静默丢失)
-	if len(list) > 0 {
+	if !allowShrink && len(list) > 0 {
 		if old, err := os.ReadFile(storeFile()); err == nil && len(old) > 0 {
 			var prev []Site
 			if json.Unmarshal(old, &prev) == nil && len(prev) > 1 && len(list)*2 < len(prev) {
@@ -452,6 +459,47 @@ func Delete(id string) error {
 	_ = os.Remove(RewritePath(id))
 	_ = os.Remove(ExtraPath(id)) // 保真迁移的自定义配置一并清理,避免孤儿文件
 	return Reload()
+}
+
+// DeleteMany 批量删除站点:一次保存、逐个清理产物、最后只重载一次
+// (逐个调 Delete 会做 N 次完整 reload,批量时既慢又闪断)
+func DeleteMany(ids []string) (int, error) {
+	if len(ids) == 0 {
+		return 0, fmt.Errorf("未选择站点")
+	}
+	want := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		want[id] = true
+	}
+	mu.Lock()
+	load()
+	var kept, removed []Site
+	for _, s := range list {
+		if want[s.ID] {
+			removed = append(removed, s)
+			continue
+		}
+		kept = append(kept, s)
+	}
+	if len(removed) == 0 {
+		mu.Unlock()
+		return 0, fmt.Errorf("选中的站点均不存在")
+	}
+	orig := list
+	list = kept
+	if err := saveChecked(true); err != nil {
+		list = orig // 落盘失败回滚内存,保持与文件一致
+		mu.Unlock()
+		return 0, err
+	}
+	for _, s := range removed {
+		_ = os.Remove(filepath.Join(confDir(), s.ID+".conf"))
+		_ = os.Remove(RewritePath(s.ID))
+		_ = os.Remove(ExtraPath(s.ID))
+	}
+	mu.Unlock()
+	// 配置文件已清理;重载失败如实上报(站点列表已不含被删站点)
+	return len(removed), Reload()
 }
 
 // UpdateSite 编辑站点(代理目标 / 端口 / 备注)

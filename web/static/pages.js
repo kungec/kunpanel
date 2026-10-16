@@ -208,8 +208,9 @@ PAGES.websites = {
             <button class="btn btn-sm btn-plain" id="site-btmig" style="display:none">${I("shuffle")} 宝塔迁移</button>
             <button class="btn btn-sm btn-plain" id="site-global">${I("gear")} 全局设置</button>
             <button class="btn btn-sm btn-plain" id="site-logs">${I("logs")} 站点日志</button>
-            <button class="btn btn-sm btn-plain" id="site-ssl">${I("key")} SSL 证书</button><button class="btn btn-sm btn-plain" id="site-stats">${I("pulse")} 访问统计</button><button class="btn btn-sm btn-primary" id="btn-add-site">${I("plus")} 创建网站</button></div></div>
+            <button class="btn btn-sm btn-plain" id="site-ssl">${I("key")} SSL 证书</button><button class="btn btn-sm btn-plain" id="site-stats">${I("pulse")} 访问统计</button><button class="btn btn-sm btn-danger-plain" id="site-batch-del" style="display:none">${I("trash")} 批量删除</button><button class="btn btn-sm btn-primary" id="btn-add-site">${I("plus")} 创建网站</button></div></div>
         <div id="site-table">${tableHTML([
+          { title: '<input type="checkbox" id="site-sel-all" title="全选">', width: "36px", render: (r) => '<input type="checkbox" class="site-sel" data-id="' + r.id + '">' },
           { title: "域名", render: (r) => '<span class="ellipsis" title="' + esc(r.domain) + '">' + esc(r.domain) + "</span>" },
           { title: "类型", width: "100px", render: (r) => (r.type === "proxy" ? '<span class="tag tag-primary">反向代理</span>' : r.type === "php" ? '<span class="tag tag-purple">PHP 站点</span>' : '<span class="tag tag-success">静态站点</span>') },
           { title: "端口", width: "70px", render: (r) => r.port },
@@ -250,6 +251,29 @@ PAGES.websites = {
         }
     }).catch(function() {});
     const site = (id) => data.find((x) => x.id === id);
+    // 批量删除:勾选 → 按钮浮现 → 确认后一次请求(服务端单次 reload)
+    const syncBatchBtn = () => {
+      const n = qsa(".site-sel", el).filter((c) => c.checked).length;
+      qs("#site-batch-del", el).style.display = n ? "" : "none";
+      // 必须用 innerHTML:textContent 会把 SVG 图标渲染成原始字符串
+      qs("#site-batch-del", el).innerHTML = I("trash") + " 批量删除(" + n + ")";
+    };
+    const selAll = qs("#site-sel-all", el);
+    if (selAll) {
+      selAll.onclick = () => qsa(".site-sel", el).forEach((c) => (c.checked = selAll.checked));
+      qsa(".site-sel", el).forEach((c) => (c.onclick = syncBatchBtn));
+    }
+    qs("#site-batch-del", el).onclick = async () => {
+      const ids = qsa(".site-sel", el).filter((c) => c.checked).map((c) => c.getAttribute("data-id"));
+      if (!ids.length) return;
+      const domains = ids.map((id) => { const s = site(id); return s ? s.domain.split(" ")[0] : id; });
+      if (!(await confirmDlg("确定删除选中的 <b>" + ids.length + "</b> 个网站吗?<br><span style='font-size:12px;color:var(--text-3)'>" + esc(domains.join("、")) + "<br>网站根目录数据将保留。</span>", { danger: true }))) return;
+      try {
+        const r = await api("/websites/batch-delete", { method: "POST", body: { ids: ids } });
+        toast("已删除 " + (r.deleted || 0) + " 个网站" + (r.warning ? "(" + r.warning + ")" : ""), r.warning ? "info" : "success", 6000);
+        this.render(el);
+      } catch (e) { toast(e.message, "error"); }
+    };
     qsa("[data-del]", el).forEach((b) => (b.onclick = async () => {
       if (await confirmDlg("确定删除网站 <b>" + esc(site(b.dataset.del).domain) + "</b> 吗?<br>网站根目录数据将保留。")) {
         try { await api("/websites/" + b.dataset.del, { method: "DELETE" }); toast("已删除"); this.render(el); }
@@ -313,7 +337,7 @@ PAGES.websites = {
         var expTag = days === null ? '<span class="tag tag-info">-</span>' : days < 0 ? '<span class="tag tag-danger">已过期</span>'
           : days <= 30 ? '<span class="tag tag-warning">剩 ' + days + " 天</span>"
           : '<span class="tag tag-success">剩 ' + days + " 天</span>";
-        return "<tr><td><b>" + esc(c.name) + '</b><span class="tag tag-purple" style="margin-left:6px">SSL</span></td>' +
+        return '<tr><td><input type="checkbox" class="cert-sel" data-id="' + esc(c.id) + '"></td><td><b>' + esc(c.name) + '</b><span class="tag tag-purple" style="margin-left:6px">SSL</span></td>' +
           '<td class="mono">' + esc(c.domains) + "</td><td>" + esc(c.expire || "-") + "</td><td>" + expTag + "</td>" +
           "<td>" + (bound[c.id] ? '<span class="mono">' + esc(bound[c.id]) + "</span>" : '<span class="help" style="margin:0">未绑定</span>') + "</td>" +
           '<td><button class="btn btn-xs btn-danger-plain" data-delcert="' + esc(c.id) + '" data-name="' + esc(c.name) + '">删除</button></td></tr>';
@@ -333,11 +357,39 @@ PAGES.websites = {
             '<div class="help" style="margin-top:10px">生成的证书同样出现在下方列表,可在各站点「HTTPS」设置中绑定。</div>' +
           '</div>' +
         '</div>' +
-        '<div class="ssl-card" style="margin-top:16px"><div class="ssl-card-title">' + I("shield") + ' 证书列表(' + certs.length + ')</div>' +
+        '<div class="ssl-card" style="margin-top:16px"><div class="ssl-card-title">' + I("shield") + ' 证书列表(' + certs.length + ')<span style="margin-left:auto"></span><button class="btn btn-sm btn-danger-plain" id="cert-batch-del" style="display:none">批量删除</button></div>' +
         (certs.length
-          ? '<div class="table-wrap"><table class="table"><thead><tr><th>名称</th><th>域名</th><th style="width:110px">到期</th><th style="width:120px">状态</th><th style="width:160px">绑定站点</th><th style="width:70px">操作</th></tr></thead><tbody>' + certRows + "</tbody></table></div>"
+          ? '<div class="table-wrap"><table class="table"><thead><tr><th style="width:36px"><input type="checkbox" id="cert-sel-all" title="全选"></th><th>名称</th><th>域名</th><th style="width:110px">到期</th><th style="width:120px">状态</th><th style="width:160px">绑定站点</th><th style="width:70px">操作</th></tr></thead><tbody>' + certRows + "</tbody></table></div>"
           : '<div class="ssl-empty">' + I("key") + '<p>暂无证书</p><p>上传 PEM 证书或生成自签证书后,可在各站点的「HTTPS」设置中绑定</p></div>') +
         '</div>';
+      // 批量删除:被站点占用的证书逐项报错,其余照删
+      var selAllC = qs("#cert-sel-all", body);
+      if (selAllC) {
+        selAllC.onclick = function() { qsa(".cert-sel", body).forEach(function(c) { c.checked = selAllC.checked; }); syncCertBatch(); };
+        qsa(".cert-sel", body).forEach(function(c) { c.onclick = syncCertBatch; });
+      }
+      function syncCertBatch() {
+        var n = qsa(".cert-sel", body).filter(function(c) { return c.checked; }).length;
+        var btn = qs("#cert-batch-del", body);
+        btn.style.display = n ? "" : "none";
+        btn.textContent = "批量删除(" + n + ")";
+      }
+      qs("#cert-batch-del", body).onclick = async function() {
+        var ids = qsa(".cert-sel", body).filter(function(c) { return c.checked; }).map(function(c) { return c.getAttribute("data-id"); });
+        if (!ids.length) return;
+        var names = ids.map(function(id) { var c = certs.find(function(x) { return x.id === id; }); return c ? c.name : id; });
+        if (!(await confirmDlg("确定删除选中的 <b>" + ids.length + "</b> 张证书吗?<br><span style='font-size:12px;color:var(--text-3)'>" + esc(names.join("、")) + "<br>被站点绑定的证书会删除失败并逐项提示。</span>", { danger: true }))) return;
+        try {
+          var r = await api("/ssl/certs/batch-delete", { method: "POST", body: { ids: ids } });
+          var fails = Object.keys(r.failed || {});
+          if (fails.length) {
+            toast("已删除 " + (r.deleted || 0) + " 张;" + fails.length + " 张失败:" + esc(fails.map(function(id) { return (certs.find(function(x) { return x.id === id; }) || {}).name || id; }).join("、")), "error", 8000);
+          } else {
+            toast("已删除 " + (r.deleted || 0) + " 张证书");
+          }
+          load();
+        } catch (e) { toast(e.message, "error"); }
+      };
       qs("#ssl-up-btn", body).onclick = async function() {
         var name = qs("#ssl-up-name", body).value.trim(),
             cert = qs("#ssl-up-cert", body).value.trim(),

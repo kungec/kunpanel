@@ -130,6 +130,30 @@ func (s *Server) handleSiteDelete(w http.ResponseWriter, r *http.Request) {
 	OK(w, nil)
 }
 
+// handleSiteBatchDelete 批量删除站点
+func (s *Server) handleSiteBatchDelete(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		IDs []string `json:"ids"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		Fail(w, http.StatusBadRequest, "参数错误")
+		return
+	}
+	n, err := websites.DeleteMany(req.IDs)
+	if err != nil && n == 0 {
+		Fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	OK(w, map[string]any{"deleted": n, "warning": errString(err)})
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
 var _ = strconv.Itoa
 
 // handleSiteDomains 站点域名管理(查看/修改)

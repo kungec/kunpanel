@@ -72,6 +72,7 @@ func (s *Server) registerAPI() {
 	m.Handle("GET /api/v1/websites/nginx-logs/autoclean", wrap(http.HandlerFunc(s.handleNginxLogsAutoClean)))
 	m.Handle("POST /api/v1/websites/nginx-logs/autoclean", wrap(http.HandlerFunc(s.handleNginxLogsAutoClean)))
 	m.Handle("POST /api/v1/websites", wrap(http.HandlerFunc(s.handleSiteAdd)))
+	m.Handle("POST /api/v1/websites/batch-delete", wrap(http.HandlerFunc(s.handleSiteBatchDelete)))
 	m.Handle("GET /api/v1/websites/{id}/subs", wrap(http.HandlerFunc(s.handleSubsGet)))
 	m.Handle("POST /api/v1/websites/{id}/subs", wrap(http.HandlerFunc(s.handleSubsSet)))
 	m.Handle("POST /api/v1/websites/{id}/toggle", wrap(http.HandlerFunc(s.handleSiteToggle)))
@@ -113,6 +114,7 @@ func (s *Server) registerAPI() {
 	m.Handle("POST /api/v1/ssl/upload", wrap(http.HandlerFunc(s.handleCertUpload)))
 	m.Handle("POST /api/v1/ssl/selfsign", wrap(http.HandlerFunc(s.handleCertSelfSign)))
 	m.Handle("DELETE /api/v1/ssl/certs/{id}", wrap(http.HandlerFunc(s.handleCertDelete)))
+	m.Handle("POST /api/v1/ssl/certs/batch-delete", wrap(http.HandlerFunc(s.handleCertBatchDelete)))
 	m.Handle("GET /api/v1/ssl/certs/{id}/download", wrap(http.HandlerFunc(s.handleCertDownload)))
 
 	// Let's Encrypt (ACME)

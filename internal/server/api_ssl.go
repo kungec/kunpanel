@@ -67,6 +67,31 @@ func (s *Server) handleCertDelete(w http.ResponseWriter, r *http.Request) {
 	OK(w, nil)
 }
 
+// handleCertBatchDelete 批量删除证书;被站点占用的逐项报错不影响其余
+func (s *Server) handleCertBatchDelete(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		IDs []string `json:"ids"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		Fail(w, http.StatusBadRequest, "参数错误")
+		return
+	}
+	if len(req.IDs) == 0 {
+		Fail(w, http.StatusBadRequest, "未选择证书")
+		return
+	}
+	deleted := 0
+	failed := map[string]string{}
+	for _, id := range req.IDs {
+		if err := websites.DeleteCert(id); err != nil {
+			failed[id] = err.Error()
+			continue
+		}
+		deleted++
+	}
+	OK(w, map[string]any{"deleted": deleted, "failed": failed})
+}
+
 // ---------- Let's Encrypt (ACME) ----------
 
 func (s *Server) handleAcmeGet(w http.ResponseWriter, r *http.Request) {

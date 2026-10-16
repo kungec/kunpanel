@@ -492,18 +492,29 @@ PAGES.websites = {
       goBtn.style.display = "none";
       body.innerHTML =
         '<div class="alert alert-info page-fade"><span class="alert-ico">' + I("info") + "</span>" +
-        "输入<b>装有宝塔的远程服务器</b>的 IP 和 root 密码,面板通过 SSH 自动对接:探测站点/证书/伪静态/自定义规则/计划任务/数据库," +
+        "输入装有宝塔的远程服务器的 <b>IP 和 root 密码</b>,面板通过 SSH 自动对接:探测站点/证书/伪静态/自定义规则/计划任务/数据库," +
         "流式搬运网站文件,PHP 按远程版本自动安装对应运行时(版本不变),证书导入后自动重签接管续期,数据库自动导入面板 MySQL 并重建账号授权。</div>" +
-        '<div class="settings-section"><div class="settings-section-title">远程服务器连接</div>' +
-        '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">' +
-        '<div><label>服务器 IP</label><input class="input" id="rm-host" placeholder="如 123.45.67.89" style="width:180px"></div>' +
-        '<div><label>SSH 端口</label><input class="input" id="rm-port" type="number" value="22" style="width:90px"></div>' +
-        '<div><label>用户名</label><input class="input" id="rm-user" value="root" style="width:110px"></div>' +
-        '<div><label>root 密码</label><input class="input" id="rm-pass" type="password" placeholder="SSH 密码" style="width:180px"></div>' +
-        '<button class="btn btn-primary" id="rm-scan">连接检测</button></div>' +
-        '<div class="help" style="margin-top:6px">首次连接采用指纹信任机制:连接成功后回显服务器指纹,迁移时自动校验,防中间人劫持。需要远程服务器允许密码登录。</div>' +
+        '<div class="alert alert-warning page-fade" id="rm-whitelist" style="display:none"><span class="alert-ico">' + I("warn") + "</span>" +
+        "<b>防拉黑提醒:</b>长时间 SSH 迁移可能触发远程宝塔的 SSH 防爆破。开始前请先把本服务器出口 IP " +
+        '<b class="mono" id="rm-myip"></b> 加入远程服务器的白名单(宝塔面板 → SSH 防爆破 → 白名单,或 fail2ban 忽略列表)。</div>' +
+        '<div class="settings-section"><div class="settings-section-title">第一步 · 连接远程服务器</div>' +
+        '<div style="display:grid;grid-template-columns:1.4fr .7fr .8fr 1.2fr auto;gap:10px;align-items:end">' +
+        '<div><label>服务器 IP</label><input class="input" id="rm-host" placeholder="如 123.45.67.89"></div>' +
+        '<div><label>SSH 端口</label><input class="input" id="rm-port" type="number" value="22"></div>' +
+        '<div><label>用户名</label><input class="input" id="rm-user" value="root"></div>' +
+        '<div><label>root 密码</label><input class="input" id="rm-pass" type="password" placeholder="SSH 密码"></div>' +
+        '<button class="btn btn-primary" id="rm-scan" style="height:38px">连接检测</button></div>' +
+        '<div class="help" style="margin-top:8px">首次连接采用指纹信任机制:连接成功后回显服务器指纹,迁移时自动校验,防中间人劫持。需要远程服务器允许密码登录。</div>' +
         '<div id="rm-fp" class="help" style="margin-top:4px"></div></div>' +
         '<div id="rm-result"></div>';
+      // 白名单提醒:带出本服务器出口 IP(/system/quick 嵌套在 system 里)
+      api("/system/quick").then(function(q) {
+        var ip = q && q.system && q.system.public_ip;
+        if (ip) {
+          qs("#rm-myip", body).textContent = ip;
+          qs("#rm-whitelist", body).style.display = "";
+        }
+      }).catch(function() {});
       qs("#rm-scan", body).onclick = async function() {
         var host = qs("#rm-host", body).value.trim();
         var pass = qs("#rm-pass", body).value;
@@ -521,6 +532,13 @@ PAGES.websites = {
         this.disabled = false; this.textContent = "连接检测";
       };
       function drawRemoteResult(scan) {
+        // 白名单提醒补全出口 IP(连接检测后端已回传)
+        if (scan.local_ip) {
+          var ipEl = qs("#rm-myip", body);
+          if (ipEl && !ipEl.textContent) ipEl.textContent = scan.local_ip;
+          var wl = qs("#rm-whitelist", body);
+          if (wl) wl.style.display = "";
+        }
         var rows = (scan.sites || []).map(function(s2) {
           var typeTxt = s2.type === "php" ? "PHP " + (s2.php_ver ? phpDirDisp(s2.php_ver) : "") : s2.type === "proxy" ? "反向代理" : "静态";
           var sslTxt = s2.ssl ? '<span class="tag tag-success">SSL</span>' : "";
@@ -532,9 +550,13 @@ PAGES.websites = {
           return '<label class="radio-line" style="display:inline-flex;margin:2px 18px 2px 0"><input type="checkbox" data-rmdb="' + esc(d0.name) + '"> <span class="mono">' + esc(d0.name) + "</span>" + (d0.ps ? '<span class="help" style="margin:0 0 0 6px">' + esc(d0.ps) + "</span>" : "") + "</label>";
         }).join("");
         qs("#rm-result", body).innerHTML =
-          '<div class="settings-section"><div class="settings-section-title">远程站点(' + (scan.sites || []).length + ')<span class="help" style="margin:0">勾选要迁入本面板的站点;网站文件自动搬运,PHP 版本自动匹配</span></div>' +
+          '<div class="settings-section"><div class="settings-section-title">第二步 · 勾选要迁移的内容</div>' +
+          '<div class="settings-section-title" style="margin-top:4px">远程站点(' + (scan.sites || []).length + ')<span class="help" style="margin:0">网站文件自动搬运,PHP 版本自动匹配安装;自定义反代规则保真保留</span></div>' +
           '<div class="table-wrap"><table class="table"><thead><tr><th>域名</th><th>类型</th><th>原目录</th></tr></thead><tbody>' + (rows || '<tr><td colspan=3 class=help>未检测到站点</td></tr>') + "</tbody></table></div></div>" +
           '<div class="settings-section"><div class="settings-section-title">计划任务(' + (scan.crons || []).length + ')<span class="help" style="margin:0">自动迁移并改写站点路径;旧服务器定时需手动停用</span></div>' +
+          '<div class="settings-section"><div class="settings-section-title">第三步 · 开始迁移</div>' +
+          '<div class="help" style="margin:0">迁移在后台运行并显示实时进度条(每搬完一个站点/数据库推进一格),可随时关闭窗口从顶栏「后台任务」查看;' +
+          '完成后把域名 DNS 的 A 记录指向本服务器即完成切换,切换前旧站照常服务。</div></div>' +
           '<div class="help">' + (scan.crons || []).map(function(c0) { return esc(c0.name + " " + c0.cycle); }).join("、") + '</div></div>' +
           '<div class="settings-section"><div class="settings-section-title">远程数据库(' + (scan.dbs || []).length + ')<span class="help" style="margin:0">勾选则导出并导入面板 MySQL(账号密码不变,站点连接串 host 需改 172.17.0.1);不勾选则站点继续连旧服务器数据库</span></div>' +
           (dbChecks || '<div class="help">远程无数据库或未启用 MySQL</div>') + "</div>" +

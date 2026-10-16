@@ -31,6 +31,7 @@ import (
 	"kunpanel/internal/dbmgr"
 	"kunpanel/internal/dockerx"
 	"kunpanel/internal/util"
+	"kunpanel/internal/taskx"
 	"kunpanel/internal/websites"
 )
 
@@ -123,6 +124,7 @@ type RemoteSite struct {
 // RemoteScanResult 远程扫描结果(不含密码等敏感信息)
 type RemoteScanResult struct {
 	Fingerprint string       `json:"fingerprint"`
+	LocalIP     string       `json:"local_ip"` // 本面板服务器出口 IP(供用户加入远程白名单)
 	Found       bool         `json:"found"`
 	Sites       []RemoteSite `json:"sites"`
 	Crons       []BtCron     `json:"crons"`
@@ -409,6 +411,8 @@ func RemoteApply(opts RemoteOptions, w io.Writer) error {
 	for _, d := range opts.Sites {
 		sel[d] = true
 	}
+	pw := taskx.P(w)
+	pw.Set(1, 6, "连接远程服务器并拉取元数据")
 	fmt.Fprintln(w, ">> 连接远程服务器并拉取宝塔元数据 ...")
 	metaRoot, actualFP, err := fetchRemoteMeta(cr, w)
 	if err != nil {
@@ -440,8 +444,12 @@ func RemoteApply(opts RemoteOptions, w io.Writer) error {
 		}
 	}
 	phpKeyByVer := map[string]string{}
-	for _, ver := range sortedKeys(needPHP) {
+	phpVers := sortedKeys(needPHP)
+	total := 3 + len(phpVers) + len(sel) + len(opts.Databases)
+	pw.Set(2, total, "安装 PHP 运行时")
+	for i, ver := range phpVers {
 		fmt.Fprintf(w, ">> 确保面板存在 PHP %s 运行时(远程站点改由本面板容器服务,版本不变)...\n", ver)
+		pw.Set(2+i, total, "安装 PHP "+ver+" 运行时")
 		key, err := appstore.EnsurePHPVersion(w, ver)
 		if err != nil {
 			return fmt.Errorf("安装 PHP %s 运行时失败: %v", ver, err)
@@ -460,6 +468,8 @@ func RemoteApply(opts RemoteOptions, w io.Writer) error {
 	// 3) 逐站点迁移
 	migrated := 0
 	cronPathMap := map[string]string{}
+	siteBase := 2 + len(phpVers)
+	i := 0
 	for _, domain := range sortedKeys(sel) {
 		cf, ok := confByDomain[domain]
 		if !ok {
@@ -470,6 +480,8 @@ func RemoteApply(opts RemoteOptions, w io.Writer) error {
 		if err != nil || site.Domain == "" {
 			continue
 		}
+		i++
+		pw.Set(siteBase+i, total, "迁移站点 "+site.Domain)
 		fmt.Fprintf(w, ">> 迁移站点 %s(%s)...\n", site.Domain, site.Type)
 		// 反代:从 main conf 与宝塔反代子目录 include 中找上游(远程机 127.0.0.1 → 远程IP)
 		remoteTarget := ""
@@ -533,6 +545,8 @@ func RemoteApply(opts RemoteOptions, w io.Writer) error {
 	fmt.Fprintf(w, ">> 站点迁移完成:%d 个\n", migrated)
 
 	// 4) 计划任务(命令中的远程站点路径改写为本面板路径;PRAGMA 兼容无 sType schema)
+	cronBase := siteBase + len(sel)
+	pw.Set(cronBase, total, "迁移计划任务")
 	n := 0
 	if raw, err := localJSON(dbLocal, "select * from crontab"); err == nil {
 		var rows []map[string]any
@@ -557,7 +571,8 @@ func RemoteApply(opts RemoteOptions, w io.Writer) error {
 	fmt.Fprintf(w, ">> 计划任务已迁移 %d 条(远程机 crontab 未改动,域名切换后请在旧服务器停用宝塔定时)\n", n)
 
 	// 5) 数据库迁移(可选)
-	for _, name := range opts.Databases {
+	for di, name := range opts.Databases {
+		pw.Set(cronBase+1+di, total, "迁移数据库 "+name)
 		fmt.Fprintf(w, ">> 迁移数据库 %s(远程 mysqldump → 面板 MySQL)...\n", name)
 		if err := migrateRemoteDatabase(cl, dbLocal, name, w); err != nil {
 			fmt.Fprintf(w, "   失败: %v(继续)\n", err)
@@ -565,6 +580,7 @@ func RemoteApply(opts RemoteOptions, w io.Writer) error {
 	}
 
 	// 6) 重载网关
+	pw.Set(total, total, "重载 Nginx 并收尾")
 	if err := websites.Reload(); err != nil {
 		return fmt.Errorf("Nginx 配置校验失败: %v", err)
 	}

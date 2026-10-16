@@ -392,11 +392,21 @@ function taskModal(taskId, onDone) {
   const m = openLayer({
     title: "任务执行中",
     width: 680,
-    body: '<div class="log-view" id="task-log"></div>',
-    footer: '<button class="btn btn-plain" data-act="bg">后台运行</button><button class="btn btn-primary" data-act="done" disabled>完 成</button>',
+    body: '<div id="task-progress" style="display:none;margin-bottom:10px">' +
+      '<div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:6px">' +
+      '<span id="task-stage"></span><span class="mono" id="task-pct"></span></div>' +
+      '<div style="height:8px;border-radius:6px;background:var(--line,#e5e7eb33);overflow:hidden">' +
+      '<div id="task-bar" style="height:100%;width:0;border-radius:6px;background:var(--primary,#2563eb);transition:width .5s"></div></div></div>' +
+      '<div class="log-view" id="task-log"></div>',
+    footer: '<span class="help" style="margin-right:auto">关闭弹窗任务继续在后台运行,顶栏「后台任务」可随时查看</span>' +
+      '<button class="btn btn-plain" data-act="bg">后台运行</button><button class="btn btn-primary" data-act="done" disabled>完 成</button>',
   });
   const logEl = qs("#task-log", m.el);
   const doneBtn = qs('[data-act="done"]', m.el);
+  const barEl = qs("#task-bar", m.el);
+  const stageEl = qs("#task-stage", m.el);
+  const pctEl = qs("#task-pct", m.el);
+  const wrapEl = qs("#task-progress", m.el);
   qs('[data-act="bg"]', m.el).onclick = () => m.close();
   doneBtn.onclick = () => { m.close(); if (onDone) onDone(); };
   let stopped = false;
@@ -407,8 +417,17 @@ function taskModal(taskId, onDone) {
       logEl.textContent = t.log || "";
       logEl.scrollTop = logEl.scrollHeight;
       qs(".modal-header h3", m.el).textContent = "任务: " + t.name + (t.status === "running" ? "(执行中)" : t.status === "success" ? "(成功)" : "(失败)");
+      // 结构化进度条(后端通过 taskx P(w) 汇报当前步/总步/阶段)
+      if (t.progress && t.progress.total > 0) {
+        wrapEl.style.display = "";
+        const pct = Math.min(100, Math.round((t.progress.cur || 0) * 100 / t.progress.total));
+        barEl.style.width = pct + "%";
+        pctEl.textContent = t.progress.cur + " / " + t.progress.total + "  (" + pct + "%)";
+        stageEl.textContent = t.progress.stage || "";
+      }
       if (t.status !== "running") {
         doneBtn.disabled = false;
+        if (t.progress && t.progress.total > 0) { barEl.style.width = "100%"; stageEl.textContent = t.status === "success" ? "全部完成" : "失败"; }
         if (t.status === "failed") toast("任务失败: " + (t.error || ""), "error", 5000);
         if (onDone) onDone(t.status);
         onDone = null;

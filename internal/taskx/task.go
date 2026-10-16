@@ -16,8 +16,76 @@ type Task struct {
 	Error     string    `json:"error,omitempty"`
 	StartedAt time.Time `json:"started_at"`
 	EndedAt   time.Time `json:"ended_at,omitempty"`
+	// 结构化进度(可选):任务体通过 P(w) 拿到 ProgressWriter 汇报,
+	// 前端渲染进度条与当前阶段(如远程迁移到第几步)
+	Progress *Progress `json:"progress,omitempty"`
 
 	buf *ringBuffer
+	pw  *ProgressWriter
+}
+
+// Progress 任务进度快照
+type Progress struct {
+	Cur   int    `json:"cur"`
+	Total int    `json:"total"`
+	Stage string `json:"stage"`
+}
+
+// ProgressWriter 包装任务日志写入器,附带可原子汇报的进度
+type ProgressWriter struct {
+	io.Writer
+	cur   int32
+	total int32
+	mu    sync.Mutex
+	stage string
+}
+
+// P 从任务写入器取出进度汇报器(非任务写入器返回 nil)
+func P(w io.Writer) *ProgressWriter {
+	pw, _ := w.(*ProgressWriter)
+	return pw
+}
+
+// Set 设置总步数并推进到第 cur 步,stage 为当前阶段文案
+func (p *ProgressWriter) Set(cur, total int, stage string) {
+	if p == nil {
+		return
+	}
+	if cur < 0 {
+		cur = 0
+	}
+	if total < 1 {
+		total = 1
+	}
+	p.mu.Lock()
+	p.cur, p.total, p.stage = int32(cur), int32(total), stage
+	p.mu.Unlock()
+}
+
+// Step 仅推进步数(阶段文案不变)
+func (p *ProgressWriter) Step(cur int) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	p.cur = int32(cur)
+	p.mu.Unlock()
+}
+
+// Stage 仅更新阶段文案
+func (p *ProgressWriter) SetStage(stage string) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	p.stage = stage
+	p.mu.Unlock()
+}
+
+func (p *ProgressWriter) snapshot() Progress {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return Progress{Cur: int(p.cur), Total: int(p.total), Stage: p.stage}
 }
 
 type ringBuffer struct {
@@ -67,12 +135,15 @@ func (m *Manager) Start(name string, fn func(w io.Writer) error) (*Task, error) 
 		}
 	}
 	m.seq++
+	buf := &ringBuffer{max: 512 * 1024}
+	pw := &ProgressWriter{Writer: buf}
 	t := &Task{
 		ID:        fmt.Sprintf("t%d_%d", time.Now().Unix(), m.seq),
 		Name:      name,
 		Status:    "running",
 		StartedAt: time.Now(),
-		buf:       &ringBuffer{max: 512 * 1024},
+		buf:       buf,
+		pw:        pw,
 	}
 	m.tasks[t.ID] = t
 	go func() {
@@ -83,7 +154,7 @@ func (m *Manager) Start(name string, fn func(w io.Writer) error) (*Task, error) 
 				m.finish(t, fmt.Errorf("任务 panic: %v", r))
 			}
 		}()
-		err := fn(t.buf)
+		err := fn(pw)
 		m.finish(t, err)
 	}()
 	return t, nil
@@ -139,6 +210,10 @@ func (m *Manager) Get(id string) (*Task, bool) {
 	t.Log = t.bufString()
 	snap := *t
 	snap.buf = nil
+	if t.pw != nil {
+		p := t.pw.snapshot()
+		snap.Progress = &p
+	}
 	m.mu.Unlock()
 	return &snap, true
 }
@@ -151,6 +226,10 @@ func (m *Manager) List() []*Task {
 		t.Log = t.bufString()
 		snap := *t
 		snap.buf = nil
+		if t.pw != nil {
+			p := t.pw.snapshot()
+			snap.Progress = &p
+		}
 		out = append(out, &snap)
 	}
 	return out

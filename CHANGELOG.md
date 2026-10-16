@@ -3,6 +3,16 @@
 所有重要变更都会记录在此文件中。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v2.71.6] - 2026-10-16
+
+### 修复(第九轮实测:容器编辑)
+
+- **Docker 29 的 inspect 输出结构变更未兼容**:容器资源限制(NanoCpus/Memory)
+  在 Docker 29 的 inspect 输出里直接挂在 HostConfig 顶层,而面板解析读的是
+  旧位置 HostConfig.Resources——导致"编辑容器"弹窗永远显示"未限制",
+  已设置的限制在界面上不可见。现两层兼容(优先顶层,回退 Resources),
+  实测:设置 1.5 核/512MB 后弹窗正确预填
+
 ## [v2.71.5] - 2026-10-16
 
 ### 修复(第八轮实测:防盗链开启必失败)

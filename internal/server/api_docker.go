@@ -273,9 +273,12 @@ func (s *Server) handleContainerInfoDocker(w http.ResponseWriter, r *http.Reques
 			RestartPolicy struct {
 				Name string `json:"Name"`
 			} `json:"RestartPolicy"`
+			// Docker 29+:NanoCpus/Memory 直接在 HostConfig 顶层(不再嵌套 Resources)
+			NanoCPUs int64 `json:"NanoCpus"`
+			Memory   int64 `json:"Memory"`
 			Resources struct {
-				NanoCPUs  int64 `json:"NanoCpus"`
-				Memory    int64 `json:"Memory"`
+				NanoCPUs int64 `json:"NanoCpus"`
+				Memory   int64 `json:"Memory"`
 			} `json:"Resources"`
 		} `json:"HostConfig"`
 		Mounts []struct {
@@ -297,9 +300,22 @@ func (s *Server) handleContainerInfoDocker(w http.ResponseWriter, r *http.Reques
 	for _, m := range raw.Mounts {
 		mounts = append(mounts, map[string]string{"host": m.Source, "container": m.Destination})
 	}
-	// 资源限制(0 = 未限制)
-	cpuLimit := float64(raw.HostConfig.Resources.NanoCPUs) / 1e9
-	memLimitBytes := raw.HostConfig.Resources.Memory
+	// 资源限制(0 = 未限制):Docker 29+ 在 HostConfig 顶层,旧版在 Resources 下,两层兼容
+	nano := raw.HostConfig.NanoCPUs
+	memBytes := raw.HostConfig.Memory
+	if nano == 0 && memBytes == 0 {
+		nano = raw.HostConfig.Resources.NanoCPUs
+		memBytes = raw.HostConfig.Resources.Memory
+	}
+	cpuLimit := float64(nano) / 1e9
+	memLimitBytes := memBytes
+	// [调试] 发布前移除
+	if r.URL.Query().Get("debug") == "1" {
+		_ = os.WriteFile("/opt/kunpanel/data/debug_inspect.json", []byte(out), 0o644)
+		resp := map[string]any{"cpu_limit": cpuLimit, "mem_limit": memLimitBytes, "debug_len": len(out), "raw_nano": raw.HostConfig.Resources.NanoCPUs, "raw_mem": raw.HostConfig.Resources.Memory}
+		OK(w, resp)
+		return
+	}
 	OK(w, map[string]any{
 		"name":           raw.Name,
 		"image":          raw.Config.Image,

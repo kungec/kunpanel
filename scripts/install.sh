@@ -130,7 +130,21 @@ if ! command -v curl >/dev/null 2>&1; then
   esac
 fi
 command -v curl >/dev/null 2>&1 || fail "curl 安装失败"
-command -v tar >/dev/null 2>&1 || fail "缺少 tar 命令"
+
+# tar/gzip:Rocky/AlmaLinux 等最小化镜像不预装,自动补装(解压安装包必需)
+if ! command -v tar >/dev/null 2>&1 || ! command -v gzip >/dev/null 2>&1; then
+  info "安装 tar / gzip ..."
+  case "$PKG" in
+    apt-get) apt-get update -y && apt-get install -y --no-install-recommends tar gzip ;;
+    dnf) dnf install -y tar gzip ;;
+    yum) yum install -y tar gzip ;;
+    apk) apk add --no-cache tar gzip ;;
+    pacman) pacman -Sy --noconfirm tar gzip ;;
+    zypper) zypper --non-interactive install tar gzip ;;
+    *) fail "未找到 tar/gzip 且无法自动安装,请先手动安装 tar" ;;
+  esac
+fi
+command -v tar >/dev/null 2>&1 || fail "tar 安装失败"
 
 # ---------------- 下载 ----------------
 mkdir -p "$KP_DIR/bin" "$KP_DIR/data" "$KP_DIR/logs"

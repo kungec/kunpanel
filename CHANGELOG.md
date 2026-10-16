@@ -3,6 +3,14 @@
 所有重要变更都会记录在此文件中。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v2.69.4] - 2026-10-16
+
+### 修复(用户反馈)
+
+- **一键安装缺少 tar 报错退出**:Rocky/AlmaLinux 等最小化安装不带 tar,
+  安装脚本此前直接失败。现与 curl 一致——自动用系统包管理器(dnf/yum/apt/
+  apk/pacman/zypper)补装 tar 与 gzip;已在 Rocky Linux 9 无 tar 环境实测通过
+
 ## [v2.69.3] - 2026-10-16
 
 ### 修复(第五轮全功能实测)

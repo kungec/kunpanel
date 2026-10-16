@@ -1026,6 +1026,48 @@ PAGES.websites = {
     load();
     qs('[data-act="refresh"]', m.el).onclick = load;
   },
+  /* 网站全局设置:防恶意解析 / 全站 Gzip / Nginx 管理入口 */
+  async globalDialog(el) {
+    let ap = false, gz = false;
+    try {
+      const results = await Promise.all([api("/websites/anti-parsing"), api("/websites/gzip")]);
+      ap = !!results[0].enabled; gz = !!results[1].enabled;
+    } catch (e) {}
+    const m = modal({
+      title: "网站全局设置", width: 620,
+      body: `
+        <div class="settings-section"><div class="settings-section-title">防恶意解析</div>
+          <div class="form-item"><label style="display:flex;gap:10px;align-items:center"><span class="switch" id="gp-anti"></span><span>拦截未绑定的域名与裸 IP 访问</span></label>
+          <div class="help">开启后,别人把垃圾域名解析到本机 IP 或直接用 IP 访问时,连接将被直接断开(不返回任何内容),防止蹭流量/蹭证书;面板入口不受影响</div></div></div>
+        <div class="settings-section"><div class="settings-section-title">Gzip 压缩</div>
+          <div class="form-item"><label style="display:flex;gap:10px;align-items:center"><span class="switch" id="gp-gzip"></span><span>全站文本资源压缩传输</span></label>
+          <div class="help">HTML/CSS/JS/JSON/SVG/字体等启用 gzip,传输体积平均减少 60% 以上,回访加载更快;图片视频等已压缩格式不重复处理</div></div></div>
+        <div class="settings-section"><div class="settings-section-title">Nginx 管理</div>
+          <div class="form-item" style="margin-bottom:0"><a class="btn btn-sm btn-plain" href="#/apps" id="gp-nginx-link">${I("tool")} Nginx 主配置 / 负载状态 / 错误日志(在 应用商店→已安装 中管理)</a></div></div>`,
+      footer: '<button class="btn btn-plain" data-act="close">关 闭</button>',
+    });
+    qs("#gp-anti", m.el).classList.toggle("on", ap);
+    qs("#gp-gzip", m.el).classList.toggle("on", gz);
+    qs("#gp-anti", m.el).onclick = async function() {
+      const on = !this.classList.contains("on");
+      try {
+        await api("/websites/anti-parsing", { method: "POST", body: { enabled: on } });
+        this.classList.toggle("on", on);
+        toast(on ? "防恶意解析已开启" : "防恶意解析已关闭");
+      } catch (e) { toast(e.message, "error"); }
+    };
+    qs("#gp-gzip", m.el).onclick = async function() {
+      const on = !this.classList.contains("on");
+      try {
+        await api("/websites/gzip", { method: "POST", body: { enabled: on } });
+        this.classList.toggle("on", on);
+        toast(on ? "Gzip 压缩已开启" : "Gzip 压缩已关闭");
+      } catch (e) { toast(e.message, "error"); }
+    };
+    const nl = qs("#gp-nginx-link", m.el);
+    if (nl) nl.onclick = function(e) { e.preventDefault(); m.close(); location.hash = "#/apps"; };
+    qs('[data-act="close"]', m.el).onclick = m.close;
+  },
   /* HTTPS 证书绑定弹窗:免费证书 / 自有证书 / 自签 三区分离,新手按需选择 */
   async sslDialog(site, el) {
     let certs = [];
@@ -2188,9 +2230,15 @@ PAGES.databases = {
     var showSys = this._showSys;
     var st = qs("#db-stat-dbs", el);
     if (st) st.textContent = user.length;
-    // 默认选中:业务库优先,否则第一个(需在渲染卡片前确定,active 高亮才正确)
+    // 默认选中:只在业务库里选(需在渲染卡片前确定,active 高亮才正确)。
+    // 无业务库时必须置空让管理面板走空态——不能回落 dbs[0](按字母序是
+    // information_schema),否则删光业务库后表列表会显示 61 张系统表
     if (!this.tab.database || dbs.indexOf(this.tab.database) < 0) {
-      this.tab.database = (user[0] || dbs[0] || "");
+      this.tab.database = user[0] || "";
+    }
+    if (!this.tab.database) {
+      var stT0 = document.getElementById("db-stat-tables");
+      if (stT0) stT0.textContent = "0";
     }
     // 数据库卡片(库名 + 操作),替代空旷表格
     function card(d, isSys) {

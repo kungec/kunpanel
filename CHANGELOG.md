@@ -3,6 +3,15 @@
 所有重要变更都会记录在此文件中。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v2.69.5] - 2026-10-16
+
+### 修复(第五轮实测,自曝 v2.69.0 引入)
+
+- **ACME 测试环境(staging)签发必失败**:v2.69.0 给"使用测试环境"勾选加了
+  staging 目录覆盖,但注册时复用了生产账户的 KID——staging 不认识该 KID,
+  报 "No embedded JWK in JWS header" 必然失败。修复后 staging 用独立注册,
+  且不落盘覆盖生产账户;实测 staging 签发→绑定→重签正式证书 全链路通过
+
 ## [v2.69.4] - 2026-10-16
 
 ### 修复(用户反馈)

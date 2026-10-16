@@ -243,6 +243,11 @@ func acmeClientForStaged(provider string, stagingOverride bool, w io.Writer) (*l
 	// Registration 必须在 NewClient 前设置:lego core 构造时一次性固化 KID,
 	// 之后设置无效(恢复账户场景会导致所有请求缺 kid 而 400)
 	u := &acmeUser{Email: a.Email, key: key, Registration: a.Registration}
+	// staging 覆盖签发:生产账户的 KID 在 staging 无效(报 No embedded JWK),
+	// 必须清空走独立注册
+	if stagingOverride {
+		u.Registration = nil
+	}
 	cfg := lego.NewConfig(u)
 	cfg.CADirURL = dir
 	cfg.Certificate.KeyType = certcrypto.EC256
@@ -251,7 +256,7 @@ func acmeClientForStaged(provider string, stagingOverride bool, w io.Writer) (*l
 		return nil, nil, fmt.Errorf("初始化 ACME 客户端失败: %v", err)
 	}
 	// 注册信息一致性:registration URI 必须属于当前 CA(存量脏数据自动作废重注册)
-	regOK := a.Registration != nil && a.Registration.URI != ""
+	regOK := a.Registration != nil && a.Registration.URI != "" && !stagingOverride
 	if regOK {
 		if ru, err := url.Parse(a.Registration.URI); err == nil {
 			if du, err2 := url.Parse(dir); err2 == nil {

@@ -12,6 +12,7 @@
 package btmigrate
 
 import (
+	"sync"
 	"strconv"
 	"encoding/json"
 	"io"
@@ -93,6 +94,40 @@ type ScanResult struct {
 	Crons    []BtCron  `json:"crons"`
 	Warnings []string  `json:"warnings"`
 	Scanned  time.Time `json:"scanned"`
+}
+
+// scanCache Scan 结果 60s 缓存:扫描要跑 python3 读库 + docker 探测(~200-300ms),
+// 网站页每次渲染都会调;迁移/切换/回滚内部用 Scan() 实时版
+var (
+	scanMu     sync.Mutex
+	scanCache  *ScanResult
+	scanCacheAt time.Time
+)
+
+// ScanCached 带缓存的扫描(API 用)
+func ScanCached() (*ScanResult, error) {
+	scanMu.Lock()
+	if scanCache != nil && time.Since(scanCacheAt) < 60*time.Second {
+		out := scanCache
+		scanMu.Unlock()
+		return out, nil
+	}
+	scanMu.Unlock()
+	res, err := Scan()
+	if err != nil {
+		return nil, err
+	}
+	scanMu.Lock()
+	scanCache, scanCacheAt = res, time.Now()
+	scanMu.Unlock()
+	return res, nil
+}
+
+// InvalidateScanCache 迁移/切换/回滚后调用
+func InvalidateScanCache() {
+	scanMu.Lock()
+	scanCache = nil
+	scanMu.Unlock()
 }
 
 // BtInstalled 检测宝塔面板是否存在
@@ -355,6 +390,7 @@ type ApplyOptions struct {
 // Apply 执行迁移(任务体内调用,进度写 w)。
 // siteDone 回调每个站点完成时触发(域名, 面板站点ID)。
 func Apply(opts ApplyOptions, w io.Writer, siteDone func(domain, siteID string)) error {
+	InvalidateScanCache()
 	res, err := Scan()
 	if err != nil {
 		return err
@@ -794,6 +830,7 @@ type TrafficState struct {
 
 // SwitchTraffic 流量切换:停宝塔 Nginx → 面板 Nginx 改绑 80/443 → 重建容器
 func SwitchTraffic(w io.Writer) error {
+	InvalidateScanCache()
 	res, err := Scan()
 	if err != nil {
 		return err
@@ -875,6 +912,7 @@ func SwitchTraffic(w io.Writer) error {
 
 // RollbackTraffic 回滚:停面板 Nginx 容器 → 恢复端口 → 启动宝塔 Nginx
 func RollbackTraffic(w io.Writer) error {
+	InvalidateScanCache()
 	fmt.Fprintln(w, ">> 停止面板 Nginx 容器 ...")
 	for _, key := range []string{"nginx", "openresty"} {
 		dir := filepath.Join("/opt/kunpanel/apps", key)

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"sync"
 	"fmt"
 	"net/http"
 	"os"
@@ -24,7 +25,25 @@ type checkItem struct {
 }
 
 // handlePanelCheckup 面板一键自检:磁盘/内存/负载/证书/应用/安全配置/计划任务
+// checkupCache 一键自检结果 60s 缓存:自检要跑磁盘/容器/证书/任务等十来项检查(~0.5s),
+// 用户连点或重复进入不必重跑
+var (
+	checkupMu    sync.Mutex
+	checkupCache []checkItem
+	checkupAt    time.Time
+	checkupFail  int
+	checkupWarn  int
+)
+
 func (s *Server) handlePanelCheckup(w http.ResponseWriter, r *http.Request) {
+	checkupMu.Lock()
+	if checkupCache != nil && time.Since(checkupAt) < 60*time.Second {
+		items, fail, warn := checkupCache, checkupFail, checkupWarn
+		checkupMu.Unlock()
+		OK(w, map[string]any{"items": items, "fail": fail, "warn": warn, "score": 100 - 15*fail - 5*warn, "cached": true})
+		return
+	}
+	checkupMu.Unlock()
 	items := []checkItem{}
 	fail, warn := 0, 0
 	add := func(status, name, detail string) {
@@ -177,6 +196,9 @@ func (s *Server) handlePanelCheckup(w http.ResponseWriter, r *http.Request) {
 	if score < 0 {
 		score = 0
 	}
+	checkupMu.Lock()
+	checkupCache, checkupAt, checkupFail, checkupWarn = items, time.Now(), fail, warn
+	checkupMu.Unlock()
 	OK(w, map[string]any{
 		"score": score,
 		"items": items,

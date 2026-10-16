@@ -10,7 +10,7 @@ import (
 
 // handleMigrateScan 宝塔环境预检扫描
 func (s *Server) handleMigrateScan(w http.ResponseWriter, r *http.Request) {
-	res, err := btmigrate.Scan()
+	res, err := btmigrate.ScanCached()
 	if err != nil {
 		Fail(w, http.StatusInternalServerError, err.Error())
 		return

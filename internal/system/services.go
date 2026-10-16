@@ -1,6 +1,8 @@
 package system
 
 import (
+	"sync"
+	"sync/atomic"
 	"fmt"
 	"os"
 	"os/exec"
@@ -37,6 +39,63 @@ func dirExists(p string) bool {
 }
 
 // ListServices 列出全部 systemd 服务单元
+// svcCache 服务列表 30s SWR 缓存:systemctl list-units 本身要 1.5s,
+// 服务列表页面轮询/重复访问不应每次都付这个代价;启停操作后立即失效
+var (
+	svcMu       sync.Mutex
+	svcCache    []ServiceUnit
+	svcCacheAt  time.Time
+	svcRefreshing int32
+)
+
+// ListServicesCached 列出服务(30s SWR 缓存:有旧值立即返回并后台刷新)
+func ListServicesCached() ([]ServiceUnit, error) {
+	svcMu.Lock()
+	if svcCache != nil && time.Since(svcCacheAt) < 30*time.Second {
+		out := svcCache
+		svcMu.Unlock()
+		return out, nil
+	}
+	svcMu.Unlock()
+	if atomic.CompareAndSwapInt32(&svcRefreshing, 0, 1) {
+		go func() {
+			defer atomic.StoreInt32(&svcRefreshing, 0)
+			list, err := ListServices()
+			if err != nil {
+				return
+			}
+			for i := range list {
+				list[i].Enabled = IsServiceEnabled(list[i].Name)
+			}
+			svcMu.Lock()
+			svcCache, svcCacheAt = list, time.Now()
+			svcMu.Unlock()
+		}()
+	}
+	svcMu.Lock()
+	defer svcMu.Unlock()
+	if svcCache != nil {
+		return svcCache, nil
+	}
+	// 冷启动:同步取一次
+	list, err := ListServices()
+	if err != nil {
+		return nil, err
+	}
+	for i := range list {
+		list[i].Enabled = IsServiceEnabled(list[i].Name)
+	}
+	svcCache, svcCacheAt = list, time.Now()
+	return list, nil
+}
+
+// InvalidateServicesCache 服务启停后调用,下次读取立即取新
+func InvalidateServicesCache() {
+	svcMu.Lock()
+	svcCache, svcCacheAt = nil, time.Time{}
+	svcMu.Unlock()
+}
+
 func ListServices() ([]ServiceUnit, error) {
 	if !SystemdAvailable() {
 		return nil, fmt.Errorf("当前系统不支持 systemd 服务管理")

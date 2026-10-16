@@ -13,13 +13,10 @@ func (s *Server) handleServicesList(w http.ResponseWriter, r *http.Request) {
 		OK(w, resp)
 		return
 	}
-	list, err := system.ListServices()
+	list, err := system.ListServicesCached()
 	if err != nil {
 		Fail(w, http.StatusInternalServerError, err.Error())
 		return
-	}
-	for i := range list {
-		list[i].Enabled = system.IsServiceEnabled(list[i].Name)
 	}
 	if list == nil {
 		list = []system.ServiceUnit{}
@@ -36,5 +33,6 @@ func (s *Server) handleServiceAction(w http.ResponseWriter, r *http.Request) {
 		Fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	system.InvalidateServicesCache() // 启停后立即失效缓存
 	OK(w, map[string]any{"output": out})
 }

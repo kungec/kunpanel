@@ -37,8 +37,9 @@ func (s *Server) handleFileGrep(w http.ResponseWriter, r *http.Request) {
 		Fail(w, http.StatusBadRequest, "内容搜索暂不支持 Windows")
 		return
 	}
-	// grep -rn --include=*.ext -l 或带行号
-	args := []string{"grep", "-rn", "--include=*", "-I", "-m", "3", "-h", q, dir}
+	// grep -rn(带文件名前缀,下方按 file:line:text 解析;此前带 -h 隐藏文件名,
+	// 导致默认内容搜索永远解析出空结果)
+	args := []string{"grep", "-rn", "--include=*", "-I", "-m", "3", q, dir}
 	if ext != "" {
 		args = []string{"grep", "-rn", "-I", "-m", "3", q, dir}
 		for _, e := range strings.Split(ext, ",") {

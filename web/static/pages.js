@@ -1611,10 +1611,15 @@ PAGES.apps = {
           var idx = tagsN.indexOf(cur);
           if (idx === 0) { badge.innerHTML = ""; continue; }
           checked++;
+          // WAF 启用时 nginx 跑的是面板自编译的 Lua 定制镜像(版本与官方标签无对应),
+          // "可更新 → 官方版"的提示具有误导性且照做会丢 WAF——直接标注定制镜像
+          if (r.key === "nginx" && wafOn) {
+            badge.innerHTML = '<span class="tag tag-info" title="WAF 启用中:当前为面板自编译的 Lua 定制镜像,官方标签版本不适用。如需升级请升级后重装 WAF">WAF 定制镜像</span>';
+            continue;
+          }
           if (idx > 0) {
             upd++;
-            var hint = (r.key === "nginx" && wafOn) ? ' title="WAF 启用中:升级会替换 Lua 定制镜像,更新后需重新安装 WAF"' : "";
-            badge.innerHTML = '<span class="tag tag-warning"' + hint + '>可更新 → ' + esc(tagsN[0]) + "</span>";
+            badge.innerHTML = '<span class="tag tag-warning">可更新 → ' + esc(tagsN[0]) + "</span>";
           } else {
             badge.innerHTML = '<span class="tag tag-info">当前版本已下架</span>';
           }

@@ -83,6 +83,54 @@ func (s *Server) handleMigrateReverseApply(w http.ResponseWriter, r *http.Reques
 	OK(w, map[string]string{"task_id": t.ID})
 }
 
+// handleMigrateRemoteScan 远程宝塔扫描(输入 IP/密码,SSH 对接)
+func (s *Server) handleMigrateRemoteScan(w http.ResponseWriter, r *http.Request) {
+	var req btmigrate.RemoteCred
+	if err := readJSON(r, &req); err != nil || req.Host == "" {
+		Fail(w, http.StatusBadRequest, "请填写服务器 IP")
+		return
+	}
+	res, err := btmigrate.RemoteScan(req)
+	if err != nil {
+		Fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	OK(w, res)
+}
+
+// handleMigrateRemoteApply 远程宝塔迁移执行(后台任务)
+func (s *Server) handleMigrateRemoteApply(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Host        string   `json:"host"`
+		Port        int      `json:"port"`
+		User        string   `json:"user"`
+		Pass        string   `json:"pass"`
+		Fingerprint string   `json:"fingerprint"`
+		Sites       []string `json:"sites"`
+		Databases   []string `json:"databases"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		Fail(w, http.StatusBadRequest, "参数错误")
+		return
+	}
+	if req.Host == "" || len(req.Sites) == 0 && len(req.Databases) == 0 {
+		Fail(w, http.StatusBadRequest, "请先连接检测并勾选要迁移的内容")
+		return
+	}
+	if req.User == "" {
+		req.User = "root"
+	}
+	cred := btmigrate.RemoteCred{Host: req.Host, Port: req.Port, User: req.User, Pass: req.Pass, Fingerprint: req.Fingerprint}
+	t, err := taskx.M.Start("bt-remote-migrate", func(w io.Writer) error {
+		return btmigrate.RemoteApply(btmigrate.RemoteOptions{Cred: cred, Sites: req.Sites, Databases: req.Databases}, w)
+	})
+	if err != nil {
+		Fail(w, http.StatusConflict, err.Error())
+		return
+	}
+	OK(w, map[string]string{"task_id": t.ID})
+}
+
 // handleMigrateSwitch 流量切换(停宝塔 Nginx,面板 Nginx 接管 80/443)
 func (s *Server) handleMigrateSwitch(w http.ResponseWriter, r *http.Request) {
 	t, err := taskx.M.Start("bt-switch", func(w io.Writer) error {

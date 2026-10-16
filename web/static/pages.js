@@ -374,8 +374,9 @@ PAGES.websites = {
     var m = modal({
       title: "面板互通迁移 · 宝塔 ⇄ 坤面板", width: 880,
       body: '<div class="hub-tabs" style="margin-bottom:14px">' +
-        '<div class="hub-tab active" data-dir="in">宝塔 → 坤面板</div>' +
-        '<div class="hub-tab" data-dir="out">坤面板 → 宝塔</div></div>' +
+        '<div class="hub-tab active" data-dir="in">宝塔 → 坤面板(本机)</div>' +
+        '<div class="hub-tab" data-dir="out">坤面板 → 宝塔</div>' +
+        '<div class="hub-tab" data-dir="remote">远程宝塔 → 本面板(输入 IP 密码)</div></div>' +
         '<div id="btmig-body"><div class="boot-loading" style="height:80px"><div class="spinner"></div></div></div>',
       footer: '<span class="help" style="margin-right:auto">随时可一键回滚;迁移不动宝塔原有站点与数据</span>' +
         '<button class="btn btn-plain" data-act="no">取 消</button>' +
@@ -486,10 +487,86 @@ PAGES.websites = {
       };
     }
 
+    /* ---------- 方向三:远程宝塔 → 本面板(SSH 对接) ---------- */
+    function drawRemote() {
+      goBtn.style.display = "none";
+      body.innerHTML =
+        '<div class="alert alert-info page-fade"><span class="alert-ico">' + I("info") + "</span>" +
+        "输入<b>装有宝塔的远程服务器</b>的 IP 和 root 密码,面板通过 SSH 自动对接:探测站点/证书/伪静态/自定义规则/计划任务/数据库," +
+        "流式搬运网站文件,PHP 按远程版本自动安装对应运行时(版本不变),证书导入后自动重签接管续期,数据库自动导入面板 MySQL 并重建账号授权。</div>" +
+        '<div class="settings-section"><div class="settings-section-title">远程服务器连接</div>' +
+        '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">' +
+        '<div><label>服务器 IP</label><input class="input" id="rm-host" placeholder="如 123.45.67.89" style="width:180px"></div>' +
+        '<div><label>SSH 端口</label><input class="input" id="rm-port" type="number" value="22" style="width:90px"></div>' +
+        '<div><label>用户名</label><input class="input" id="rm-user" value="root" style="width:110px"></div>' +
+        '<div><label>root 密码</label><input class="input" id="rm-pass" type="password" placeholder="SSH 密码" style="width:180px"></div>' +
+        '<button class="btn btn-primary" id="rm-scan">连接检测</button></div>' +
+        '<div class="help" style="margin-top:6px">首次连接采用指纹信任机制:连接成功后回显服务器指纹,迁移时自动校验,防中间人劫持。需要远程服务器允许密码登录。</div>' +
+        '<div id="rm-fp" class="help" style="margin-top:4px"></div></div>' +
+        '<div id="rm-result"></div>';
+      qs("#rm-scan", body).onclick = async function() {
+        var host = qs("#rm-host", body).value.trim();
+        var pass = qs("#rm-pass", body).value;
+        if (!host || !pass) { toast("请填写 IP 与密码", "error"); return; }
+        this.disabled = true; this.textContent = "连接检测中...";
+        try {
+          var scan = await api("/migration/bt/remote/scan", { method: "POST", body: {
+            host: host, port: Number(qs("#rm-port", body).value) || 22,
+            user: qs("#rm-user", body).value.trim() || "root", pass: pass } });
+          qs("#rm-fp", body).innerHTML = '服务器指纹: <span class="mono">' + esc(scan.fingerprint) + "</span>(已记录,迁移时自动校验)";
+          drawRemoteResult(scan);
+        } catch (e) {
+          qs("#rm-result", body).innerHTML = '<div class="alert alert-warning"><span class="alert-ico">' + I("warn") + "</span>" + esc(e.message) + "</div>";
+        }
+        this.disabled = false; this.textContent = "连接检测";
+      };
+      function drawRemoteResult(scan) {
+        var rows = (scan.sites || []).map(function(s2) {
+          var typeTxt = s2.type === "php" ? "PHP " + (s2.php_ver ? phpDirDisp(s2.php_ver) : "") : s2.type === "proxy" ? "反向代理" : "静态";
+          var sslTxt = s2.ssl ? '<span class="tag tag-success">SSL</span>' : "";
+          return '<tr><td><label class="radio-line"><input type="checkbox" checked data-rmsite="' + esc(s2.domain) + '"> <b>' + esc(s2.domain) + "</b></label></td>" +
+            '<td><span class="tag tag-info">' + typeTxt + "</span> " + sslTxt + "</td>" +
+            '<td class="mono fm-ellipsis" style="max-width:200px" title="' + esc(s2.root) + '">' + esc(s2.root) + "</td></tr>";
+        }).join("");
+        var dbChecks = (scan.dbs || []).map(function(d0) {
+          return '<label class="radio-line" style="display:inline-flex;margin:2px 18px 2px 0"><input type="checkbox" data-rmdb="' + esc(d0.name) + '"> <span class="mono">' + esc(d0.name) + "</span>" + (d0.ps ? '<span class="help" style="margin:0 0 0 6px">' + esc(d0.ps) + "</span>" : "") + "</label>";
+        }).join("");
+        qs("#rm-result", body).innerHTML =
+          '<div class="settings-section"><div class="settings-section-title">远程站点(' + (scan.sites || []).length + ')<span class="help" style="margin:0">勾选要迁入本面板的站点;网站文件自动搬运,PHP 版本自动匹配</span></div>' +
+          '<div class="table-wrap"><table class="table"><thead><tr><th>域名</th><th>类型</th><th>原目录</th></tr></thead><tbody>' + (rows || '<tr><td colspan=3 class=help>未检测到站点</td></tr>') + "</tbody></table></div></div>" +
+          '<div class="settings-section"><div class="settings-section-title">计划任务(' + (scan.crons || []).length + ')<span class="help" style="margin:0">自动迁移并改写站点路径;旧服务器定时需手动停用</span></div>' +
+          '<div class="help">' + (scan.crons || []).map(function(c0) { return esc(c0.name + " " + c0.cycle); }).join("、") + '</div></div>' +
+          '<div class="settings-section"><div class="settings-section-title">远程数据库(' + (scan.dbs || []).length + ')<span class="help" style="margin:0">勾选则导出并导入面板 MySQL(账号密码不变,站点连接串 host 需改 172.17.0.1);不勾选则站点继续连旧服务器数据库</span></div>' +
+          (dbChecks || '<div class="help">远程无数据库或未启用 MySQL</div>') + "</div>" +
+          ((scan.warnings || []).length ? '<div class="alert alert-warning"><span class="alert-ico">' + I("warn") + "</span>" + scan.warnings.map(function(x) { return esc(x); }).join("<br>") + "</div>" : "");
+        goBtn.textContent = "开始迁移";
+        goBtn.style.display = "";
+        goBtn.onclick = async function() {
+          var sites = [], dbs = [];
+          qsa("[data-rmsite]", body).forEach(function(cb) { if (cb.checked) sites.push(cb.getAttribute("data-rmsite")); });
+          qsa("[data-rmdb]", body).forEach(function(cb) { if (cb.checked) dbs.push(cb.getAttribute("data-rmdb")); });
+          if (!sites.length && !dbs.length) { toast("请至少勾选一项", "error"); return; }
+          if (!(await confirmDlg("开始迁移远程宝塔(" + esc(host) + ")?<br>站点 " + sites.length + " 个、数据库 " + dbs.length + " 个<br><span style='font-size:12px;color:var(--text-3)'>迁移全程不影响旧服务器运行;完成后需把域名 DNS 指向本服务器。</span>"))) return;
+          m.close();
+          try {
+            var d = await api("/migration/bt/remote/apply", { method: "POST", body: {
+              host: host, port: Number(qs("#rm-port", body).value) || 22, user: qs("#rm-user", body).value.trim() || "root",
+              pass: pass, fingerprint: scan.fingerprint, sites: sites, databases: dbs } });
+            taskModal(d.task_id, function(st) {
+              if (st === "success") { toast("远程迁移完成,记得切换域名 DNS", "success", 10000); self.render(el); }
+            });
+          } catch (e) { toast(e.message, "error", 8000); }
+        };
+      }
+    }
+    // 宝塔目录名(74)→ 显示版本(7.4)
+    function phpDirDisp(d) { return d.length === 2 ? d[0] + "." + d[1] : d; }
+
     function switchDir(dir) {
       curDir = dir;
       qsa(".hub-tab", m.el).forEach(function(x) { x.classList.toggle("active", x.getAttribute("data-dir") === dir); });
       if (dir === "in") { drawIn(); return; }
+      if (dir === "remote") { goBtn.textContent = "开始迁移"; goBtn.style.display = "none"; drawRemote(); return; }
       body.innerHTML = '<div class="boot-loading" style="height:80px"><div class="spinner"></div><p>读取面板与宝塔信息...</p></div>';
       goBtn.style.display = "none";
       api("/migration/bt/reverse-plan").then(function(plan) {

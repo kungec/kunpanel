@@ -42,6 +42,18 @@ var (
 // extractExtras 从宝塔 vhost conf 提取保真额外配置(空串=没有需要保留的)。
 // siteType 用于区分:php 站点的宝塔 fastcgi location 整块剔除(面板自己生成)
 func extractExtras(confPath, siteType string) (string, int, error) {
+	return extractExtrasAt(confPath, siteType, "", "")
+}
+
+// extractExtrasRemote 远程元数据包内的提取:宝塔 include 路径重映射到元数据包,
+// 回环上游(远程机的 127.0.0.1)改指远程机地址(DNS 切换前继续回源旧机)
+func extractExtrasRemote(confPath, siteType, metaRoot, remoteHost string) (string, int, error) {
+	return extractExtrasAt(confPath, siteType, metaRoot, remoteHost)
+}
+
+// extractExtrasAt 提取核心:rootRemap 非空时,宝塔 include 的绝对路径前缀重映射
+// (远程元数据解压根);loopbackHost 非空时,回环地址改写为该主机而非本地网关
+func extractExtrasAt(confPath, siteType, rootRemap, loopbackHost string) (string, int, error) {
 	b, err := os.ReadFile(confPath)
 	if err != nil {
 		return "", 0, err
@@ -58,6 +70,9 @@ func extractExtras(confPath, siteType string) (string, int, error) {
 			return m0
 		}
 		pattern := strings.TrimSpace(m[2])
+		if rootRemap != "" {
+			pattern = filepath.Join(rootRemap, strings.TrimPrefix(pattern, "/"))
+		}
 		files, _ := filepath.Glob(pattern)
 		if len(files) == 0 {
 			// 通配可能带具体 conf 路径
@@ -112,8 +127,12 @@ func extractExtras(confPath, siteType string) (string, int, error) {
 	if strings.TrimSpace(extra) == "" {
 		return "", 0, nil
 	}
-	// 回环地址改写为宿主机网关(容器内 127.0.0.1 是容器自己,反代必 502)
-	extra = rewriteLoopback(extra)
+	// 回环地址改写:同机迁移 → 宿主机网关;远程迁移 → 远程机地址(DNS 切换前回源旧机)
+	if loopbackHost != "" {
+		extra = reRemoteLoopback.ReplaceAllString(extra, "${1}"+loopbackHost+"${3}")
+	} else {
+		extra = rewriteLoopback(extra)
+	}
 	locs := len(regexp.MustCompile(`(?m)^\s*location\s`).FindAllString(extra, -1))
 	return extra + "\n", locs, nil
 }

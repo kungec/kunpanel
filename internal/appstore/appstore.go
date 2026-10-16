@@ -124,8 +124,8 @@ func builtinTemplates() []Template {
 			Desc: "官方 PHP-Apache 运行环境,上传 PHP 程序即可运行,可配合网站反向代理",
 			Params: []Param{
 				{Key: "Version", Label: "PHP 版本", Default: "8.4", Type: "select", Required: true,
-					Options: []string{"8.1", "8.2", "8.3", "8.4", "8.5"},
-					Help:    "8.5=最新版 · 8.4/8.3/8.2=稳定维护版 · 8.1=旧版兼容"},
+					Options: []string{"7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5"},
+					Help:    "8.5=最新版 · 8.4/8.3/8.2=稳定维护版 · 8.1/8.0/7.4=旧版兼容(远程迁移自动匹配用)"},
 				{Key: "Port", Label: "访问端口", Default: "8088", Type: "port", Required: true},
 			},
 			ComposeFrom: func(p map[string]string) string {
@@ -591,6 +591,46 @@ func GetTemplate(key string) (Template, bool) {
 		}
 	}
 	return Template{}, false
+}
+
+// EnsurePHPVersion 确保指定版本的 PHP 运行时已安装且运行,返回实例键。
+// 远程宝塔迁移用:跨机无法直连远程 php-fpm,站点按远程版本改由本面板容器服务
+func EnsurePHPVersion(w io.Writer, ver string) (string, error) {
+	list, _ := List()
+	for _, it := range list {
+		if IsPHPRuntimeKey(it.Key) && normalizePHPVersion(it.Params["Version"]) == normalizePHPVersion(ver) {
+			if it.Status == "running" {
+				return it.Key, nil
+			}
+			fmt.Fprintf(w, "   PHP %s 运行时已存在但未运行,正在启动 ...\n", ver)
+			if err := Apply(it.Key, "up -d", w); err != nil {
+				return "", err
+			}
+			return it.Key, nil
+		}
+	}
+	// 分配空闲端口(避开已用)
+	used := map[int]bool{}
+	for _, it := range list {
+		if IsPHPRuntimeKey(it.Key) {
+			if pn, e := strconv.Atoi(it.Params["Port"]); e == nil {
+				used[pn] = true
+			}
+		}
+	}
+	port := 8090
+	for used[port] {
+		port++
+	}
+	fmt.Fprintf(w, "   安装 PHP %s 运行时(首次拉取镜像需数分钟)...\n", ver)
+	key, err := Install("php", map[string]string{"Version": ver, "Port": strconv.Itoa(port)})
+	if err != nil {
+		return "", err
+	}
+	if err := Apply(key, "up -d", w); err != nil {
+		return "", err
+	}
+	return key, nil
 }
 
 // IsPHPRuntimeKey PHP 多版本实例键:php / php+版本数字(排除 phpmyadmin)

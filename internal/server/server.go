@@ -263,7 +263,8 @@ func (s *Server) spaHandler() http.Handler {
 		}
 		if st, err := fs.Stat(s.webFS, p); err == nil && !st.IsDir() {
 			// 入口 HTML:no-store(几 KB,必须每次拉新,杜绝旧版本号资源被缓存引用)
-			// 静态资源:no-cache + ETag(变化即失效,未变化 304 复验)
+			// 静态资源:immutable 长缓存——所有引用都带 ?v=<整组内容哈希>,
+			// 内容变即 URL 变,浏览器本地直接命中,升级后自动拉新(零 304 往返)
 			b, rerr := fs.ReadFile(s.webFS, p)
 			if rerr != nil {
 				http.Error(w, "read error", http.StatusInternalServerError)
@@ -277,7 +278,8 @@ func (s *Server) spaHandler() http.Handler {
 			if p == "index.html" {
 				w.Header().Set("Cache-Control", "no-store")
 			} else {
-				w.Header().Set("Cache-Control", "no-cache")
+				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+				w.Header().Set("Vary", "Accept-Encoding")
 			}
 			if etagMatches(r.Header.Get("If-None-Match"), etag) {
 				w.WriteHeader(http.StatusNotModified)
@@ -331,6 +333,9 @@ func etagMatches(header, etag string) bool {
 	return false
 }
 
+// gzipCache 预压缩缓存:嵌入资源运行期不变,每路径只压一次(省每请求 gzip CPU)
+var gzipCache sync.Map
+
 // serveStaticBytes 按扩展名 gzip 压缩输出(慢速链路下体积减约 70%)
 func serveStaticBytes(w http.ResponseWriter, r *http.Request, path string, b []byte) {
 	ct := mime.TypeByExtension(strings.ToLower(filepath.Ext(path)))
@@ -349,9 +354,19 @@ func serveStaticBytes(w http.ResponseWriter, r *http.Request, path string, b []b
 	}
 	if compressible && strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
 		w.Header().Set("Content-Encoding", "gzip")
-		gz := gzip.NewWriter(w)
-		_, _ = gz.Write(b)
-		_ = gz.Close()
+		var out []byte
+		if cached, ok := gzipCache.Load(path); ok {
+			out = cached.([]byte)
+		} else {
+			var gzBuf bytes.Buffer
+			gz := gzip.NewWriter(&gzBuf)
+			_, _ = gz.Write(b)
+			_ = gz.Close()
+			out = gzBuf.Bytes()
+			gzipCache.Store(path, out)
+		}
+		w.Header().Set("Content-Length", strconv.Itoa(len(out)))
+		_, _ = w.Write(out)
 		return
 	}
 	w.Header().Set("Content-Length", strconv.Itoa(len(b)))

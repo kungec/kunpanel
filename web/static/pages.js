@@ -1592,6 +1592,9 @@ PAGES.apps = {
       if (updBtn) updBtn.onclick = async function() {
         this.disabled = true; this.innerHTML = "检查中...";
         var upd = 0, checked = 0;
+        // WAF 状态只取一次:nginx 升级会换掉 Lua 定制镜像,需要提醒
+        var wafOn = false;
+        try { var wf = await api("/waf"); wafOn = !!((wf.settings || wf).enabled); } catch (e) {}
         for (var i = 0; i < instances.length; i++) {
           var r = instances[i];
           var badge = body.querySelector('[data-upd-badge="' + r.key + '"]');
@@ -1610,7 +1613,8 @@ PAGES.apps = {
           checked++;
           if (idx > 0) {
             upd++;
-            badge.innerHTML = '<span class="tag tag-warning">可更新 → ' + esc(tagsN[0]) + "</span>";
+            var hint = (r.key === "nginx" && wafOn) ? ' title="WAF 启用中:升级会替换 Lua 定制镜像,更新后需重新安装 WAF"' : "";
+            badge.innerHTML = '<span class="tag tag-warning"' + hint + '>可更新 → ' + esc(tagsN[0]) + "</span>";
           } else {
             badge.innerHTML = '<span class="tag tag-info">当前版本已下架</span>';
           }

@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"kunpanel/internal/util"
@@ -107,23 +108,37 @@ func StartCacheRefresher(stop <-chan struct{}) {
 		time.Sleep(2 * time.Second)
 		tick := time.NewTicker(3 * time.Second)
 		defer tick.Stop()
-		for {
-			select {
-			case <-stop:
-				return
-			case <-tick.C:
-				st := containerStatesReal()
+		var lastRefresh time.Time
+		for now := range tick.C {
+			// 自适应频率:面板 API 最近活跃 → 3 秒;空闲 → 30 秒。
+			// docker CLI 轮询本身不便宜(实测 dockerd+containerd 常驻 60%+ CPU),
+			// 无人使用时不能照常 3 秒一刷
+			interval := 30 * time.Second
+			if activeRecently() {
+				interval = 3 * time.Second
+			}
+			if now.Sub(lastRefresh) < interval {
+				continue
+			}
+			lastRefresh = now
+			st := containerStatesReal()
+			dockerSnapMu.Lock()
+			statesCache, statesCacheAt = st, time.Now()
+			dockerSnapMu.Unlock()
+			cl, err := containersReal()
+			if err == nil {
 				dockerSnapMu.Lock()
-				statesCache, statesCacheAt = st, time.Now()
+				containersCache, containersCacheAt = cl, time.Now()
 				dockerSnapMu.Unlock()
-				cl, err := containersReal()
-				if err == nil {
-					dockerSnapMu.Lock()
-					containersCache, containersCacheAt = cl, time.Now()
-					dockerSnapMu.Unlock()
-				}
-				imgs, err := imagesReal()
-				if err == nil {
+			}
+			// 镜像列表(docker images)是三者里最贵的一条命令,不再周期刷新:
+			// 读取时 SWR 惰性加载 + 面板操作后 InvalidateDockerCache,
+			// 后台仅 5 分钟兜底一次(外部 docker pull 最多延迟 5 分钟可见)
+			dockerSnapMu.Lock()
+			imagesStale := now.Sub(imagesCacheAt) > 5*time.Minute
+			dockerSnapMu.Unlock()
+			if imagesStale {
+				if imgs, err := imagesReal(); err == nil {
 					dockerSnapMu.Lock()
 					imagesCache, imagesCacheAt = imgs, time.Now()
 					dockerSnapMu.Unlock()
@@ -131,6 +146,16 @@ func StartCacheRefresher(stop <-chan struct{}) {
 			}
 		}
 	}()
+}
+
+// lastActive 面板 API 最近活跃时间(unix 秒,原子),后台刷新据此自适应降频
+var lastActive int64
+
+// MarkActive 面板 API 请求时调用(中间件层),标记"用户正在使用面板"
+func MarkActive() { atomic.StoreInt64(&lastActive, time.Now().Unix()) }
+
+func activeRecently() bool {
+	return time.Now().Unix()-atomic.LoadInt64(&lastActive) < 60
 }
 
 // InvalidateDockerCache 容器/镜像/应用操作成功后调用,下次读取立即取新数据

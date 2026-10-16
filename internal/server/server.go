@@ -27,6 +27,7 @@ import (
 
 	"kunpanel/internal/authx"
 	"kunpanel/internal/config"
+	"kunpanel/internal/dockerx"
 	"kunpanel/internal/logsx"
 	"kunpanel/internal/util"
 )
@@ -217,6 +218,8 @@ func (s *Server) withSecurityHeaders(next http.Handler) http.Handler {
 		h.Set("Content-Security-Policy", s.cspScript+
 			" style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws: wss:; "+
 			"font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
+		// 标记面板活跃:Docker 后台刷新据此自适应降频(空闲 30s,活跃 3s)
+		dockerx.MarkActive()
 		next.ServeHTTP(w, r)
 	})
 }

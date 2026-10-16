@@ -56,3 +56,30 @@ func TestValidateBackupDirInsideSrc(t *testing.T) {
 		t.Fatalf("正常备份目录不应报错: %v", err)
 	}
 }
+
+// Next 语义回归:预解析重构后月/周受限等场景与 Match 一致
+func TestNextSemantics(t *testing.T) {
+	from := time.Date(2026, 10, 16, 20, 0, 0, 0, time.Local)
+	cases := []struct {
+		expr string
+		want string
+	}{
+		{"30 1 * * *", "2026-10-17 01:30"},          // 每天次日
+		{"0 3 15 * *", "2026-11-15 03:00"},           // 每月 15 日(10 月已过)
+		{"0 4 * * 0", "2026-10-18 04:00"},            // 周日(10/16 周五)
+		{"*/5 * * * *", "2026-10-16 20:05"},          // 每 5 分钟
+		{"0 0 31 2 *", ""},                           // 2 月无 31 日:一年内无匹配
+	}
+	for _, c := range cases {
+		got, err := Next(c.expr, from)
+		if c.want == "" {
+			if err == nil {
+				t.Errorf("%s 应无匹配,得到了 %s", c.expr, got.Format("2006-01-02 15:04"))
+			}
+			continue
+		}
+		if err != nil || got.Format("2006-01-02 15:04") != c.want {
+			t.Errorf("%s → %v (err=%v), want %s", c.expr, got.Format("2006-01-02 15:04"), err, c.want)
+		}
+	}
+}

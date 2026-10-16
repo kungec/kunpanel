@@ -43,10 +43,18 @@ func appendEntry(kind string, e Entry) {
 	}
 	defer f.Close()
 	fmt.Fprintln(f, string(b))
-	// 超过 5MB 截断保留一半
+	// 超过 5MB 截断保留一半(按行边界切:任意字节切会留半行损坏 JSON,
+	// 首条记录永远解析不出来)
 	if fi, _ := f.Stat(); fi != nil && fi.Size() > 5<<20 {
 		data, _ := os.ReadFile(file(kind))
-		_ = util.AtomicWrite(file(kind), data[len(data)/2:], 0o600)
+		cut := len(data) / 2
+		for cut < len(data) && data[cut] != '\n' {
+			cut++
+		}
+		if cut < len(data) {
+			cut++ // 跳过换行符
+		}
+		_ = util.AtomicWrite(file(kind), data[cut:], 0o600)
 	}
 }
 

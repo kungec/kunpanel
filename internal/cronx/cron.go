@@ -152,6 +152,10 @@ func Match(expr string, t time.Time) bool {
 	if err != nil {
 		return false
 	}
+	return matchParsed(pe, t)
+}
+
+func matchParsed(pe *parsedExpr, t time.Time) bool {
 	minHit := in(pe.sets[0], t.Minute())
 	hourHit := in(pe.sets[1], t.Hour())
 	domHit := in(pe.sets[2], t.Day())
@@ -176,15 +180,17 @@ func in(set []int, v int) bool {
 	return false
 }
 
-// Next 计算下一次执行时间
+// Next 计算下一次执行时间(逐分钟推进;表达式只解析一次——此前每次
+// Match 都重新 parseExpr,最坏一年找不到匹配时要解析 52 万遍)
 func Next(expr string, from time.Time) (time.Time, error) {
-	if _, err := parseExpr(expr); err != nil {
+	pe, err := parseExpr(expr)
+	if err != nil {
 		return time.Time{}, err
 	}
 	t := from.Truncate(time.Minute).Add(time.Minute)
 	limit := t.AddDate(1, 0, 0)
 	for t.Before(limit) {
-		if Match(expr, t) {
+		if matchParsed(pe, t) {
 			return t, nil
 		}
 		t = t.Add(time.Minute)

@@ -27,6 +27,7 @@ var (
 	mu      sync.Mutex
 	seq     int64
 	lastSeq int64
+	cached  []Item // 内存缓存:文件只被本包读写,变更即刷新;顶栏未读数是轮询热点,不必每次整文件重读
 )
 
 func storePath() string { return filepath.Join(config.DataDir(), "notifications.json") }
@@ -35,7 +36,7 @@ func storePath() string { return filepath.Join(config.DataDir(), "notifications.
 func Add(kind, title, body string) {
 	mu.Lock()
 	defer mu.Unlock()
-	list := load()
+	list := loadLocked()
 	seq++
 	if seq == 0 {
 		seq = time.Now().UnixNano()
@@ -52,6 +53,7 @@ func Add(kind, title, body string) {
 		list = list[len(list)-maxKeep:]
 	}
 	_ = save(list)
+	cached = list
 }
 
 // List 倒序返回最近 n 条
@@ -61,7 +63,7 @@ func List(n int) []Item {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	list := load()
+	list := loadLocked()
 	if len(list) > n {
 		list = list[len(list)-n:]
 	}
@@ -76,7 +78,7 @@ func List(n int) []Item {
 func Unread(after int64) int {
 	mu.Lock()
 	defer mu.Unlock()
-	list := load()
+	list := loadLocked()
 	n := 0
 	for _, it := range list {
 		if it.ID > after {
@@ -91,9 +93,22 @@ func Clear() {
 	mu.Lock()
 	defer mu.Unlock()
 	_ = save(nil)
+	cached = []Item{}
 }
 
-func load() []Item {
+func loadLocked() []Item {
+	if cached != nil {
+		return cached
+	}
+	list := readStore()
+	if list == nil {
+		list = []Item{}
+	}
+	cached = list
+	return list
+}
+
+func readStore() []Item {
 	b, err := os.ReadFile(storePath())
 	if err != nil {
 		return nil

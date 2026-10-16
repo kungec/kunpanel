@@ -1586,6 +1586,38 @@ PAGES.apps = {
       body.querySelectorAll("[data-app-cfg]").forEach(function(b) {
         b.onclick = function() { self.composeDialog(b.getAttribute("data-app-cfg"), b.getAttribute("data-app-name")); };
       });
+      // 检查更新:逐实例对比 Docker Hub 最新标签(PHP 多版本实例共用 php 的标签)。
+      // 此前按钮无任何事件绑定(v2.35 的实现早已丢失),点击毫无反应、徽标永远为空
+      var updBtn = qs("#apps-check-upd", el);
+      if (updBtn) updBtn.onclick = async function() {
+        this.disabled = true; this.innerHTML = "检查中...";
+        var upd = 0, checked = 0;
+        for (var i = 0; i < instances.length; i++) {
+          var r = instances[i];
+          var badge = body.querySelector('[data-upd-badge="' + r.key + '"]');
+          if (!badge) continue;
+          var base = /^php[0-9]*$/.test(r.key) ? "php" : r.key;
+          var tags = [];
+          try { tags = (await api("/apps/hub-tags?key=" + encodeURIComponent(base))) || []; } catch (e) {}
+          var cur = (r.params && r.params.Version) || "";
+          if (!tags.length || !cur) { badge.innerHTML = ""; continue; }
+          var rolling = /^(latest|edge|alpine|stable|slim.*|bookworm|bullseye)$/i.test(cur);
+          if (rolling) { badge.innerHTML = ""; continue; }
+          // php 标签形态是 8.4-apache,归一后与实例版本比对
+          var tagsN = tags.map(function(t) { return String(t).replace(/-apache$/, ""); });
+          var idx = tagsN.indexOf(cur);
+          if (idx === 0) { badge.innerHTML = ""; continue; }
+          checked++;
+          if (idx > 0) {
+            upd++;
+            badge.innerHTML = '<span class="tag tag-warning">可更新 → ' + esc(tagsN[0]) + "</span>";
+          } else {
+            badge.innerHTML = '<span class="tag tag-info">当前版本已下架</span>';
+          }
+        }
+        toast(upd ? ("检查完成: " + checked + " 个可检查," + upd + " 个可更新") : "全部应用已是最新", upd ? "info" : "success", 6000);
+        this.disabled = false; this.innerHTML = I("refresh") + " 检查更新";
+      };
       body.querySelectorAll("[data-app-act]").forEach(function(b) {
         b.onclick = function() {
           var key = b.getAttribute("data-app-key"), act = b.getAttribute("data-app-act");

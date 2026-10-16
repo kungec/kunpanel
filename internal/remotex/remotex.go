@@ -90,11 +90,28 @@ func connect(c Config) (*sftp.Client, error) {
 		port = 22
 	}
 	// 主机密钥必须校验:空白名单放行 = 接受中间人攻击,备份凭据与数据可被窃取。
-	// 指纹获取:在服务器上执行 ssh-keyscan -t ed25519 <主机> 后用 ssh-keygen -lf 查看,
-	// 或查看面板「远程备份」设置里的指引
 	fp := strings.TrimSpace(c.HostKeyFingerprint)
 	if fp == "" {
-		return nil, fmt.Errorf("尚未配置 SSH 主机指纹,已拒绝连接(防中间人攻击);在「远程备份」设置中填入服务器指纹后重试")
+		// 首次登记(TOFU):握手抓取服务器实际指纹回显,用户确认后填入保存
+		var actual string
+		capCb := func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+			actual = ssh.FingerprintSHA256(key)
+			return fmt.Errorf("capture-only")
+		}
+		capCfg := &ssh.ClientConfig{
+			User:            c.User,
+			Auth:            []ssh.AuthMethod{ssh.Password(c.Password)},
+			HostKeyCallback: capCb,
+			Timeout:         12 * time.Second,
+		}
+		cl, err := ssh.Dial("tcp", net.JoinHostPort(c.Host, fmt.Sprintf("%d", port)), capCfg)
+		if cl != nil {
+			cl.Close()
+		}
+		if actual != "" {
+			return nil, fmt.Errorf("尚未配置主机指纹,已拒绝连接(防中间人攻击)。服务器实际指纹: %s —— 确认无误后把它填入「主机指纹」并保存即可", actual)
+		}
+		return nil, fmt.Errorf("尚未配置主机指纹,已拒绝连接;且无法获取服务器指纹(%v)。可手动获取: ssh-keyscan -t ed25519 <主机> 后用 ssh-keygen -lf 查看", err)
 	}
 	hostKeyCb := func(hostname string, remote net.Addr, key ssh.PublicKey) error {
 		actual := ssh.FingerprintSHA256(key)

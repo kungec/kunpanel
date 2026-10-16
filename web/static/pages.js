@@ -1481,8 +1481,9 @@ PAGES.apps = {
           var ver = r.params && r.params.Version ? '<span class="tag tag-info" style="margin-left:6px">' + esc(r.params.Version) + '</span>' : "";
           html += '<tr><td><b>' + esc(r.name) + '</b>' + ver + '<span data-upd-badge="' + r.key + '" style="margin-left:6px"></span></td><td><span class="mono">' + esc(r.key) + '</span></td>';
           html += '<td>' + statusTag + '</td>';
-          var canManage = r.key === "php" || r.key === "nginx" || r.key === "openresty" ||
-            r.key === "mysql" || r.key === "mariadb" || r.key === "postgresql" || r.key === "redis";
+          var canManage = r.key === "nginx" || r.key === "openresty" ||
+            r.key === "mysql" || r.key === "mariadb" || r.key === "postgresql" || r.key === "redis" ||
+            /^php[0-9]*$/.test(r.key);
           html += '<td><div style="display:flex;gap:4px;flex-wrap:wrap">';
           if (canManage) html += '<button class="btn btn-sm btn-primary" data-app-mgr="' + r.key + '">管理</button>';
           html += '<button class="btn btn-sm btn-plain" data-app-cfg="' + r.key + '" data-app-name="' + esc(r.name) + '">配置</button>';
@@ -1577,7 +1578,8 @@ PAGES.apps = {
     });
     qs('[data-act="close"]', m.el).onclick = m.close;
     var body = qs("#am-body", m.el);
-    var isPHP = key === "php";
+    // PHP 多版本实例(php/php82/…)共用 PHP 管理视图:扩展与 php.ini 按实例键操作
+    var isPHP = /^php[0-9]*$/.test(key);
     var self = this;
     self._amTab = "info";
     self._amRT = null;   // 缓存 runtime info
@@ -1628,7 +1630,7 @@ PAGES.apps = {
           var ext = x.getAttribute("data-unload");
           confirmDlg("卸载扩展 <b>" + esc(ext) + "</b>?<br><span style='font-size:12px;color:var(--text-3)'>将移除扩展文件并重启 PHP;依赖它的站点代码会立即报错,请确认没有站点在使用</span>", { danger: true }).then(function(ok) {
             if (!ok) return;
-            api("/apps/instances/php/runtime/php-ext-remove", { method: "POST", body: { ext: ext } }).then(function(d) {
+            api("/apps/instances/" + key + "/runtime/php-ext-remove", { method: "POST", body: { ext: ext } }).then(function(d) {
               toast("开始卸载 " + ext, "info");
               taskModal(d.task_id, function() { self._amRT = null; renderExt(); });
             }).catch(function(e) { toast(e.message, "error", 6000); });
@@ -1665,7 +1667,7 @@ PAGES.apps = {
         };
         var ib = qs("#am-ini-save", view);
         if (ib) ib.onclick = function() {
-          api("/apps/instances/php/runtime/php-ini", { method: "POST", body: { settings: {
+          api("/apps/instances/" + key + "/runtime/php-ini", { method: "POST", body: { settings: {
             upload_max_filesize: qs("#am-s-upload", view).value.trim(),
             post_max_size: qs("#am-s-post", view).value.trim(),
             max_execution_time: qs("#am-s-exec", view).value.trim(),
@@ -1679,7 +1681,7 @@ PAGES.apps = {
     function renderExt() {
       var view = qs("#am-view", body);
       view.innerHTML = '<div class="boot-loading" style="height:60px"><div class="spinner"></div></div>';
-      Promise.all([fetchRT(), api("/apps/instances/php/runtime/php-ext-catalog", { method: "POST", body: {} }).catch(function() { return {}; })])
+      Promise.all([fetchRT(), api("/apps/instances/" + key + "/runtime/php-ext-catalog", { method: "POST", body: {} }).catch(function() { return {}; })])
         .then(function(rs) {
           // 归一化:php -m 的 "Zend OPcache" 对应目录键 "opcache"(去空格 + 可选 zend 前缀)
           var loaded = (rs[0].extensions || []).map(function(x) { return x.toLowerCase().replace(/\s+/g, ""); });
@@ -1715,7 +1717,7 @@ PAGES.apps = {
               var ext = card.getAttribute("data-ext");
               btn.disabled = true;
               btn.innerHTML = "安装中...";
-              api("/apps/instances/php/runtime/php-ext", { method: "POST", body: { ext: ext } }).then(function(d2) {
+              api("/apps/instances/" + key + "/runtime/php-ext", { method: "POST", body: { ext: ext } }).then(function(d2) {
                 toast("开始安装 " + ext, "info");
                 taskModal(d2.task_id, function() { self._amRT = null; renderExt(); });
               }).catch(function(e) {
@@ -1732,7 +1734,7 @@ PAGES.apps = {
     function renderIni() {
       var view = qs("#am-view", body);
       view.innerHTML = '<div class="boot-loading" style="height:60px"><div class="spinner"></div></div>';
-      api("/apps/instances/php/runtime/php-ini-get", { method: "POST", body: {} }).then(function(d) {
+      api("/apps/instances/" + key + "/runtime/php-ini-get", { method: "POST", body: {} }).then(function(d) {
         view.innerHTML = '<div class="settings-section"><div class="settings-section-title">php.ini 编辑器' +
           '<span class="help" style="margin:0">完整配置文件,保存后自动重启 PHP;改错参数可能导致站点异常,请谨慎修改</span></div>' +
           '<textarea class="textarea mono" id="am-ini-editor" rows="20" spellcheck="false" style="font-size:12px;line-height:1.5">' + esc(d.content || "") + "</textarea>" +
@@ -1740,7 +1742,7 @@ PAGES.apps = {
           '<button class="btn btn-primary btn-sm" id="am-ini-file-save">' + I("edit") + " 保存并重启 PHP</button>" +
           '<button class="btn btn-plain btn-sm" id="am-ini-reload">放弃修改</button></div></div>';
         qs("#am-ini-file-save", view).onclick = function() {
-          api("/apps/instances/php/runtime/php-ini-file-save", { method: "POST", body: { content: qs("#am-ini-editor", view).value } })
+          api("/apps/instances/" + key + "/runtime/php-ini-file-save", { method: "POST", body: { content: qs("#am-ini-editor", view).value } })
             .then(function() { toast("php.ini 已保存并重启生效"); fetchRT(true); })
             .catch(function(e) { toast(e.message, "error", 6000); });
         };

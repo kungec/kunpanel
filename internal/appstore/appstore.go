@@ -593,6 +593,42 @@ func GetTemplate(key string) (Template, bool) {
 	return Template{}, false
 }
 
+// IsPHPRuntimeKey PHP 多版本实例键:php / php+版本数字(排除 phpmyadmin)
+func IsPHPRuntimeKey(key string) bool {
+	if key == "php" {
+		return true
+	}
+	if len(key) > 3 && strings.HasPrefix(key, "php") && key != "phpmyadmin" {
+		for _, r := range key[3:] {
+			if r < '0' || r > '9' {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// templateKeyOf 实例键 → 模板键:PHP 多版本实例(php82 等)共用 php 模板,
+// 实例自身不在模板列表里,按实例键查模板会误报"未知应用"
+func templateKeyOf(key string) string {
+	if IsPHPRuntimeKey(key) {
+		return "php"
+	}
+	return key
+}
+
+// renderComposeFor 渲染实例 compose:PHP 多版本实例的容器名按实例键区分
+// (kun-php82 等),避免与首个实例 kun-php 撞名。Install 与 ReRenderCompose
+// 必须走同一渲染路径,否则自动修复会生成 kun-php 容器名覆盖原实例
+func renderComposeFor(key string, tpl Template, params map[string]string) string {
+	content := tpl.ComposeFrom(params)
+	if IsPHPRuntimeKey(key) && key != "php" {
+		content = strings.ReplaceAll(content, "container_name: kun-php\n", "container_name: kun-"+key+"\n")
+	}
+	return content
+}
+
 // List 已安装实例列表(带实时容器状态)
 func List() ([]Instance, error) {
 	list := loadInstances()
@@ -719,11 +755,7 @@ func Install(key string, params map[string]string) error {
 		seedDefaultSite()
 	}
 
-	content := tpl.ComposeFrom(params)
-	if strings.HasPrefix(key, "php") && key != "phpmyadmin" && key != "php" {
-		// 多版本实例:容器名与项目名按实例键区分
-		content = strings.ReplaceAll(content, "container_name: kun-php\n", "container_name: kun-"+key+"\n")
-	}
+	content := renderComposeFor(key, tpl, params)
 	if err := util.AtomicWriteString(filepath.Join(dir, "docker-compose.yml"), content, 0o644); err != nil {
 		return err
 	}
@@ -883,7 +915,7 @@ func InstanceDir(key string) string {
 
 // GetCompose 读取实例的 docker-compose.yml 内容
 func GetCompose(key string) (string, error) {
-	if _, ok := GetTemplate(key); !ok {
+	if _, ok := GetTemplate(templateKeyOf(key)); !ok {
 		return "", fmt.Errorf("未知应用: %s", key)
 	}
 	b, err := os.ReadFile(filepath.Join(InstanceDir(key), "docker-compose.yml"))
@@ -895,7 +927,7 @@ func GetCompose(key string) (string, error) {
 
 // SaveCompose 校验并保存编辑后的 compose,然后重建容器使其生效
 func SaveCompose(key, content string) error {
-	if _, ok := GetTemplate(key); !ok {
+	if _, ok := GetTemplate(templateKeyOf(key)); !ok {
 		return fmt.Errorf("未知应用: %s", key)
 	}
 	if strings.TrimSpace(content) == "" {
@@ -979,7 +1011,7 @@ func isParseError(out string) bool {
 
 // ReRenderCompose 用当前模板 + 已保存参数重新生成 compose 文件(修复损坏/旧格式文件)
 func ReRenderCompose(key string) error {
-	tpl, ok := GetTemplate(key)
+	tpl, ok := GetTemplate(templateKeyOf(key))
 	if !ok {
 		return fmt.Errorf("未知应用: %s", key)
 	}
@@ -996,7 +1028,7 @@ func ReRenderCompose(key string) error {
 	}
 	dir := InstanceDir(key)
 	_ = os.MkdirAll(dir, 0o755)
-	content := tpl.ComposeFrom(sanitizeParams(tpl, inst.Params))
+	content := renderComposeFor(key, tpl, sanitizeParams(tpl, inst.Params))
 	return util.AtomicWriteString(filepath.Join(dir, "docker-compose.yml"), content, 0o644)
 }
 
@@ -1228,7 +1260,7 @@ func UpdateInstanceParam(key, param, value string) bool {
 func PHPInstanceKeys() []string {
 	var out []string
 	for _, it := range loadInstances() {
-		if isPHPInstanceKey(it.Key) {
+		if IsPHPRuntimeKey(it.Key) {
 			out = append(out, it.Key)
 		}
 	}
@@ -1236,27 +1268,7 @@ func PHPInstanceKeys() []string {
 }
 
 // IsPHPInstanceKeyExported 供其他包判断 PHP 实例键
-func IsPHPInstanceKeyExported(key string) bool { return isPHPInstanceKey(key) }
-
-// isPHPInstanceKey 判断是否 PHP 运行时实例键(php / php81 / php82 ...;排除 phpmyadmin)
-func isPHPInstanceKey(key string) bool {
-	if key == "php" {
-		return true
-	}
-	if strings.HasPrefix(key, "php") && key != "phpmyadmin" {
-		suffix := key[3:]
-		if suffix == "" {
-			return false
-		}
-		for _, r := range suffix {
-			if r < '0' || r > '9' {
-				return false
-			}
-		}
-		return true
-	}
-	return false
-}
+func IsPHPInstanceKeyExported(key string) bool { return IsPHPRuntimeKey(key) }
 
 // normalizePHPVersion "8.4" → "84"
 func normalizePHPVersion(v string) string {
@@ -1272,7 +1284,7 @@ func allocatePHPKey(version string) (string, error) {
 	}
 	list := loadInstances()
 	for _, it := range list {
-		if !isPHPInstanceKey(it.Key) {
+		if !IsPHPRuntimeKey(it.Key) {
 			continue
 		}
 		if normalizePHPVersion(it.Params["Version"]) == ver {
@@ -1281,7 +1293,7 @@ func allocatePHPKey(version string) (string, error) {
 	}
 	hasAny := false
 	for _, it := range list {
-		if isPHPInstanceKey(it.Key) {
+		if IsPHPRuntimeKey(it.Key) {
 			hasAny = true
 			break
 		}

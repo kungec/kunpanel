@@ -171,18 +171,7 @@ func runtimeContainerOf(key string) (string, bool) {
 
 // isPHPRuntimeKey php 或 php+版本数字(排除 phpmyadmin)
 func isPHPRuntimeKey(key string) bool {
-	if key == "php" {
-		return true
-	}
-	if len(key) > 3 && strings.HasPrefix(key, "php") && key != "phpmyadmin" {
-		for _, r := range key[3:] {
-			if r < '0' || r > '9' {
-				return false
-			}
-		}
-		return true
-	}
-	return false
+	return appstore.IsPHPRuntimeKey(key)
 }
 
 // handleAppRuntimeInfo 运行时信息:版本号(PHP/php-fpm/nginx/openresty -v)、PHP 已加载扩展
@@ -198,7 +187,8 @@ func (s *Server) handleAppRuntimeInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := map[string]any{"key": key}
-	if key == "php" {
+	// PHP 多版本实例(php/php82/…)共用同一套运行时信息采集,按实例的容器执行
+	if isPHPRuntimeKey(key) {
 		if v, err := dockerx.ExecIn(container, "php", "-v"); err == nil {
 			out["version"] = strings.TrimSpace(strings.SplitN(v, "\n", 2)[0])
 		}

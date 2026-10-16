@@ -52,6 +52,9 @@ func Start(stop <-chan struct{}) {
 	go func() {
 		tick := time.NewTicker(time.Minute)
 		defer tick.Stop()
+		// 周期落盘:kill -9/OOM/断电时不至于丢掉整天历史(单次写入仅百余 KB)
+		saveTick := time.NewTicker(10 * time.Minute)
+		defer saveTick.Stop()
 		for {
 			select {
 			case <-stop:
@@ -59,6 +62,8 @@ func Start(stop <-chan struct{}) {
 				return
 			case <-tick.C:
 				sample()
+			case <-saveTick.C:
+				saveToDisk()
 			}
 		}
 	}()

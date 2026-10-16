@@ -59,6 +59,7 @@ var (
 	fails     = map[string]int{}        // id -> 连续失败次数
 	wasUp     = map[string]bool{}       // id -> 上次状态
 	notified  = map[string]bool{}       // id -> 宕机事件是否已通知
+	histLoaded bool                     // history 只从盘上加载一次,别在每次 List 轮询重读
 )
 
 func dataDir() string  { return filepath.Join(config.DataDir(), "upmon") }
@@ -74,8 +75,11 @@ func load() {
 	if history == nil {
 		history = map[string][]Sample{}
 	}
-	if b, err := os.ReadFile(histFile()); err == nil {
-		_ = json.Unmarshal(b, &history)
+	if !histLoaded {
+		histLoaded = true
+		if b, err := os.ReadFile(histFile()); err == nil {
+			_ = json.Unmarshal(b, &history)
+		}
 	}
 }
 

@@ -44,6 +44,7 @@ func ToTrash(path string) (*TrashItem, error) {
 	if err := os.Rename(path, dst); err != nil {
 		// 跨设备:复制后删除
 		if err2 := Copy(path, dst); err2 != nil {
+			_ = os.RemoveAll(dst) // 半成品不残留(无元数据,永远不会被列出或清理)
 			return nil, fmt.Errorf("移入回收站失败: %v", err)
 		}
 		if err := os.RemoveAll(path); err != nil {

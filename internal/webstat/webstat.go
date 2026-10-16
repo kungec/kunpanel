@@ -70,15 +70,15 @@ func Analyze(content string, maxLines int) *Stats {
 		if !uvSet[ip] {
 			uvSet[ip] = true
 		}
+		// URI 归一:去掉 query 串,同一页面不因参数不同被拆散计数
+		uriParts := strings.SplitN(request, " ", 3)
+		uri := "/"
+		if len(uriParts) >= 2 {
+			uri = strings.SplitN(uriParts[1], "?", 2)[0]
+		}
 		if bytesStr != "-" {
 			if b, e := strconv.ParseInt(bytesStr, 10, 64); e == nil {
 				s.TotalBytes += b
-				uriParts := strings.SplitN(request, " ", 3)
-				uri := "/"
-				if len(uriParts) >= 2 {
-					uri = uriParts[1]
-				}
-				uriCount[uri]++
 				uriBytes[uri] += b
 			}
 		}
@@ -105,12 +105,7 @@ func Analyze(content string, maxLines int) *Stats {
 			}
 		}
 		ipCount[ip]++
-		uriTmp := strings.SplitN(request, " ", 3)
-		uriKey := "/"
-		if len(uriTmp) >= 2 {
-			uriKey = strings.SplitN(uriTmp[1], "?", 2)[0]
-		}
-		_ = uriKey
+		uriCount[uri]++
 	}
 	s.TotalUV = len(uvSet)
 	s.TopIPs = topNMap(ipCount, 10, nil)

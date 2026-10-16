@@ -2,7 +2,6 @@ package cronx
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -251,6 +250,13 @@ func validateJob(j *Job) error {
 		if j.BackupSrc == "" || j.BackupDir == "" {
 			return fmt.Errorf("备份任务需要填写源目录与备份目录")
 		}
+		if absS, err := filepath.Abs(j.BackupSrc); err == nil {
+			if absD, err2 := filepath.Abs(j.BackupDir); err2 == nil {
+				if absD == absS || strings.HasPrefix(absD, absS+string(filepath.Separator)) {
+					return fmt.Errorf("备份目录不能位于备份源内部(打包边读边写)")
+				}
+			}
+		}
 		if j.Keep <= 0 {
 			j.Keep = 5
 		}
@@ -301,7 +307,7 @@ func Add(j Job) (Job, error) {
 	mu.Lock()
 	defer mu.Unlock()
 	load()
-	j.ID = fmt.Sprintf("cron_%d", time.Now().UnixNano()/1000000)
+	j.ID = fmt.Sprintf("cron_%d", time.Now().UnixNano())
 	j.Enabled = true
 	j.CreatedAt = time.Now().Format("2006-01-02 15:04:05")
 	if next, err := Next(j.Spec, time.Now()); err == nil {
@@ -368,6 +374,11 @@ func Toggle(id string, enabled bool) error {
 	for i := range list {
 		if list[i].ID == id {
 			list[i].Enabled = enabled
+			if enabled {
+				if next, err := Next(list[i].Spec, time.Now()); err == nil {
+					list[i].NextRun = next.Format("2006-01-02 15:04")
+				}
+			}
 			return save()
 		}
 	}
@@ -598,13 +609,11 @@ func doLogrotate(j Job) (string, error) {
 	var moved []string
 	for _, f := range strings.Fields(list) {
 		tmp := filepath.Join(archiveDir, gw+"_"+f)
-		if b, _ := dockerx.ExecIn(gw, "base64", "-w0", "/var/log/nginx/"+f); b != "" {
-			if dec, de := base64.StdEncoding.DecodeString(strings.TrimSpace(b)); de == nil {
-				_ = util.AtomicWrite(tmp, dec, 0o644)
-				moved = append(moved, f)
-			}
-			_, _ = dockerx.ExecIn(gw, "rm", "-f", "/var/log/nginx/"+f)
+		// docker cp 流式拷出,不经进程内存(此前 base64 经管道,大日志内存翻倍暴涨)
+		if _, err := util.Run("docker", "cp", gw+":/var/log/nginx/"+f, tmp); err == nil {
+			moved = append(moved, f)
 		}
+		_, _ = dockerx.ExecIn(gw, "rm", "-f", "/var/log/nginx/"+f)
 	}
 	if len(moved) == 0 {
 		return "本轮无需轮转(站点日志均为空或仅输出到 docker 控制台)", nil
@@ -713,8 +722,19 @@ func StartScheduler(stop <-chan struct{}) {
 var runningMu sync.Mutex
 var runningJobs = map[string]bool{}
 
+// lastChecked 已评估过的分钟:30s tick 与分钟边界不对齐时,同一分钟会被
+// 相邻两个 tick 各算出一次(如 :37 tick 与下一分钟的 :07 tick),快任务会跑两遍
+var lastChecked time.Time
+
 func checkDue(now time.Time) {
 	prev := now.Add(-30 * time.Second).Truncate(time.Minute)
+	runningMu.Lock()
+	if !lastChecked.IsZero() && !prev.After(lastChecked) {
+		runningMu.Unlock()
+		return
+	}
+	lastChecked = prev
+	runningMu.Unlock()
 	for _, j := range List() {
 		if !j.Enabled {
 			continue
@@ -722,16 +742,16 @@ func checkDue(now time.Time) {
 		if Match(j.Spec, prev) {
 			job := j
 			runningMu.Lock()
-			if runningJobs[job.Name] {
+			if runningJobs[job.ID] {
 				runningMu.Unlock()
 				continue
 			}
-			runningJobs[job.Name] = true
+			runningJobs[job.ID] = true
 			runningMu.Unlock()
 			go func() {
 				defer func() {
 					runningMu.Lock()
-					delete(runningJobs, job.Name)
+					delete(runningJobs, job.ID)
 					runningMu.Unlock()
 				}()
 				_ = RunJob(job)

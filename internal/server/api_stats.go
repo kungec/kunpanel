@@ -2,7 +2,6 @@ package server
 
 import (
 	"net/http"
-	"strconv"
 
 	"kunpanel/internal/monhist"
 	"kunpanel/internal/webstat"
@@ -38,5 +37,3 @@ func (s *Server) handleMonHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	OK(w, monhist.History(n))
 }
-
-var _ = strconv.Itoa

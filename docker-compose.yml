@@ -18,10 +18,10 @@ services:
     container_name: kunpanel
     restart: unless-stopped
     ports:
-      - "20000:20000"
+      - "${KP_PORT:-20000}:${KP_PORT:-20000}"   # 宿主机端口:容器端口(KP_PORT 改端口后两侧同步)
     environment:
       - KP_DATA_DIR=/opt/kunpanel/data
-      - KP_PORT=20000
+      - KP_PORT=${KP_PORT:-20000}
       # 首次初始化时可自定义端口/账号(配置生成后不再生效):
       # - KP_PORT=20000
       # - KP_USERNAME=admin
@@ -34,7 +34,7 @@ services:
       # 可选:网站根目录与 nginx 配置(便于宿主机直接访问文件)
       - /opt/kunpanel/data/websites:/opt/kunpanel/data/websites
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://127.0.0.1:20000/api/v1/auth/captcha"]
+      test: ["CMD", "sh", "-c", "curl -sf http://127.0.0.1:$${KP_PORT:-20000}/api/v1/auth/captcha"]
       interval: 30s
       timeout: 5s
       retries: 3

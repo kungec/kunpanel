@@ -4,7 +4,6 @@ package nettools
 import (
 	"fmt"
 	"net"
-	"net/http"
 	"net/netip"
 	"os/exec"
 	"regexp"
@@ -136,12 +135,11 @@ func HTTPCheck(url string) (*HTTPCheckResult, error) {
 	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
 		url = "http://" + url
 	}
-	client := &http.Client{
-		Timeout:   10 * time.Second,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
+	// SSRF 防护:拒绝回环/私网/链路本地目标,并用固定 IP 拨号防 DNS 重绑定
+	if err := util.ValidatePublicURL(url); err != nil {
+		return nil, err
 	}
+	client := util.PublicHTTPClient(10 * time.Second)
 	start := time.Now()
 	resp, err := client.Get(url)
 	elapsed := time.Since(start).Milliseconds()

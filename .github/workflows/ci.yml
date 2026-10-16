@@ -34,4 +34,4 @@ jobs:
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
       - name: Run govulncheck
-        run: govulncheck ./... || true  # 信息性检查,依赖库已知通告不阻塞 CI
+        run: govulncheck ./... || true  # 信息性检查。已知未修: x/crypto CVE-2026-39830 与 go-jose 解析 DoS 的修复版要求 go>=1.25(本地工具链 1.23);升级工具链后请移除 || true 改为阻断

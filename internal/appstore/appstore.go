@@ -698,6 +698,10 @@ func sanitizeParams(tpl Template, params map[string]string) map[string]string {
 			if clean == "" {
 				clean = p.Default
 			}
+			// 端口钳制 1-65535(此前只去非数字,超大值会生成非法 compose)
+			if n, err := strconv.Atoi(clean); err != nil || n < 1 || n > 65535 {
+				clean = p.Default
+			}
 			out[p.Key] = clean
 			continue
 		}
@@ -725,24 +729,32 @@ func RenderComposePublic(tpl Template, params map[string]string, w io.Writer) er
 	return err
 }
 
-// Install 渲染 compose 文件并登记实例(容器拉起由调用方在后台任务中执行 Apply)
-func Install(key string, params map[string]string) error {
+// installMu 安装串行锁:PHP 多版本分配实例键是「读后决定」,并发安装会分到同一个键
+var installMu sync.Mutex
+
+// Install 渲染 compose 文件并登记实例(容器拉起由调用方在后台任务中执行 Apply)。
+// 返回实际实例键:PHP 多版本安装时 "php" 会被改写为 php82 等衍生键,
+// 调用方必须用返回的键执行 Apply,否则会启动错误的实例
+func Install(key string, params map[string]string) (string, error) {
 	tpl, ok := GetTemplate(key)
 	if !ok {
-		return fmt.Errorf("未知应用: %s", key)
+		return "", fmt.Errorf("未知应用: %s", key)
 	}
 	for _, p := range tpl.Params {
 		if p.Required && strings.TrimSpace(params[p.Key]) == "" && p.Default == "" {
-			return fmt.Errorf("参数 %s 不能为空", p.Label)
+			return "", fmt.Errorf("参数 %s 不能为空", p.Label)
 		}
 	}
 	params = sanitizeParams(tpl, params)
 
 	// PHP 多版本:不同版本可共存为独立实例。实例键规则:首个为 php,后续为 php+版本数字(如 php82)
+	// 分配+落盘在 installMu 内完成,防并发安装分到同一个键
+	installMu.Lock()
+	defer installMu.Unlock()
 	if key == "php" {
 		instKey, err := allocatePHPKey(params["Version"])
 		if err != nil {
-			return err
+			return "", err
 		}
 		key = instKey
 	}
@@ -757,13 +769,13 @@ func Install(key string, params map[string]string) error {
 
 	content := renderComposeFor(key, tpl, params)
 	if err := util.AtomicWriteString(filepath.Join(dir, "docker-compose.yml"), content, 0o644); err != nil {
-		return err
+		return "", err
 	}
 
 	// 坤发卡:下载 database.sql 供 MySQL 首次启动自动导入
 	if key == "kunfaka" {
 		if err := installKunfaka(dir, params); err != nil {
-			return fmt.Errorf("坤发卡初始化失败: %w", err)
+			return "", fmt.Errorf("坤发卡初始化失败: %w", err)
 		}
 	}
 
@@ -799,7 +811,7 @@ func Install(key string, params map[string]string) error {
 	// NAT Cloud:下载源码和 schema.sql 供 MySQL 首次启动自动导入
 	if key == "nat-cloud" {
 		if err := installNatCloud(dir); err != nil {
-			return fmt.Errorf("NAT Cloud 初始化失败: %w", err)
+			return "", fmt.Errorf("NAT Cloud 初始化失败: %w", err)
 		}
 	}
 
@@ -807,7 +819,7 @@ func Install(key string, params map[string]string) error {
 	for i := range list {
 		if list[i].Key == key {
 			list[i].Params = params
-			return saveInstances(list)
+			return key, saveInstances(list)
 		}
 	}
 	maxID := 0
@@ -820,7 +832,7 @@ func Install(key string, params map[string]string) error {
 		ID: fmt.Sprintf("%d", maxID+1), Key: key, Name: tpl.Name,
 		Params: params, Dir: dir, CreatedAt: time.Now().Format("2006-01-02 15:04:05"),
 	})
-	return saveInstances(list)
+	return key, saveInstances(list)
 }
 
 // installKunfaka 下载 kunfaka 源码与 database.sql 并写入实例目录
@@ -946,12 +958,25 @@ func SaveCompose(key, content string) error {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("配置校验失败: %s", tailStr(out))
 	}
+	// 备份旧配置:up -d 失败时回滚,避免应用永久停留在新配置的故障状态
+	oldBak := filepath.Join(dir, "docker-compose.yml.prev")
+	hadOld := false
+	if b, err := os.ReadFile(filepath.Join(dir, "docker-compose.yml")); err == nil {
+		_ = os.WriteFile(oldBak, b, 0o644)
+		hadOld = true
+	}
 	if err := os.Rename(tmp, filepath.Join(dir, "docker-compose.yml")); err != nil {
 		return err
 	}
 	if _, err := dockerx.Compose(dir, "up", "-d"); err != nil {
+		if hadOld {
+			_ = os.Rename(oldBak, filepath.Join(dir, "docker-compose.yml"))
+			_, _ = dockerx.Compose(dir, "up", "-d") // 按旧配置拉回
+			return fmt.Errorf("新配置启动失败已回滚旧配置: %v", err)
+		}
 		return err
 	}
+	_ = os.Remove(oldBak)
 	return nil
 }
 

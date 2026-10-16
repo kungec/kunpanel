@@ -155,7 +155,7 @@ func Run(o Options) error {
 	panelupdate.Start(stop)
 	// Docker 快照与引擎信息预热 + 后台持续刷新(用户点击永远命中热缓存)
 	go func() {
-		recoverPanic("docker-warmup")
+		defer recoverPanic("docker-warmup")
 		time.Sleep(2 * time.Second)
 		dockerx.Info()
 		dockerx.ContainerStates()
@@ -163,7 +163,7 @@ func Run(o Options) error {
 	}()
 	// 站点日志自动清理:每日执行一次(启动 1 分钟后先跑一轮)
 	go func() {
-		recoverPanic("site-log-clean")
+		defer recoverPanic("site-log-clean")
 		time.Sleep(time.Minute)
 		for {
 			if n, err := server.RunSiteLogClean(); err == nil && n > 0 {

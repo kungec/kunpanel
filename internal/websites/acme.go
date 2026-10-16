@@ -5,6 +5,7 @@
 package websites
 
 import (
+	"sync"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -168,7 +169,13 @@ func SetACMEConfigEx(email, provider, eabKeyID, eabHMAC string) error {
 		return fmt.Errorf("不支持的证书服务商: %s", provider)
 	}
 	if p.NeedEAB && (strings.TrimSpace(eabKeyID) == "" || strings.TrimSpace(eabHMAC) == "") {
-		return fmt.Errorf("%s 需要填写 EAB 凭据(KeyID 与 HMAC)", p.Name)
+		// 调用方未带 EAB 时沿用已保存的凭据(此前签发请求切 CA 会因 HMAC 为空被拒)
+		a0 := loadACMEAccount()
+		if a0.Provider == provider && a0.EABKeyID != "" && a0.EABHMAC != "" {
+			eabKeyID, eabHMAC = a0.EABKeyID, a0.EABHMAC
+		} else {
+			return fmt.Errorf("%s 需要填写 EAB 凭据(KeyID 与 HMAC)", p.Name)
+		}
 	}
 	a := loadACMEAccount()
 	a.Email = email
@@ -196,7 +203,16 @@ func SetACMEConfigEx(email, provider, eabKeyID, eabHMAC string) error {
 
 // acmeClientFor 构造 lego 客户端(自动注册/恢复账户)
 func acmeClientFor(provider string, w io.Writer) (*lego.Client, *acmeUser, error) {
+	return acmeClientForStaged(provider, false, w)
+}
+
+// acmeClientForStaged stagingOverride=true 时本次使用 LE staging 目录,
+// 但不改动已保存的账户目录(生产账户继续用于正常签发)
+func acmeClientForStaged(provider string, stagingOverride bool, w io.Writer) (*lego.Client, *acmeUser, error) {
 	dir := providerDir(provider)
+	if stagingOverride && !providerStaging(provider) {
+		dir = acmeDirStaging
+	}
 	a := loadACMEAccount()
 	if a.Provider != provider {
 		a.Provider = provider
@@ -271,8 +287,10 @@ func acmeClientFor(provider string, w io.Writer) (*lego.Client, *acmeUser, error
 			u.Registration = reg
 		}
 		a.Registration = u.Registration
-		if err := saveACMEAccount(a); err != nil {
-			return nil, nil, err
+		if !stagingOverride {
+			if err := saveACMEAccount(a); err != nil {
+				return nil, nil, err
+			}
 		}
 	} else {
 		u.Registration = a.Registration
@@ -348,7 +366,12 @@ type AcmeIssueOpts struct {
 func orderDomains(raw []string, method string) ([]string, error) {
 	var out []string
 	for _, d := range raw {
-		d = strings.TrimPrefix(strings.TrimSpace(d), "*.")
+		d = strings.TrimSpace(d)
+		// HTTP 验证剥掉 *. 前缀(且下方直接拒绝);DNS 验证必须保留通配符 SAN,
+		// 否则签出的证书不含 *.example.com(此前静默降级为裸域证书)
+		if method != "dns" {
+			d = strings.TrimPrefix(d, "*.")
+		}
 		if d == "" {
 			continue
 		}
@@ -383,13 +406,15 @@ func IssueCertForSite(siteID string, opts AcmeIssueOpts, w io.Writer) (string, e
 	}
 	prov := loadACMEAccount().Provider
 	staging := opts.Staging || providerStaging(prov)
+	// staging 覆盖:账户目录仍是生产时,本次签发强制走 staging 目录
+	stagingOverride := staging && !providerStaging(prov)
 	fmt.Fprintf(w, ">> 为 %s 申请 %s 证书(%s / %s 验证)...\n", site.Domain, providerName(prov), stageName(staging), map[string]string{"http": "HTTP 文件", "dns": "DNS"}[method])
 	alias := strings.TrimSpace(opts.Alias)
 	if alias != "" && method == "dns" {
 		alias = strings.TrimSuffix(strings.TrimPrefix(alias, "_acme-challenge."), ".")
 	}
 
-	client, _, err := acmeClientFor(prov, w)
+	client, _, err := acmeClientForStaged(prov, stagingOverride, w)
 	if err != nil {
 		return "", err
 	}
@@ -510,6 +535,9 @@ func renewCertInPlace(id string, w io.Writer) error {
 }
 
 // StartACMERenew 证书巡检自动续期;DNS 证书仅提醒手动续
+// renewMu 续期互斥:自动续期与手动续期并发会同时覆盖证书/私钥/元数据
+var renewMu sync.Mutex
+
 func StartACMERenew(stop <-chan struct{}, notify func(msg string)) {
 	go func() {
 		time.Sleep(90 * time.Second)
@@ -532,6 +560,8 @@ func StartACMERenew(stop <-chan struct{}, notify func(msg string)) {
 				}
 				cert := c
 				go func() {
+					renewMu.Lock()
+					defer renewMu.Unlock()
 					var buf strings.Builder
 					err := renewCertInPlace(cert.ID, &buf)
 					if notify != nil {
@@ -616,5 +646,7 @@ func IssueCertTaskEx(siteID string, opts AcmeIssueOpts) (string, error) {
 
 // RenewCertTask 异步续期任务
 func RenewCertTask(certID string, w io.Writer) error {
+	renewMu.Lock()
+	defer renewMu.Unlock()
 	return renewCertInPlace(certID, w)
 }

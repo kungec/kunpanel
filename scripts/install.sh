@@ -158,13 +158,22 @@ else
     SUM_URL="${DL_URL%/*}/SHA256SUMS"
     [[ "$SUM_URL" == *"/latest/download/"* ]] && SUM_URL="https://github.com/kungec/kunpanel/releases/latest/download/SHA256SUMS"
     TMP_SUM=$(mktemp)
-    if curl -fsSL --connect-timeout 15 --retry 2 -o "$TMP_SUM" "${KP_PROXY:+$KP_PROXY}$SUM_URL" 2>/dev/null; then
-      EXPECT=$(grep " kunpanel_linux_${ARCH}.tar.gz$" "$TMP_SUM" | awk '{print $1}')
+    SUM_SRC="${KP_PROXY:+$KP_PROXY}$SUM_URL"
+    if curl -fsSL --connect-timeout 15 --retry 2 -o "$TMP_SUM" "$SUM_SRC"; then
+      # 兼容 "./name" 与 "name" 两种行格式(构建脚本生成的是 ./ 前缀)
+      EXPECT=$(grep -E " [*.]?\.?/?kunpanel_linux_${ARCH}\.tar\.gz$" "$TMP_SUM" | awk '{print $1}' | head -1)
       ACTUAL=$(sha256sum "$TMP_TGZ" | awk '{print $1}')
-      if [[ -n "$EXPECT" && "$EXPECT" != "$ACTUAL" ]]; then rm -f "$TMP_SUM"; fail "SHA-256 校验失败,安装包可能被篡改"; fi
-      [[ -n "$EXPECT" ]] && ok "SHA-256 校验通过"
+      if [[ -z "$EXPECT" ]]; then rm -f "$TMP_SUM"; fail "校验和中没有 kunpanel_linux_${ARCH}.tar.gz 的记录,已中止安装(供应链校验不可跳过;如确需强制安装请 --no-verify)"
+      elif [[ "$EXPECT" != "$ACTUAL" ]]; then rm -f "$TMP_SUM"; fail "SHA-256 校验失败,安装包可能被篡改"
+      else ok "SHA-256 校验通过"; fi
+    else
+      rm -f "$TMP_SUM"
+      if [[ -z "$KP_PROXY" ]]; then
+        fail "下载 SHA256SUMS 失败,已中止安装(供应链校验不可跳过;如确需强制安装请 --no-verify)"
+      else
+        fail "经代理下载 SHA256SUMS 失败,已中止安装;可尝试 --no-verify(不推荐)或去掉 --proxy 直连"
+      fi
     fi
-    rm -f "$TMP_SUM"
   fi
 fi
 

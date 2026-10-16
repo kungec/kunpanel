@@ -1,6 +1,7 @@
 package server
 
 import (
+	"sync"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -56,13 +57,18 @@ func (s *Server) handleAppInstall(w http.ResponseWriter, r *http.Request) {
 		Fail(w, http.StatusBadRequest, "未检测到 Docker,请先在【容器】页面一键安装")
 		return
 	}
-	if err := appstore.Install(req.Key, req.Params); err != nil {
+	// 安装/卸载/启停按应用键互斥:并发操作会导致记录与容器状态错乱
+	unlock := lockAppOp(req.Key)
+	defer unlock()
+	// Install 返回实际实例键:PHP 多版本安装 "php" 会改写为 php82 等
+	actualKey, err := appstore.Install(req.Key, req.Params)
+	if err != nil {
 		Fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	// 后台拉起容器并返回任务 ID
-	t, err := taskx.M.Start("app-"+req.Key, func(w io.Writer) error {
-		return appstore.Apply(req.Key, "up -d", w)
+	// 后台拉起容器并返回任务 ID(必须用实际键,否则会启动错误的实例)
+	t, err := taskx.M.Start("app-"+actualKey, func(w io.Writer) error {
+		return appstore.Apply(actualKey, "up -d", w)
 	})
 	if err != nil {
 		Fail(w, http.StatusConflict, "已登记安装,但启动任务失败: "+err.Error())
@@ -82,6 +88,9 @@ func (s *Server) handleAppAction(w http.ResponseWriter, r *http.Request) {
 		RemoveData bool `json:"remove_data"`
 	}
 	_ = readJSON(r, &req)
+	// 与安装互斥,防卸载中重建/启停中删除记录等状态错乱
+	unlock := lockAppOp(key)
+	defer unlock()
 
 	// 卸载涉及容器停止/移除/数据清理,放后台任务并流式输出进度
 	if action == "uninstall" {
@@ -167,6 +176,24 @@ func runtimeContainerOf(key string) (string, bool) {
 	}
 	c, ok := runtimeContainers[key]
 	return c, ok
+}
+
+// appOpsMu 应用操作按键互斥(安装/卸载/启停串行化,防记录与容器状态竞态)
+var (
+	appOpsMu   sync.Mutex
+	appOpLocks = map[string]*sync.Mutex{}
+)
+
+func lockAppOp(key string) func() {
+	appOpsMu.Lock()
+	defer appOpsMu.Unlock()
+	mu, ok := appOpLocks[key]
+	if !ok {
+		mu = &sync.Mutex{}
+		appOpLocks[key] = mu
+	}
+	mu.Lock()
+	return mu.Unlock
 }
 
 // isPHPRuntimeKey php 或 php+版本数字(排除 phpmyadmin)

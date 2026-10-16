@@ -41,6 +41,40 @@ func ValidatePublicURL(raw string) error {
 	return nil
 }
 
+// PublicHTTPClient 返回仅允许访问公网地址的 HTTP 客户端:
+// 预解析并校验目标 IP,后续拨号固定用该 IP(TLS SNI/Host 头保持原域名),
+// 杜绝"校验时公网、拨号时被 DNS 重绑定到内网"的绕过。
+func PublicHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				host, port, err := net.SplitHostPort(addr)
+				if err != nil {
+					return nil, err
+				}
+				ips, err := net.LookupIP(host)
+				if err != nil {
+					return nil, fmt.Errorf("解析主机失败: %v", err)
+				}
+				for _, ip := range ips {
+					if privateIP(ip) {
+						return nil, fmt.Errorf("拒绝内网地址(%s)", ip)
+					}
+				}
+				// 固定用首个公网 IP 拨号,后续请求不再二次解析
+				return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, network, net.JoinHostPort(ips[0].String(), port))
+			},
+		},
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 8 {
+				return fmt.Errorf("重定向次数过多")
+			}
+			return ValidatePublicURL(req.URL.String())
+		},
+	}
+}
+
 // SecureDownload 带重定向校验的下载:每一跳重新解析并拒绝内网地址,
 // 写盘限 maxSize 字节,进度每 2 秒写入 progress(可为 nil)。
 func SecureDownload(raw, dst string, progress io.Writer, timeout time.Duration, maxSize int64) error {

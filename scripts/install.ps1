@@ -62,6 +62,7 @@ if ($Uninstall) {
 
 # ---------- 架构 ----------
 $arch = $env:PROCESSOR_ARCHITECTURE
+if ($arch -eq "ARM64") { Write-Fail "暂不支持 Windows ARM64(未发布 ARM64 构建);请在 amd64 设备/虚拟化环境安装" }
 if ($arch -notmatch "AMD64|ARM64") { Write-Warn2 "检测到架构 $arch,将尝试使用 amd64 包" }
 $archTag = "amd64"
 

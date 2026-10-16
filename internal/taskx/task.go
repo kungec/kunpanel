@@ -76,6 +76,13 @@ func (m *Manager) Start(name string, fn func(w io.Writer) error) (*Task, error) 
 	}
 	m.tasks[t.ID] = t
 	go func() {
+		// 统一 panic 恢复:用户触发的任务(备份/清理/插件等)panic 不再拖垮整个面板
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Fprintf(t.buf, "\n[任务异常崩溃] %v\n", r)
+				m.finish(t, fmt.Errorf("任务 panic: %v", r))
+			}
+		}()
 		err := fn(t.buf)
 		m.finish(t, err)
 	}()

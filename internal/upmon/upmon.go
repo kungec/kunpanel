@@ -233,6 +233,10 @@ func Delete(id string) error {
 	}
 	monitors = kept
 	delete(history, id)
+	// 同步清运行态:残留的 fails/wasUp/notified 会让同名新目标立刻误报/漏报
+	delete(fails, id)
+	delete(wasUp, id)
+	delete(notified, id)
 	return save()
 }
 
@@ -244,6 +248,12 @@ func Toggle(id string, enabled bool) error {
 	for i := range monitors {
 		if monitors[i].ID == id {
 			monitors[i].Enabled = enabled
+			// 重新启用时重置连续失败/通知状态,从当前真实探测结果重新计数
+			if enabled {
+				delete(fails, id)
+				delete(wasUp, id)
+				delete(notified, id)
+			}
 			return save()
 		}
 	}

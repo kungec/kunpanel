@@ -333,6 +333,22 @@ func UpdateDomains(id, domain string) error {
 		mu.Unlock()
 		return fmt.Errorf("站点不存在")
 	}
+	// 跨站点冲突检测:同端口下域名不能与其他站点重复
+	newDomains := map[string]bool{}
+	for _, d := range strings.Fields(domain) {
+		newDomains[strings.ToLower(d)] = true
+	}
+	for _, other := range list {
+		if other.ID == id || other.Port != site.Port {
+			continue
+		}
+		for _, d := range strings.Fields(other.Domain) {
+			if newDomains[strings.ToLower(d)] {
+				mu.Unlock()
+				return fmt.Errorf("域名 %s 已被站点 %s(端口 %d)占用", d, other.Alias, other.Port)
+			}
+		}
+	}
 	site.Domain = domain
 	site.Alias = strings.Fields(domain)[0]
 	if err := save(); err != nil {
@@ -1071,6 +1087,9 @@ func PHPSitesUsing(phpKey string) []string {
 }
 
 // SetSiteSubs 保存站点子域名绑定并重写配置
+// subDomainRe 子域名严格白名单(字母/数字/点/连字符,不带协议/路径/注释符)
+var subDomainRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$`)
+
 func SetSiteSubs(id string, subs []SiteSub) error {
 	clean := make([]SiteSub, 0, len(subs))
 	seen := map[string]bool{}
@@ -1080,8 +1099,9 @@ func SetSiteSubs(id string, subs []SiteSub) error {
 		if sub.SubDomain == "" {
 			continue
 		}
-		if strings.ContainsAny(sub.SubDomain, "/ ;") {
-			return fmt.Errorf("子域名不合法: %s", sub.SubDomain)
+		// 严格白名单:仅字母/数字/点/连字符(换行、引号、#、空格等都会写进 nginx conf)
+		if !subDomainRe.MatchString(sub.SubDomain) || len(sub.SubDomain) > 253 {
+			return fmt.Errorf("子域名不合法(仅支持字母/数字/点/连字符): %s", sub.SubDomain)
 		}
 		if strings.Contains(sub.Dir, "..") {
 			return fmt.Errorf("子目录不合法: %s", sub.Dir)
@@ -1106,6 +1126,7 @@ func SetSiteSubs(id string, subs []SiteSub) error {
 		mu.Unlock()
 		return fmt.Errorf("站点不存在")
 	}
+	oldSubs := site.Subs
 	site.Subs = clean
 	if err := save(); err != nil {
 		mu.Unlock()
@@ -1116,7 +1137,29 @@ func SetSiteSubs(id string, subs []SiteSub) error {
 	if err := writeConf(&cp); err != nil {
 		return err
 	}
-	return Reload()
+	if err := Reload(); err != nil {
+		// 回滚:恢复原子域名列表并重写配置,保持存储与生效配置一致
+		mu.Lock()
+		load()
+		var rb *Site
+		for i := range list {
+			if list[i].ID == id {
+				list[i].Subs = oldSubs
+				cp := list[i]
+				rb = &cp
+				break
+			}
+		}
+		if rb != nil {
+			_ = save() // 持锁落盘
+		}
+		mu.Unlock()
+		if rb != nil {
+			_ = writeConf(rb)
+		}
+		return fmt.Errorf("配置校验失败已回滚: %v", err)
+	}
+	return nil
 }
 
 // AppendRemark 追加站点备注(保留原内容)

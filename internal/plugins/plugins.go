@@ -264,7 +264,9 @@ func defaultWafConfig() *wafConfigFile {
 			CcEnable:          true,
 			CcLimit:           120,
 			CcInterval:        10,
-			SpiderWhiteEnable: true,
+			// 蜘蛛白名单默认关闭:伪造 Googlebot UA 可豁免 CC;确需开启请在
+			// 设置里同时打开「反向 DNS 验证」(规则扫描与封禁不受白名单豁免)
+			SpiderWhiteEnable: false,
 			SpiderWhite:       []string{"(Googlebot|Baiduspider|bingbot|360Spider|Sogou|YandexBot|Bytespider|DuckDuckBot)"},
 			MethodBlockEnable: true,
 			MethodBlockList:   []string{"TRACE", "TRACK", "CONNECT"},
@@ -459,7 +461,16 @@ func validateRuleRegex(e string) error {
 }
 
 // SaveWafSettings 保存设置(规则保持不变),写入后 Lua 5 秒内自动热加载
+// wafSettingsMu 读改写互斥:多个 API 都是"读完整设置→改一个字段→整体写回",
+// 并发时后写覆盖前写;调用方在整段序列外层持锁(SaveWafSettings 内部也持锁兜底)
+var wafSettingsMu sync.Mutex
+
+// WafLock 返回 WAF 设置读写锁,用于"读-改-写"整体序列的互斥
+func WafLock() *sync.Mutex { return &wafSettingsMu }
+
 func SaveWafSettings(s WafSettings) error {
+	wafSettingsMu.Lock()
+	defer wafSettingsMu.Unlock()
 	if s.CcLimit < 5 || s.CcLimit > 100000 {
 		return fmt.Errorf("CC 阈值应在 5-100000 之间")
 	}

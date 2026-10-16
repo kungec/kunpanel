@@ -47,8 +47,9 @@ type Limiter struct {
 }
 
 type failInfo struct {
-	count int
-	until time.Time
+	count    int
+	until    time.Time
+	lastSeen time.Time // 最后活跃时间:清理低频条目防 map 无限增长
 }
 
 func NewLimiter() *Limiter {
@@ -87,8 +88,22 @@ func (l *Limiter) Fail(ip string) {
 		l.fails[ip] = f
 	}
 	f.count++
+	f.lastSeen = time.Now()
 	if f.count >= l.maxFails {
 		f.until = time.Now().Add(l.window)
+	}
+	// 容量兜底:超上限时淘汰最久未活跃的条目
+	const maxEntries = 10000
+	if len(l.fails) > maxEntries {
+		var oldestK string
+		var oldestT time.Time
+		first := true
+		for k, v := range l.fails {
+			if first || v.lastSeen.Before(oldestT) {
+				oldestK, oldestT, first = k, v.lastSeen, false
+			}
+		}
+		delete(l.fails, oldestK)
 	}
 }
 
@@ -104,7 +119,8 @@ func (l *Limiter) Sweep() {
 	defer l.mu.Unlock()
 	now := time.Now()
 	for k, f := range l.fails {
-		if f.count >= l.maxFails && now.After(f.until) {
+		// 达到封禁阈值且已过期 → 清;或 24h 无活跃 → 清(此前低频条目永不回收)
+		if (f.count >= l.maxFails && now.After(f.until)) || now.Sub(f.lastSeen) > 24*time.Hour {
 			delete(l.fails, k)
 		}
 	}

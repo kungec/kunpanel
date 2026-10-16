@@ -177,8 +177,22 @@ func (s *Server) handleSystemCleanup(w http.ResponseWriter, r *http.Request) {
 		var count int64
 		var freed int64
 		cutoff := time.Now().Add(-7 * 24 * time.Hour)
+		// 只清理面板自己的临时文件(kunpanel_update_* / kp-* / kunmig_*),
+		// 此前删除整个 /tmp 下 7 天前的全部文件,会误删其他服务/用户的临时文件
+		prefixes := []string{"kunpanel_", "kp-", "kunmig_"}
 		_ = filepath.WalkDir("/tmp", func(path string, d os.DirEntry, err error) error {
 			if err != nil || d == nil || d.IsDir() {
+				return nil
+			}
+			name := d.Name()
+			matched := false
+			for _, pre := range prefixes {
+				if strings.HasPrefix(name, pre) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
 				return nil
 			}
 			info, e := d.Info()
@@ -193,9 +207,9 @@ func (s *Server) handleSystemCleanup(w http.ResponseWriter, r *http.Request) {
 			return nil
 		})
 		if count > 0 {
-			results = append(results, fmt.Sprintf("临时文件清理完成,删除 %d 个文件,释放 %s", count, util.HumanBytes(uint64(freed))))
+			results = append(results, fmt.Sprintf("临时文件清理完成,删除 %d 个面板临时文件,释放 %s", count, util.HumanBytes(uint64(freed))))
 		} else {
-			results = append(results, "临时文件清理完成,7 天以上的临时文件为 0")
+			results = append(results, "临时文件清理完成,7 天以上的面板临时文件为 0")
 		}
 	}
 	if len(results) == 0 {

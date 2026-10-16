@@ -89,16 +89,19 @@ func connect(c Config) (*sftp.Client, error) {
 	if port <= 0 {
 		port = 22
 	}
-	hostKeyCb := ssh.InsecureIgnoreHostKey()
-	if fp := strings.TrimSpace(c.HostKeyFingerprint); fp != "" {
-		// 配置了指纹则强制校验,防中间人窃取备份凭据
-		hostKeyCb = func(hostname string, remote net.Addr, key ssh.PublicKey) error {
-			actual := ssh.FingerprintSHA256(key)
-			if actual != fp {
-				return fmt.Errorf("主机指纹不匹配: 期望 %s,实际 %s", fp, actual)
-			}
-			return nil
+	// 主机密钥必须校验:空白名单放行 = 接受中间人攻击,备份凭据与数据可被窃取。
+	// 指纹获取:在服务器上执行 ssh-keyscan -t ed25519 <主机> 后用 ssh-keygen -lf 查看,
+	// 或查看面板「远程备份」设置里的指引
+	fp := strings.TrimSpace(c.HostKeyFingerprint)
+	if fp == "" {
+		return nil, fmt.Errorf("尚未配置 SSH 主机指纹,已拒绝连接(防中间人攻击);在「远程备份」设置中填入服务器指纹后重试")
+	}
+	hostKeyCb := func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+		actual := ssh.FingerprintSHA256(key)
+		if actual != fp {
+			return fmt.Errorf("主机指纹不匹配: 期望 %s,实际 %s", fp, actual)
 		}
+		return nil
 	}
 	sshCfg := &ssh.ClientConfig{
 		User:            c.User,

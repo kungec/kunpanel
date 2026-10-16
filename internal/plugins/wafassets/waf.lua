@@ -9,6 +9,13 @@ local LOG_PATH  = LOG_DIR .. "/waf.log"
 local LOG_MAX   = 5 * 1024 * 1024
 local BODY_MAX  = 1024 * 1024
 
+-- 危险上传扩展名集合(必须在请求处理前初始化:此前在 POST/PUT 检测之后才赋值,
+-- 每 worker 首个上传请求对 nil 取值,错误被 pcall 吞掉,检测整体跳过)
+local DangerousUploadExt = {}
+for _, ext in ipairs({"php","php3","php4","php5","php7","phtml","pht","jsp","jspx","asp","aspx","ascx","exe","dll","so","sh","bat","cmd","cgi","pl","py","rb"}) do
+    DangerousUploadExt[ext] = true
+end
+
 local conf_cache, conf_at = nil, 0
 local bad_rules = {}
 
@@ -595,11 +602,14 @@ local function spider_dns_verified(ip)
     return ok
 end
 
--- 搜索引擎蜘蛛白名单:爬虫完全跳过检测(CC 人机验证/封禁均不涉及)
--- 严格模式(spider_verify_dns):UA 命中后做反向 DNS + 正向确认,
--- 验证失败的伪装蜘蛛(伪造 Googlebot UA)回落到正常检测
+-- 搜索引擎蜘蛛白名单:命中后仅豁免 CC 人机验证,封禁/黑名单/规则扫描照常。
+-- 安全前提:白名单默认关闭;开启时建议同时开 spider_verify_dns(反向 DNS+正向确认),
+-- 否则伪造 Googlebot UA 也能豁免 CC(但规则与封禁仍然生效,不会完全绕过)
+local spider_skip_cc = false
 if conf.spider_white_enable and in_list(ua, conf.spider_white) then
-    if not conf.spider_verify_dns or spider_dns_verified(ip) then return end
+    if not conf.spider_verify_dns or spider_dns_verified(ip) then
+        spider_skip_cc = true
+    end
 end
 
 -- 验证码模式:处理挑战表单回跳(答对颁发 Cookie)
@@ -659,8 +669,10 @@ if conf.method_block_enable and type(conf.method_block_list) == "table" then
     end
 end
 
--- CC 防护
-cc_check(conf)
+-- CC 防护(蜘蛛白名单命中时豁免人机验证;封禁与规则扫描不豁免)
+if not spider_skip_cc then
+    cc_check(conf)
+end
 
 -- 规则扫描
 local targets = {}
@@ -712,12 +724,6 @@ if method == "POST" or method == "PUT" then
             targets[#targets + 1] = body
         end
     end)
-end
-
--- 危险上传扩展名集合
-DangerousUploadExt = {}
-for _, ext in ipairs({"php","php3","php4","php5","php7","phtml","pht","jsp","jspx","asp","aspx","ascx","exe","dll","so","sh","bat","cmd","cgi","pl","py","rb"}) do
-    DangerousUploadExt[ext] = true
 end
 
 local rg = conf.rule_groups or {}

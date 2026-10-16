@@ -179,6 +179,9 @@ func (s *Server) handleWafSiteOff(w http.ResponseWriter, r *http.Request) {
 
 // handleWafSiteToggle 站点级 WAF 开关切换
 func (s *Server) handleWafSiteToggle(w http.ResponseWriter, r *http.Request) {
+	lock := plugins.WafLock()
+	lock.Lock()
+	defer lock.Unlock()
 	var req struct {
 		Host    string `json:"host"`
 		Enabled bool   `json:"enabled"`
@@ -221,6 +224,9 @@ func (s *Server) handleWafAutoBanStatus(w http.ResponseWriter, r *http.Request) 
 
 // handleWafAutoBanRun 手动执行一次自动封禁扫描;body 可带 {threshold} 一并保存
 func (s *Server) handleWafAutoBanRun(w http.ResponseWriter, r *http.Request) {
+	lock := plugins.WafLock()
+	lock.Lock()
+	defer lock.Unlock()
 	var req struct {
 		Threshold int `json:"threshold"`
 	}
@@ -250,6 +256,9 @@ func (s *Server) handleWafAutoBanRun(w http.ResponseWriter, r *http.Request) {
 
 // handleWafAutoBanClear 清空自动封禁清单
 func (s *Server) handleWafAutoBanClear(w http.ResponseWriter, r *http.Request) {
+	lock := plugins.WafLock()
+	lock.Lock()
+	defer lock.Unlock()
 	st := plugins.GetWafSettings()
 	st.AutoBlackList = []string{}
 	if err := plugins.SaveWafSettings(st); err != nil {

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"io"
 	"bytes"
 	"image"
 	_ "image/gif"
@@ -64,6 +65,21 @@ func (s *Server) handleAvatarUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer f.Close()
 
+	// 先解码头部限制宽高:几 MB 的 PNG/GIF 可以声明数亿像素,
+	// 直接 image.Decode + NewRGBA(side×side) 会内存耗尽(认证用户可触发 OOM)
+	cfg, _, err := image.DecodeConfig(f)
+	if err != nil {
+		Fail(w, http.StatusBadRequest, "仅支持 PNG / JPG / GIF 图片")
+		return
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width > 8192 || cfg.Height > 8192 || cfg.Width*cfg.Height > 16<<20 {
+		Fail(w, http.StatusBadRequest, "图片尺寸过大(限制 8192×8192 以内)")
+		return
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		Fail(w, http.StatusBadRequest, "读取图片失败")
+		return
+	}
 	src, _, err := image.Decode(f)
 	if err != nil {
 		Fail(w, http.StatusBadRequest, "仅支持 PNG / JPG / GIF 图片")

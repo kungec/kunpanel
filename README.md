@@ -6,7 +6,7 @@
 
 **轻量级服务器运维管理面板 —— Go 单二进制,开箱即用**
 
-[![](https://img.shields.io/badge/版本-v2.57.1-3b82f6?style=flat-square)](https://github.com/kungec/kunpanel/releases)
+[![](https://img.shields.io/badge/版本-v2.72.2-3b82f6?style=flat-square)](https://github.com/kungec/kunpanel/releases)
 [![](https://img.shields.io/badge/Go-1.23+-00ADD8?style=flat-square)](https://golang.org)
 [![](https://img.shields.io/badge/平台-Linux%20%7C%20Windows-lightgrey?style=flat-square)](./README.md)
 [![](https://img.shields.io/badge/License-MIT-green?style=flat-square)](./LICENSE)
@@ -22,6 +22,16 @@
 
 ---
 
+## 🔄 宝塔面板一键迁移(双向互通)
+
+还在宝塔和坤面板之间纠结?**两边可以互相迁移,随时可回滚**:
+
+- **远程迁移,无脑傻瓜式**:只需输入宝塔服务器的 **IP + root 密码**,自动 SSH 对接、扫描站点、搬运文件
+- **一键搬全家**:域名、网站文件、SSL 证书、伪静态/自定义配置(**逐条保真保留,不是重新生成**)、计划任务、数据库(可选),PHP 站点版本自动映射并自动装好对应运行时
+- **零停机切换**:迁移后反向代理上游自动回源旧机,DNS 切换前网站照常访问;证书导入后异步重签,流量切换与回滚不抢 80/443
+- **随时可回滚**:迁移不动宝塔原有站点与数据,宝塔原计划任务自动注释防双跑
+- 也支持**同机迁移**(宝塔与坤面板装在同一台)和**坤面板 → 宝塔**反向导出
+
 ## ⚡ 一键安装
 
 ### Linux(自适应发行版与架构)
@@ -34,16 +44,17 @@ curl -fsSL https://raw.githubusercontent.com/kungec/kunpanel/main/scripts/instal
 ```
 
 安装完成自动输出:**随机端口 + 随机安全入口 + 随机管理员密码**。
+国内服务器安装与「在线更新」均内置 GitHub 加速兜底,不必科学上网。
 
 <details>
 <summary>📦 安装参数与卸载</summary>
 
 ```bash
 bash install.sh --port 20000 --username admin --password yourpwd   # 自定义初始化
-bash install.sh --with-docker            # 同时安装 Docker 引擎
+bash install.sh --with-docker            # 同时安装 Docker 引擎(自动配国内镜像源)
 bash install.sh --mirror aliyun          # Docker 使用阿里云镜像源
 bash install.sh --proxy https://gh-proxy.com/   # GitHub 下载加速
-bash install.sh --version v2.57.1        # 安装指定版本
+bash install.sh --version v2.72.2        # 安装指定版本
 bash install.sh --offline ./kunpanel_linux_amd64.tar.gz   # 离线安装(含 SHA-256 校验)
 bash install.sh --uninstall              # 卸载
 ```
@@ -69,33 +80,38 @@ docker run -d --name kunpanel -p 20000:20000 \
 | 概览 | 应用商店 |
 |---|---|
 | ![](docs/screenshots/dashboard.png) | ![](docs/screenshots/store.png) |
-| **网站管理** | **文件管理** |
-| ![](docs/screenshots/websites.png) | ![](docs/screenshots/files.png) |
-| **安全中心(WAF)** | **监控中心** |
+| **网站管理** | **宝塔一键迁移** |
+| ![](docs/screenshots/websites.png) | ![](docs/screenshots/migrate.png) |
+| **安全中心(WAF)** | **监控中心(拨测)** |
 | ![](docs/screenshots/security.png) | ![](docs/screenshots/monitor.png) |
+| **文件管理** | **容器管理** |
+| ![](docs/screenshots/files.png) | ![](docs/screenshots/docker.png) |
 
 ## ✨ 功能全景
 
 ### 🛡 安全
-- **WAF 防火墙**(OpenResty + Lua):CC 攻击防御 **七种人机验证模式**(限流 / 5 秒跳转 / JS 无感 / Cloudflare 风格 Verifying / 滑块 / 点击 / 算术验证码)、IP 黑白名单(**支持 CIDR 网段**)、UA 黑名单与搜索引擎蜘蛛白名单(可选严格反向 DNS 验证)、敏感文件与危险方法拦截、SQL 注入 / XSS / 文件包含 / 命令执行检测、**自定义正则规则**(热更新)
-- **自动封禁**:违规超阈值的公网 IP 自动拉黑(私网强制排除防误伤),拦截日志一键封禁
-- **一键安全自检**:9 项体检评分;SSH 加固;登录限流 + PNG 验证码 + TOTP 两步验证 + 随机安全入口
+- **WAF 防火墙**(OpenResty + Lua):CC 攻击防御 **七种人机验证模式**(限流 / 5 秒跳转 / JS 无感 / Cloudflare 风格 Verifying / 滑块 / 点击 / 算术验证码)、IP 黑白名单(**支持 CIDR 网段**)、UA 黑名单与搜索引擎蜘蛛白名单、敏感文件与危险方法拦截、SQL 注入 / XSS / 文件包含 / 命令执行检测、**自定义正则规则**(热更新)
+- **自动封禁**:违规超阈值的公网 IP 自动拉黑(私网强制排除防误伤),拦截日志一键封禁;**容器端口 DOCKER-USER 管控**(堵 Docker 绕过系统防火墙的口子)
+- **一键安全自检**:9 项体检评分;SSH 加固;登录限流 + PNG 验证码 + TOTP 两步验证 + 随机安全入口;ICMP ping 开关
 
 ### 🌐 网站
 - 静态 / PHP / 反向代理三类型;HTTP/2、HSTS、Gzip、浏览器缓存、限速、防盗链、防恶意解析、维护模式、安全响应头、伪静态预设、301 重定向
-- 反向代理**负载均衡**(多上游 + 权重);Let's Encrypt 一键申请与自动续期;证书上传 / 下载 / 自签
+- 反向代理**负载均衡**(多上游 + 权重);Let's Encrypt 一键申请与自动续期(支持测试环境预签);证书上传 / 下载 / 自签
+- **网站流量统计**(PV/UV/流量/Top 排行);站点日志独立落盘 + 一键轮转归档
 - 站点备份:服务端留存 / 打包下载 / 上传恢复(原子化,失败不伤原站)
 
 ### 🗄 数据库 · 应用 · 容器
 - MySQL / MariaDB / PostgreSQL / Redis 管理:SQL 控制台、备份导入导出、root 改密、phpMyAdmin 快捷入口
-- 应用商店 14+ 应用一键部署,官方多版本可选;**自定义应用**(compose 在线校验)
-- 容器 / 镜像 / 网络 / 卷管理,容器终端,资源限制热更新
+- 应用商店 **17+ 应用**一键部署(WordPress / Nginx / OpenResty / 多版本 PHP / MySQL / Redis / 坤发卡 / NAT Cloud 等),官方多版本可选;**自定义应用**(compose 在线校验)
+- 容器 / 镜像 / 网络 / 卷管理,容器终端,资源限制热更新,日志轮转配置
 
 ### 📂 文件 · 任务 · 监控
-- **专业代码编辑器**:CodeMirror 高亮 13 种语言、快捷键、**历史版本回滚**、全屏
-- 文件管理:拖拽上传 / 远程下载 / 压缩解压 / 权限 / 回收站 / 图片预览
-- 计划任务七类型 + 可视化执行周期;磁盘 IO 与网络监控;拨测;告警推送(邮件 / 钉钉 / 飞书 / Webhook)
-- **后台任务中心** + 消息中心 + 每日威胁摘要
+- **专业代码编辑器**:CodeMirror 高亮 13 种语言、快捷键、**历史版本回滚**、全屏;文件名 / 内容全文搜索
+- 文件管理:拖拽上传 / 远程下载 / 压缩解压 / 权限 / **回收站(可恢复、定时清理)** / 图片预览
+- 计划任务七类型(Shell / 目录备份 / 日志切割 / 数据库备份 / 回收站清理 / 面板备份 / 容器日志清理)+ 可视化执行周期,支持**备份完成后自动上传 SFTP 远程**
+- **网站拨测**:每分钟探测 HTTP/TCP,连续失败防抖判宕,状态翻转推送告警,24h 可用率与延迟历史
+- 磁盘 IO 与网络监控(24h 历史,异常退出不丢数据);**后台任务中心**(长任务实时进度条)+ 消息中心 + 每日威胁摘要
+- **告警推送**:邮件 / 钉钉 / 飞书 / Webhook
 
 ## 🔒 安全设计
 
@@ -104,8 +120,9 @@ docker run -d --name kunpanel -p 20000:20000 \
 | 认证 | PNG 图形验证码、IP + 用户名双维度限流、TOTP 两步验证、随机安全入口 |
 | 会话 | HMAC-SHA256 签名令牌,改密即轮换密钥强制下线 |
 | 注入 | 域名白名单、compose 参数转义、解压 ZipSlip 防护、SQL 标识符白名单 |
-| 传输 | CSP 脚本哈希白名单(无 unsafe-inline)、HSTS 可选、面板 HTTPS |
-| 沙箱 | systemd NoNewPrivileges / ProtectSystem / 私网自动封禁排除 |
+| 传输 | CSP 脚本哈希白名单(无 unsafe-inline)、HSTS 可选、面板 HTTPS;远程迁移 SSH 指纹 TOFU 校验 |
+| 供应链 | 升级包 SHA-256 校验和验证(直连 GitHub 优先,国内回退加速代理并明确标注信任来源) |
+| 沙箱 | systemd NoNewPrivileges / ProtectSystem / ReadWritePaths 白名单 / 私网自动封禁排除 |
 | 审计 | 登录与变更操作全留痕、真实状态码、安全回归测试锁定 |
 
 > ⚠️ 注意:Docker 发布的端口**不经过** ufw / firewalld( iptables DOCKER 链直通),
@@ -115,7 +132,7 @@ docker run -d --name kunpanel -p 20000:20000 \
 
 ```bash
 git clone https://github.com/kungec/kunpanel.git && cd kunpanel
-bash build.sh v2.57.1     # 产出 linux(amd64/arm64/arm) + windows 全平台安装包
+bash build.sh v2.72.2     # 产出 linux(amd64/arm64/arm) + windows 全平台安装包
 ```
 
 Go 1.23+,前端为原生 JS(`go:embed` 内嵌),无 Node 构建步骤。
@@ -134,4 +151,3 @@ Go 1.23+,前端为原生 JS(`go:embed` 内嵌),无 Node 构建步骤。
 ## 📄 License
 
 [MIT](LICENSE) · 交流 QQ 群:**307386089**
-

@@ -99,7 +99,6 @@ func TestExtractExtrasProxySite(t *testing.T) {
 	}
 }
 
-
 // 宝塔原生两行 server/{ 格式 + enable-php-00 纯静态 + ssl_session 指令
 const nativeBTConf = `server
 {
@@ -156,4 +155,173 @@ func TestExtractExtrasNativeFormat(t *testing.T) {
 		t.Errorf("保留 location 数 = %d, want 1", locs)
 	}
 	// firstServerBlock 支持两行格式本身已在上方隐式验证(能提取即通过)
+}
+
+// ---------- 验收样例(宝塔原生格式,含 HTTP3/Alt-Svc/purge/proxy 子目录) ----------
+
+const sampleNative443 = `server
+{
+    listen 443 ssl http3;
+    http3 on;
+    quic_retry on;
+    server_name demo.example.com;
+    root /www/wwwroot/demo.example.com;
+    include /www/server/panel/vhost/nginx/well-known/demo.example.com.conf;
+    ssl_session_cache shared:SSL:10m;
+    add_header Alt-Svc 'h3=":443"';
+    location ~ /purge(/.*) { proxy_cache_purge cache_one $host$1; }
+    include /www/server/panel/vhost/nginx/proxy/demo.example.com/*.conf;
+    include enable-php-00.conf;
+}
+`
+
+const sampleProxyDirFile = `location ~ / {
+    proxy_pass http://127.0.0.1:8081;
+    proxy_set_header Connection $connection_upgrade;
+}
+
+location /api/ { proxy_pass http://127.0.0.1:8080; }
+`
+
+// 验收:提取端口恰为 [8081 8080];结果不含 /www/server/panel 的 include、
+// proxy_cache_purge、ssl_*、http3、quic、Alt-Svc;443 不进端口表
+func TestExtractExtrasNative443Sample(t *testing.T) {
+	dir := t.TempDir()
+	proxyDir := filepath.Join(dir, "www", "server", "panel", "vhost", "nginx", "proxy", "demo.example.com")
+	if err := os.MkdirAll(proxyDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(proxyDir, "a_demo.example.com.conf"), []byte(sampleProxyDirFile), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	conf := filepath.Join(dir, "demo.example.com.conf")
+	if err := os.WriteFile(conf, []byte(sampleNative443), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// rootRemap 把宝塔 include 路径重映射到临时目录(模拟远程元数据包布局)
+	extra, _, ports, err := extractExtrasAt(conf, "static", dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ports) != 2 || ports[0] != 8081 || ports[1] != 8080 {
+		t.Fatalf("提取端口 = %v, want [8081 8080]", ports)
+	}
+	for _, bad := range []string{"/www/server/panel", "proxy_cache_purge", "ssl_", "http3", "quic", "Alt-Svc", "location ~ /purge"} {
+		if strings.Contains(extra, bad) {
+			t.Errorf("提取结果不应包含 %q:\n%s", bad, extra)
+		}
+	}
+	if !strings.Contains(extra, "proxy_pass http://172.17.0.1:8081") {
+		t.Errorf("反代上游应改写为网关地址:\n%s", extra)
+	}
+	if !strings.Contains(extra, "$connection_upgrade") {
+		t.Errorf("websocket 头应保留:\n%s", extra)
+	}
+}
+
+// 回环上游端口识别:只认 proxy_pass/grpc_pass 指向回环地址
+func TestLoopbackUpstreamPort(t *testing.T) {
+	if p, ok := loopbackUpstreamPort("http://127.0.0.1:8080"); !ok || p != 8080 {
+		t.Errorf("127.0.0.1:8080 → %d,%v", p, ok)
+	}
+	if p, ok := loopbackUpstreamPort("http://localhost:3001"); !ok || p != 3001 {
+		t.Errorf("localhost:3001 → %d,%v", p, ok)
+	}
+	if _, ok := loopbackUpstreamPort("http://172.17.0.1:8080"); ok {
+		t.Error("非回环地址不应识别为回环上游")
+	}
+	if _, ok := loopbackUpstreamPort("http://192.168.1.5:8080"); ok {
+		t.Error("局域网地址不应识别为回环上游")
+	}
+}
+
+// 转发器受保护端口:80/443 一律拒绝(转发器重启后抢占网关端口会全站宕机)
+func TestProtectedPortReason(t *testing.T) {
+	if protectedPortReason(80) == "" || protectedPortReason(443) == "" {
+		t.Error("80/443 必须被拒绝")
+	}
+	if protectedPortReason(8080) != "" || protectedPortReason(9071) != "" {
+		t.Error("普通端口不应被拒绝")
+	}
+}
+
+// spool 行按 echo 整词匹配:md5 前缀撞车不误伤
+func TestEchoMatchers(t *testing.T) {
+	line := `52 19 * * *  flock -xn /www/server/cron/11448451d956f42bd7da779cd72bf6c1.lock -c /www/server/cron/11448451d956f42bd7da779cd72bf6c1  >> /www/server/cron/11448451d956f42bd7da779cd72bf6c1.log 2>&1`
+	hit := echoMatchers([]string{"11448451d956f42bd7da779cd72bf6c1"})
+	if len(hit) != 1 || !hit[0].MatchString(line) {
+		t.Error("echo 整词应命中 spool 行(.lock/.log/空格边界)")
+	}
+	// 前缀撞车:另一个 md5 恰好以它为前缀,不应误匹配
+	prefix := echoMatchers([]string{"11448451d956f42bd7da779cd72bf6c"})
+	if prefix[0].MatchString(line) {
+		t.Error("md5 前缀不应命中更长的 echo 行")
+	}
+	if echoMatchers([]string{"ffffffffffffffffffffffffffffffff"})[0].MatchString(line) {
+		t.Error("无关 echo 不应命中")
+	}
+}
+
+// 宝塔任务启用状态:11.x status=1 启用;老 schema(sType 存在)0=正常;缺省启用
+func TestParseBTCronEnabled(t *testing.T) {
+	c11 := parseBTCron(map[string]any{"name": "备份", "type": "day", "where_hour": "2", "where_minute": "30", "status": "1"})
+	if !c11.Enabled {
+		t.Error("11.x status=1 应为启用")
+	}
+	c11off := parseBTCron(map[string]any{"name": "备份", "type": "day", "where_hour": "2", "where_minute": "30", "status": "0"})
+	if c11off.Enabled {
+		t.Error("11.x status=0 应为停用")
+	}
+	cold := parseBTCron(map[string]any{"name": "日志切割", "sType": "day", "where_hour": "1", "where_minute": "0", "status": "0"})
+	if !cold.Enabled {
+		t.Error("老 schema status=0 应为启用(语义相反)")
+	}
+	cdef := parseBTCron(map[string]any{"name": "任务", "type": "day", "where_hour": "1", "where_minute": "0"})
+	if !cdef.Enabled {
+		t.Error("status 列缺失应默认启用")
+	}
+}
+
+// 宝塔内部任务(sBody 引用 /www/server/panel 或 database/site/path 类型)
+// 默认不可迁移;普通任务不受影响
+func TestParseBTCronInternal(t *testing.T) {
+	ci := parseBTCron(map[string]any{"name": "备份站点", "type": "day", "where_hour": "1", "where_minute": "0",
+		"sBody": "bash /www/server/panel/script/backup_site.sh"})
+	if !ci.Internal || ci.Mig {
+		t.Errorf("引用 /www/server/panel 的任务应为内部任务(Mig=false),got internal=%v mig=%v", ci.Internal, ci.Mig)
+	}
+	cd := parseBTCron(map[string]any{"name": "数据库备份", "type": "database", "where1": "testdb"})
+	if !cd.Internal || cd.Mig {
+		t.Errorf("database 类型应为内部任务,got internal=%v mig=%v", cd.Internal, cd.Mig)
+	}
+	cn := parseBTCron(map[string]any{"name": "重启服务", "type": "day", "where_hour": "3", "where_minute": "0",
+		"sBody": "systemctl restart myapp"})
+	if cn.Internal || !cn.Mig || cn.Spec != "0 3 * * *" {
+		t.Errorf("普通任务不应被误判内部任务: internal=%v mig=%v spec=%q", cn.Internal, cn.Mig, cn.Spec)
+	}
+}
+
+// compose 端口改写:带引号/不带引号/协议后缀/幂等
+func TestRewriteComposePorts(t *testing.T) {
+	in := `services:
+  app:
+    ports:
+      - "8080:80"
+      - 8443:443/tcp
+`
+	out, o80, o443, changed := rewriteComposePorts(in)
+	if !changed || o80 != 8080 || o443 != 8443 {
+		t.Fatalf("changed=%v orig=%d/%d, want true 8080/8443", changed, o80, o443)
+	}
+	if !strings.Contains(out, `"80:80"`) || !strings.Contains(out, "443:443") {
+		t.Errorf("改写结果不对:\n%s", out)
+	}
+	if strings.Contains(out, "8080") || strings.Contains(out, "8443") {
+		t.Errorf("旧端口应被替换:\n%s", out)
+	}
+	// 幂等:已绑定 80/443 时再次改写无变化
+	_, o80b, o443b, changed2 := rewriteComposePorts(out)
+	if changed2 || o80b != 0 || o443b != 0 {
+		t.Errorf("重复改写应幂等: changed=%v orig=%d/%d", changed2, o80b, o443b)
+	}
 }

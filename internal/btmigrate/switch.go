@@ -19,7 +19,8 @@ import (
 	"kunpanel/internal/util"
 )
 
-// 迁移状态文件:记录已导入站点/宝塔自启禁用方式,供回滚与续期使用
+// 迁移状态文件:记录已导入站点/宝塔自启禁用方式/网关容器原端口映射,
+// 供回滚与续期使用
 type MigrateState struct {
 	Imported       []ImportedSite `json:"imported"`
 	MigratedCrons  int            `json:"migrated_crons"`
@@ -27,7 +28,10 @@ type MigrateState struct {
 	AutostartOff   bool           `json:"autostart_off"`
 	AutostartVia   string         `json:"autostart_via,omitempty"` // systemd / initd
 	BTCronDisabled bool           `json:"bt_cron_disabled"`
-	At             string         `json:"at,omitempty"`
+	// OrigPorts 网关容器切换前的宿主端口映射(key→"8080/8443"),
+	// 切换时记录、回滚时恢复——否则回滚后容器重启仍会抢 80/443
+	OrigPorts map[string]string `json:"orig_ports,omitempty"`
+	At        string            `json:"at,omitempty"`
 }
 
 type ImportedSite struct {

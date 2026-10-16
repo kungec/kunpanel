@@ -24,10 +24,10 @@ import (
 
 // 面板自己会生成的指令 → 从提取内容里剔除,避免重复/冲突。
 // \w+ 通配覆盖 ssl_certificate/session_cache/protocols/stapling 与
-// fastcgi_pass/index/param 全族;此前 "ssl_session_\b" 因 _ 后必接字母
-// 永远匹配不上,一条都没过滤掉,与面板生成的重复致 nginx -t 整批失败
+// fastcgi_pass/index/param 全族;http3/quic_*/Alt-Svc 是宝塔新构站的
+// HTTP3 残留,官方镜像无 quic 模块且 :443 会误导后续端口处理,一并剔除
 var (
-	reDropDirective = regexp.MustCompile(`(?m)^\s*(listen|server_name|root|index|ssl_\w+|access_log|error_log|fastcgi_\w+|proxy_cache_purge)(\s|;).*$`)
+	reDropDirective = regexp.MustCompile(`(?m)^\s*(listen|server_name|root|index|ssl_\w+|http3|quic_\w+|add_header\s+[Aa]lt-[Ss]vc|access_log|error_log|fastcgi_\w+|proxy_cache_purge)(\s|;).*$`)
 	// 宝塔标记注释与内部 include(#SSL-START/#SSL-STOP/#REWRITE-END 等)
 	reBtMarkers = regexp.MustCompile(`(?m)^\s*#.*-(START|STOP|END).*$`)
 	// enable-php include:PHP 由面板 fastcgi 直连宝塔 php-fpm,不能重复
@@ -47,6 +47,10 @@ var (
 	reIncludeProxyDir = regexp.MustCompile(`(?m)^(\s*)include\s+(/www/server/panel/vhost/nginx/[^;]+);.*$`)
 	// 回环地址:面板 nginx 跑在容器里,127.0.0.1/localhost 是容器自己,必须改成宿主机网关
 	reLoopback = regexp.MustCompile(`(https?://)(127\.0\.0\.1|\[::1\]|localhost)([:\s;/]|$)`)
+	// 回环上游端口:只认 proxy_pass/grpc_pass 指向回环地址的端口。此前对整段
+	// 文本扫 :数字,把 Alt-Svc 头里的 :443 也当成上游端口,转发器注册 443
+	// 重启后抢占网关端口导致全站宕机
+	reLoopbackUpstreamPort = regexp.MustCompile(`(?i)(?:proxy_pass|grpc_pass)\s+(?:https?|grpc)://(?:127\.0\.0\.1|\[::1\]|localhost):(\d{1,5})`)
 )
 
 // extractExtras 从宝塔 vhost conf 提取保真额外配置(空串=没有需要保留的)。
@@ -104,9 +108,14 @@ func extractExtrasAt(confPath, siteType, rootRemap, loopbackHost string) (string
 		return sb.String()
 	})
 
-	// 块级剔除:宝塔 SSL 301 跳转 if 块、(php 站点)宝塔 fastcgi location 块
+	// 块级剔除:宝塔 SSL 301 跳转 if 块、(php 站点)宝塔 fastcgi location 块、
+	// proxy_cache_purge 的 purge location 块(指令行剔除后会留下空壳 location)
 	body = dropBlocks(body, func(head, blk string) bool {
 		return strings.Contains(head, "$server_port")
+	})
+	body = dropBlocks(body, func(head, blk string) bool {
+		isLoc := strings.HasPrefix(strings.TrimSpace(head), "location")
+		return isLoc && strings.Contains(blk, "proxy_cache_purge")
 	})
 	// 宝塔的 PHP fastcgi location 各类型都剔除:php 站点由面板重新生成 fastcgi,
 	// 静态/反代站点的宝塔 enable-php 残壳会拦截 .php 请求(面板侧语义不同)
@@ -143,6 +152,25 @@ func extractExtrasAt(confPath, siteType, rootRemap, loopbackHost string) (string
 	if strings.TrimSpace(extra) == "" {
 		return "", 0, nil, nil
 	}
+	// 回环上游端口只认 proxy_pass/grpc_pass 的回环地址(改写前的原文),
+	// 顺序即配置出现顺序; Alt-Svc/listen 等处的端口号不再混入
+	var ports []int
+	for _, m := range reLoopbackUpstreamPort.FindAllStringSubmatch(body, -1) {
+		pn, e := strconv.Atoi(m[1])
+		if e != nil || pn <= 0 || pn > 65535 {
+			continue
+		}
+		dup := false
+		for _, have := range ports {
+			if have == pn {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			ports = append(ports, pn)
+		}
+	}
 	// 回环地址改写:同机迁移 → 宿主机网关;远程迁移 → 远程机地址(DNS 切换前回源旧机)
 	if loopbackHost != "" {
 		extra = reRemoteLoopback.ReplaceAllString(extra, "${1}"+loopbackHost+"${3}")
@@ -150,22 +178,6 @@ func extractExtrasAt(confPath, siteType, rootRemap, loopbackHost string) (string
 		extra = rewriteLoopback(extra)
 	}
 	locs := len(regexp.MustCompile(`(?m)^\s*location\s`).FindAllString(extra, -1))
-	// 收集全部回环上游端口(改写后为网桥地址),供端口转发器逐一注册
-	var ports []int
-	for _, m := range regexp.MustCompile(`:(\d{1,5})`).FindAllStringSubmatch(extra, -1) {
-		if pn, e := strconv.Atoi(m[1]); e == nil && pn > 0 && pn < 65536 {
-			dup := false
-			for _, have := range ports {
-				if have == pn {
-					dup = true
-					break
-				}
-			}
-			if !dup {
-				ports = append(ports, pn)
-			}
-		}
-	}
 	return extra + "\n", locs, ports, nil
 }
 
@@ -250,6 +262,19 @@ func indentBlock(s, pad string) string {
 func rewriteLoopback(s string) string {
 	gw := bridgeGateway()
 	return reLoopback.ReplaceAllString(s, "${1}"+gw+"${3}")
+}
+
+// loopbackUpstreamPort 判断单个反代目标是否回环地址,是则返回其端口
+func loopbackUpstreamPort(target string) (int, bool) {
+	m := reLoopbackUpstreamPort.FindStringSubmatch("proxy_pass " + strings.TrimSpace(target) + ";")
+	if m == nil {
+		return 0, false
+	}
+	pn, err := strconv.Atoi(m[1])
+	if err != nil || pn <= 0 || pn > 65535 {
+		return 0, false
+	}
+	return pn, true
 }
 
 // bridgeGateway docker0 网关(优先动态探测,失败回退 172.17.0.1)

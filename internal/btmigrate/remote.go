@@ -30,8 +30,8 @@ import (
 	"kunpanel/internal/appstore"
 	"kunpanel/internal/dbmgr"
 	"kunpanel/internal/dockerx"
-	"kunpanel/internal/util"
 	"kunpanel/internal/taskx"
+	"kunpanel/internal/util"
 	"kunpanel/internal/websites"
 )
 
@@ -563,11 +563,16 @@ func RemoteApply(opts RemoteOptions, w io.Writer) error {
 				if !cn.Mig || strings.TrimSpace(cn.Shell) == "" || strings.TrimSpace(cn.Spec) == "" {
 					continue
 				}
-				cmdText := cn.Shell
-				for oldPath, newPath := range cronPathMap {
-					cmdText = strings.ReplaceAll(cmdText, oldPath, newPath)
-				}
-				if err := addCron(cn.Name, cmdText, cn.Spec); err != nil {
+				cn.Shell = func() string {
+					cmdText := cn.Shell
+					for oldPath, newPath := range cronPathMap {
+						cmdText = strings.ReplaceAll(cmdText, oldPath, newPath)
+					}
+					return cmdText
+				}()
+				// 远程迁移:任务统一启用(远程机 crontab 不改动,停用会让任务直接失效)
+				cn.Enabled = true
+				if _, err := addCron(cn); err != nil {
 					fmt.Fprintf(w, "   计划任务[%s]迁移失败: %v\n", cn.Name, err)
 					continue
 				}

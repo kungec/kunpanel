@@ -32,10 +32,15 @@ type btDBAccount struct {
 	Ps       string `json:"ps"`
 }
 
-// btDBList 读宝塔数据库清单(账号+备注)
+// btDBList 读宝塔数据库清单(账号+备注)。
+// databases 表 11.x 在 data/db/database.db(default.db 里是空表)——btTableDB 探测。
 func btDBList() ([]btDBAccount, error) {
+	db, err := btTableDB("databases")
+	if err != nil {
+		return nil, err
+	}
 	out, err := pythonJSON(fmt.Sprintf(
-		`import sqlite3,json;c=sqlite3.connect('%s');c.row_factory=sqlite3.Row;print(json.dumps([dict(r) for r in c.execute('select name,username,password,ps from databases')]))`, cronDbPath()))
+		`import sqlite3,json;c=sqlite3.connect('%s');c.row_factory=sqlite3.Row;print(json.dumps([dict(r) for r in c.execute('select name,username,password,ps from databases')]))`, db))
 	if err != nil {
 		return nil, err
 	}
@@ -46,18 +51,26 @@ func btDBList() ([]btDBAccount, error) {
 	return list, nil
 }
 
-// btMySQLRoot 宝塔记录的 MySQL root 密码(config 表)
-func btMySQLRoot() string {
-	out, err := pythonJSON(fmt.Sprintf(
-		`import sqlite3,json;c=sqlite3.connect('%s');print(json.dumps([dict(r) for r in c.execute('select mysql_root from config limit 1')]))`, cronDbPath()))
+// btMySQLRoot 宝塔记录的 MySQL root 密码(config 表;11.x 在 data/db/panel.db)
+func btMySQLRoot() (string, error) {
+	db, err := btTableDB("config")
 	if err != nil {
-		return ""
+		return "", err
+	}
+	out, err := pythonJSON(fmt.Sprintf(
+		`import sqlite3,json;c=sqlite3.connect('%s');print(json.dumps([dict(r) for r in c.execute('select mysql_root from config limit 1')]))`, db))
+	if err != nil {
+		return "", err
 	}
 	var rows []map[string]any
 	if json.Unmarshal([]byte(out), &rows) != nil || len(rows) == 0 {
-		return ""
+		return "", fmt.Errorf("config 表无记录")
 	}
-	return strings.TrimSpace(fmt.Sprint(rows[0]["mysql_root"]))
+	pwd := strings.TrimSpace(fmt.Sprint(rows[0]["mysql_root"]))
+	if pwd == "" {
+		return "", fmt.Errorf("config 表 mysql_root 为空")
+	}
+	return pwd, nil
 }
 
 // btMySQLEnv 执行宝塔 mysql 客户端命令的环境变量(密码不进 ps)
@@ -85,10 +98,11 @@ func dumpBTDatabase(db btDBAccount, w io.Writer) (string, error) {
 	// 凭据:库自带账号 → root
 	user, password := db.Username, db.Password
 	if user == "" || password == "" {
-		user, password = "root", btMySQLRoot()
-	}
-	if user == "" || password == "" {
-		return "", fmt.Errorf("拿不到数据库 %s 的连接凭据(宝塔未记录账号且无 root 密码)", db.Name)
+		root, rerr := btMySQLRoot()
+		if rerr != nil {
+			return "", fmt.Errorf("拿不到数据库 %s 的连接凭据(宝塔未记录账号,root 密码也不可用: %v)", db.Name, rerr)
+		}
+		user, password = "root", root
 	}
 	tmp := filepath.Join(util.DataDir(), "btmig_"+db.Name+".sql.gz")
 	env := btMySQLEnv(user, password)
@@ -171,9 +185,9 @@ func MigratePanelDatabase(w io.Writer, name string) error {
 	if err != nil {
 		return fmt.Errorf("面板导出 %s 失败: %v", name, err)
 	}
-	root := btMySQLRoot()
-	if root == "" {
-		return fmt.Errorf("宝塔未记录 MySQL root 密码(default.db config 表),无法写入宿主机 MySQL")
+	root, err := btMySQLRoot()
+	if err != nil {
+		return fmt.Errorf("宝塔未记录 MySQL root 密码(%v),无法写入宿主机 MySQL", err)
 	}
 	mysqlBin := filepath.Join(btMySQLBin, "mysql")
 	if _, err := os.Stat(mysqlBin); err != nil {

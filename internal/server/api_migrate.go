@@ -24,6 +24,7 @@ func (s *Server) handleMigrateApply(w http.ResponseWriter, r *http.Request) {
 		Sites       []string `json:"sites"`
 		ImportCerts bool     `json:"import_certs"`
 		MigrateCron bool     `json:"migrate_cron"`
+		Crons       []string `json:"crons"` // 勾选迁移的计划任务(echo);空=迁移全部可迁移任务
 		Databases   []string `json:"databases"`
 	}
 	if err := readJSON(r, &req); err != nil {
@@ -39,6 +40,7 @@ func (s *Server) handleMigrateApply(w http.ResponseWriter, r *http.Request) {
 			Sites:       req.Sites,
 			ImportCerts: req.ImportCerts,
 			MigrateCron: req.MigrateCron,
+			Crons:       req.Crons,
 			Databases:   req.Databases,
 		}, w, nil)
 	})
@@ -157,6 +159,5 @@ func (s *Server) handleMigrateRollback(w http.ResponseWriter, r *http.Request) {
 
 // handleMigrateStatus 流量归属状态
 func (s *Server) handleMigrateStatus(w http.ResponseWriter, r *http.Request) {
-OK(w, btmigrate.TrafficStatusFunc())
+	OK(w, btmigrate.TrafficStatusFunc())
 }
-

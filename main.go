@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"kunpanel/internal/app"
+	"kunpanel/internal/btmigrate"
 )
 
 // version 由构建时注入: -ldflags "-X main.version=v1.0.0"
@@ -27,6 +28,11 @@ func main() {
 				fmt.Fprintln(os.Stderr, "重置失败:", err)
 				os.Exit(1)
 			}
+			return
+		case "fwd":
+			// 宝塔迁移反代上游独立转发器(systemd kun-fwd 服务调用):
+			// 面板停止/升级期间站点反代不中断
+			btmigrate.RunForwardDaemon(make(chan struct{}))
 			return
 		}
 	}

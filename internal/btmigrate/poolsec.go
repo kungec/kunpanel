@@ -3,8 +3,9 @@
 // 风险背景:pool 监听 172.17.0.1:907x(宿主机 docker 网桥地址),
 // 不加限制时本机任意容器都能直连 FastCGI,以 www 身份执行任意 PHP。
 // 双层防护:
-//   1. php-fpm listen.allowed_clients = 面板 Nginx 容器 IP(FastCGI 层白名单)
-//   2. iptables KUNFPM 链:9071-9099 端口仅放行面板 Nginx 容器 IP(网络层兜底)
+//  1. php-fpm listen.allowed_clients = 面板 Nginx 容器 IP(FastCGI 层白名单)
+//  2. iptables KUNFPM 链:9071-9099 端口仅放行面板 Nginx 容器 IP(网络层兜底)
+//
 // 容器重建后 IP 可能变化:面板启动、迁移、切换流量时都会调 EnsurePoolSecurity 刷新。
 package btmigrate
 

@@ -24,13 +24,13 @@ import (
 
 // ReversePlanResult 反向迁移预检:面板站点/数据库 + 宝塔侧就绪信息
 type ReversePlanResult struct {
-	BTReady     bool                `json:"bt_ready"`
-	NginxBin    string              `json:"nginx_bin"`
-	PHPVersions []string            `json:"php_versions"` // 宝塔已装的 PHP(决定能否用 enable-php)
-	HasMySQL    bool                `json:"has_mysql"`    // 宝塔 MySQL 客户端可用(决定能否迁库)
-	Sites       []websites.Site     `json:"sites"`
-	DBs         []string            `json:"dbs"`
-	Warnings    []string            `json:"warnings"`
+	BTReady     bool            `json:"bt_ready"`
+	NginxBin    string          `json:"nginx_bin"`
+	PHPVersions []string        `json:"php_versions"` // 宝塔已装的 PHP(决定能否用 enable-php)
+	HasMySQL    bool            `json:"has_mysql"`    // 宝塔 MySQL 客户端可用(决定能否迁库)
+	Sites       []websites.Site `json:"sites"`
+	DBs         []string        `json:"dbs"`
+	Warnings    []string        `json:"warnings"`
 }
 
 // ReverseOptions 反向迁移选项

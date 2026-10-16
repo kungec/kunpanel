@@ -116,6 +116,17 @@ func load() {
 
 func save() error {
 	_ = os.MkdirAll(baseDir(), 0o755)
+	// 保护:列表骤缩(丢一半以上且仍有站点)时拒写并保留现场,
+	// 防止任何路径的漏加载/竞态把用户站点列表静默写没(曾发生过 9→1 的静默丢失)
+	if len(list) > 0 {
+		if old, err := os.ReadFile(storeFile()); err == nil && len(old) > 0 {
+			var prev []Site
+			if json.Unmarshal(old, &prev) == nil && len(prev) > 1 && len(list)*2 < len(prev) {
+				_ = util.AtomicWrite(storeFile()+".lostbak", old, 0o600)
+				return fmt.Errorf("检测到站点列表从 %d 骤减到 %d,已拒写并备份原文件到 sites.json.lostbak,请反馈此提示排查", len(prev), len(list))
+			}
+		}
+	}
 	b, err := json.MarshalIndent(list, "", "  ")
 	if err != nil {
 		return err
@@ -422,6 +433,8 @@ func Delete(id string) error {
 		return err
 	}
 	_ = os.Remove(filepath.Join(confDir(), id+".conf"))
+	_ = os.Remove(RewritePath(id))
+	_ = os.Remove(ExtraPath(id)) // 保真迁移的自定义配置一并清理,避免孤儿文件
 	return Reload()
 }
 
@@ -507,6 +520,10 @@ func writeConf(s *Site) error {
 		root = "/var/www/" + s.ID
 		challengeRoot = root
 	}
+	// 站点额外配置(保真迁移):自定义 location / include 等,原样注入 server 块;
+	// 自带 location / 时不再生成默认块(否则 nginx duplicate location)
+	extra := GetSiteRawExtra(s.ID)
+	extraHasRoot := rawExtraHasRootLocation(extra)
 
 	b.WriteString(fmt.Sprintf("# 由坤面板生成,请勿手动修改站点 ID: %s\n", s.ID))
 
@@ -611,22 +628,27 @@ func writeConf(s *Site) error {
         fastcgi_param HTTPS $https if_not_empty;
     }
 `, s.FpmPass))
-		b.WriteString("    location / {\n        try_files $uri $uri/ =404;\n    }\n")
+		if !extraHasRoot {
+			b.WriteString("    location / {\n        try_files $uri $uri/ =404;\n    }\n")
+		}
 	case "static":
 		idx := strings.TrimSpace(s.IndexFiles)
 		if idx == "" {
 			idx = "index.html index.htm"
 		}
 		fmt.Fprintf(&b, "    root %s;\n    index %s;\n\n", root, idx)
-		b.WriteString("    location / {\n        try_files $uri $uri/ =404;\n    }\n")
+		if !extraHasRoot {
+			b.WriteString("    location / {\n        try_files $uri $uri/ =404;\n    }\n")
+		}
 	case "proxy", "php":
-		fmt.Fprintf(&b, "    location / {\n        proxy_pass %s;\n", func() string {
-			if len(s.Upstreams) > 0 {
-				return "http://kun_up_" + s.ID
-			}
-			return s.ProxyTo
-		}())
-		b.WriteString(`        proxy_set_header Host $host;
+		if !extraHasRoot {
+			fmt.Fprintf(&b, "    location / {\n        proxy_pass %s;\n", func() string {
+				if len(s.Upstreams) > 0 {
+					return "http://kun_up_" + s.ID
+				}
+				return s.ProxyTo
+			}())
+			b.WriteString(`        proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
@@ -636,10 +658,19 @@ func writeConf(s *Site) error {
         proxy_read_timeout 300s;
     }
 `)
-	}
-			if rl := rewriteConfLines(s.ID); rl != "" {
-			b.WriteString(rl)
 		}
+	}
+	// 站点额外配置注入(保真迁移的自定义 location / 反代子目录 / websocket 等)
+	if strings.TrimSpace(extra) != "" {
+		b.WriteString("    # 站点自定义配置(迁移保真,面板原样注入)\n")
+		b.WriteString(extra)
+		if !strings.HasSuffix(extra, "\n") {
+			b.WriteString("\n")
+		}
+	}
+	if rl := rewriteConfLines(s.ID); rl != "" {
+		b.WriteString(rl)
+	}
 	b.WriteString("}\n")
 
 	// 子域名绑定:每个绑定生成独立 server 块(共享主站 root 与安全特性)
@@ -883,6 +914,48 @@ func GetRewrite(id string) (string, error) {
 	}
 	return string(b), nil
 }
+
+// ExtraPath 站点原始额外配置文件路径(保真迁移用:自定义 location/include 等,
+// 原样注入生成的 server 块;与 rewrite 分离,避免面板重新生成时丢失)
+func ExtraPath(id string) string { return filepath.Join(extrasDir(), id+".conf") }
+
+func extrasDir() string { return filepath.Join(baseDir(), "extras") }
+
+// GetSiteRawExtra 读取站点额外配置(空=未设置)
+func GetSiteRawExtra(id string) string {
+	if !idPattern2.MatchString(id) {
+		return ""
+	}
+	b, err := os.ReadFile(ExtraPath(id))
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// SetSiteRawExtra 保存站点额外配置(空内容=删除);只写文件不重载,
+// 调用方(writeConf → Reload)负责校验生效
+func SetSiteRawExtra(id, content string) error {
+	if !idPattern2.MatchString(id) {
+		return fmt.Errorf("非法站点标识")
+	}
+	if strings.TrimSpace(content) == "" {
+		_ = os.Remove(ExtraPath(id))
+		return nil
+	}
+	if err := os.MkdirAll(extrasDir(), 0o755); err != nil {
+		return err
+	}
+	return util.AtomicWriteString(ExtraPath(id), content, 0o644)
+}
+
+// rawExtraHasRootLocation 额外配置是否自带 location / 块
+// (自带时 writeConf 不再生成默认 location /,避免 nginx duplicate location)
+func rawExtraHasRootLocation(extra string) bool {
+	return regexp.MustCompile(`(?m)^\s*location\s+/\s*\{`).MatchString(extra)
+}
+
+var idPattern2 = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
 
 // SetRewrite 保存站点重写规则并校验+重载:
 // 内容会注入 server 块内,非法指令会导致 nginx -t 失败,此时自动回滚

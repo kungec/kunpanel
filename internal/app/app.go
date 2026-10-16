@@ -1,6 +1,7 @@
 package app
 
 import (
+	"io"
 	"context"
 	"fmt"
 	"io/fs"
@@ -13,6 +14,7 @@ import (
 
 	"crypto/tls"
 	"kunpanel/internal/alertx"
+	"kunpanel/internal/btmigrate"
 	"path/filepath"
 	"runtime/debug"
 
@@ -143,6 +145,9 @@ func Run(o Options) error {
 		defer recoverPanic("docker-reapply")
 		time.Sleep(15 * time.Second)
 		fwmgmt.DockerReapply()
+		// 宝塔迁移 php-fpm pool 访问控制刷新(容器 IP 可能变化;非宝塔环境自动跳过)
+		time.Sleep(5 * time.Second)
+		btmigrate.EnsurePoolSecurity(io.Discard)
 	}()
 
 	// 面板在线更新:定时检查 GitHub 新版本,发现即写消息中心

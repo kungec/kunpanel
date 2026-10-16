@@ -370,59 +370,138 @@ PAGES.websites = {
   },
   /* 宝塔面板一键迁移向导 */
   btMigrateDialog(scan, el) {
-    var rows = (scan.sites || []).map(function(s2) {
-      var typeTxt = s2.type === "php" ? "PHP " + (s2.php_ver || "") : s2.type === "proxy" ? "反向代理" : "静态";
-      var sslTxt = s2.ssl ? '<span class="tag tag-success">SSL</span>' : "";
-      return '<tr><td><label class="radio-line"><input type="checkbox" checked data-btsite="' + esc(s2.domain) + '"> <b>' + esc(s2.domain) + "</b></label></td>" +
-        '<td><span class="tag tag-info">' + typeTxt + "</span> " + sslTxt + "</td>" +
-        '<td class="mono fm-ellipsis" style="max-width:220px" title="' + esc(s2.root) + '">' + esc(s2.root) + "</td></tr>";
-    }).join("");
-    var dbRows = (scan.dbs || []).map(function(d0) { return "<tr><td class=mono>" + esc(d0.name) + "</td><td>" + esc(d0.ps || "-") + "</td></tr>"; }).join("");
-    var cronRows = (scan.crons || []).map(function(c0) { return "<tr><td>" + esc(c0.name) + "</td><td>" + esc(c0.cycle) + "</td></tr>"; }).join("");
+    var self = this;
     var m = modal({
-      title: "宝塔面板一键迁移", width: 860,
-      body:
+      title: "面板互通迁移 · 宝塔 ⇄ 坤面板", width: 880,
+      body: '<div class="hub-tabs" style="margin-bottom:14px">' +
+        '<div class="hub-tab active" data-dir="in">宝塔 → 坤面板</div>' +
+        '<div class="hub-tab" data-dir="out">坤面板 → 宝塔</div></div>' +
+        '<div id="btmig-body"><div class="boot-loading" style="height:80px"><div class="spinner"></div></div></div>',
+      footer: '<span class="help" style="margin-right:auto">随时可一键回滚;迁移不动宝塔原有站点与数据</span>' +
+        '<button class="btn btn-plain" data-act="no">取 消</button>' +
+        '<button class="btn btn-primary" data-act="go" style="display:none">开始迁移</button>',
+    });
+    var body = qs("#btmig-body", m.el);
+    var goBtn = qs('[data-act="go"]', m.el);
+    qs('[data-act="no"]', m.el).onclick = m.close;
+    var curDir = "in";
+
+    /* ---------- 方向一:宝塔 → 坤面板 ---------- */
+    function drawIn() {
+      goBtn.textContent = "开始迁移";
+      goBtn.style.display = "";
+      var rows = (scan.sites || []).map(function(s2) {
+        var typeTxt = s2.type === "php" ? "PHP " + (s2.php_ver || "") : s2.type === "proxy" ? "反向代理" : "静态";
+        var sslTxt = s2.ssl ? '<span class="tag tag-success">SSL</span>' : "";
+        return '<tr><td><label class="radio-line"><input type="checkbox" checked data-btsite="' + esc(s2.domain) + '"> <b>' + esc(s2.domain) + "</b></label></td>" +
+          '<td><span class="tag tag-info">' + typeTxt + "</span> " + sslTxt + "</td>" +
+          '<td class="mono fm-ellipsis" style="max-width:200px" title="' + esc(s2.root) + '">' + esc(s2.root) + "</td></tr>";
+      }).join("");
+      var cronRows = (scan.crons || []).map(function(c0) {
+        var mig = c0.mig ? '<span class="tag tag-success">可迁移</span>' : '<span class="tag tag-info">仅展示</span>';
+        return "<tr><td>" + esc(c0.name) + "</td><td>" + esc(c0.cycle) + "</td><td>" + mig + "</td></tr>";
+      }).join("");
+      var dbChecks = (scan.dbs || []).map(function(d0) {
+        return '<label class="radio-line" style="display:inline-flex;margin:2px 18px 2px 0"><input type="checkbox" data-btdb="' + esc(d0.name) + '"> <span class="mono">' + esc(d0.name) + "</span>" + (d0.ps ? '<span class="help" style="margin:0 0 0 6px">' + esc(d0.ps) + "</span>" : "") + "</label>";
+      }).join("");
+      body.innerHTML =
         '<div class="alert alert-info page-fade"><span class="alert-ico">' + I("info") + "</span>" +
-        "将宝塔站点的<b>域名、证书、伪静态、PHP(FastCGI 直连宿主机 php-fpm,版本不变)</b>一键迁入坤面板;" +
-        "<b>数据库不迁移</b>(站点继续连接宿主机 MySQL,连接串无需改动);迁移后可一键切换流量,随时回滚。</div>" +
+        "迁移宝塔站点的<b>域名、证书、伪静态、自定义反代/子目录规则(保真保留)</b>;PHP 站点 FastCGI 直连宿主机 php-fpm,版本不变;" +
+        "迁移完成后自动<b>接管证书续期</b>(面板重签并自动续期),流量切换与回滚走系统服务,重启不抢 80/443。</div>" +
         '<div class="settings-section"><div class="settings-section-title">站点(' + (scan.sites || []).length + ')<span class="help" style="margin:0">勾选要迁移的站点</span></div>' +
         '<div class="table-wrap"><table class="table"><thead><tr><th>域名</th><th>类型</th><th>原目录</th></tr></thead><tbody>' + (rows || '<tr><td colspan=3 class=help>未检测到站点</td></tr>') + "</tbody></table></div></div>" +
-        '<div class="settings-section"><div class="settings-section-title">数据库(' + (scan.dbs || []).length + ')</div><div class="help" style="margin:0">数据库保留在宿主机 MySQL 中继续运行,站点连接串无需改动;<b>不在本次迁移范围</b></div>' +
-        (dbRows ? '<div class="table-wrap"><table class="table"><tbody>' + dbRows + "</tbody></table></div>" : "") + "</div>" +
-        '<div class="settings-section"><div class="settings-section-title">计划任务(' + (scan.crons || []).length + ')</div>' +
-        (cronRows ? '<div class="table-wrap"><table class="table"><tbody>' + cronRows + "</tbody></table></div>" : '<div class="help">无</div>') + "</div>" +
-        '<div id="btmig-warn"></div>',
-      footer: '<span class="help" style="margin-right:auto">可随时一键回滚到宝塔</span>' +
-        '<button class="btn btn-plain" data-act="no">取 消</button>' +
-        '<button class="btn btn-primary" data-act="go">开始迁移</button>',
-    });
-    var warnBox = qs("#btmig-warn", m.el);
-    if (warnBox && (scan.warnings || []).length) {
-      warnBox.innerHTML = '<div class="alert alert-warning"><span class="alert-ico">' + I("warn") + "</span>" + (scan.warnings || []).map(function(x) { return esc(x); }).join("<br>") + "</div>";
-    }
-    qs('[data-act="no"]', m.el).onclick = m.close;
-    qs('[data-act="go"]', m.el).onclick = async function() {
-      var sites = [];
-      qsa("[data-btsite]", m.el).forEach(function(cb) { if (cb.checked) sites.push(cb.getAttribute("data-btsite")); });
-      if (!sites.length) { toast("请至少勾选一个站点", "error"); return; }
-      if (!(await confirmDlg("开始迁移所选 <b>" + sites.length + "</b> 个站点?<br><span style='font-size:12px;color:var(--text-3)'>过程中原宝塔站点继续运行,不影响现网;完成后需确认切换流量。</span>"))) return;
-      m.close();
-      try {
-        var d = await api("/migration/bt/apply", { method: "POST", body: { sites: sites, import_certs: true, migrate_cron: true } });
-        taskModal(d.task_id, async function(st) {
-          if (st !== "success") return;
-          confirmDlg("迁移完成!<br><span style='font-size:12.5px'>现在将停止宝塔 Nginx,由坤面板接管 80/443 流量。<br>如遇问题可随时在网站页一键回滚到宝塔。</span>", { danger: true }).then(async function(ok) {
-            if (!ok) { toast("未切换流量。原宝塔 Nginx 仍在服务,可稍后在网站页执行切换", "info", 8000); self.render(el); return; }
-            try {
-              var d2 = await api("/migration/bt/switch", { method: "POST", body: {} });
-              taskModal(d2.task_id, function(st2) {
-                if (st2 === "success") { toast("流量已切换到坤面板", "success", 8000); self.render(el); }
-              });
-            } catch (e2) { toast(e2.message, "error", 8000); self.render(el); }
+        '<div class="settings-section"><div class="settings-section-title">计划任务(' + (scan.crons || []).length + ')<span class="help" style="margin:0">迁移后自动注释宝塔原 crontab,不会双跑</span></div>' +
+        (cronRows ? '<div class="table-wrap"><table class="table"><thead><tr><th>名称</th><th>周期</th><th>状态</th></tr></thead><tbody>' + cronRows + "</tbody></table></div>" : '<div class="help">无</div>') + "</div>" +
+        '<div class="settings-section"><div class="settings-section-title">数据库(' + (scan.dbs || []).length + ')<span class="help" style="margin:0">默认不迁移:站点继续连宿主机 MySQL(连接串零改动)。勾选则<b>复制一份到面板 MySQL</b>,之后站点需自行改连接串,两边是独立数据</span></div>' +
+        (dbChecks || '<div class="help">宝塔暂无数据库</div>') + "</div>" +
+        '<div id="btmig-warn"></div>';
+      var warnBox = qs("#btmig-warn", m.el);
+      if (warnBox && (scan.warnings || []).length) {
+        warnBox.innerHTML = '<div class="alert alert-warning"><span class="alert-ico">' + I("warn") + "</span>" + (scan.warnings || []).map(function(x) { return esc(x); }).join("<br>") + "</div>";
+      }
+      goBtn.onclick = async function() {
+        var sites = [], dbs = [];
+        qsa("[data-btsite]", m.el).forEach(function(cb) { if (cb.checked) sites.push(cb.getAttribute("data-btsite")); });
+        qsa("[data-btdb]", m.el).forEach(function(cb) { if (cb.checked) dbs.push(cb.getAttribute("data-btdb")); });
+        if (!sites.length) { toast("请至少勾选一个站点", "error"); return; }
+        var dbNote = dbs.length ? "<br><span style='color:var(--warning)'>将复制 " + dbs.length + " 个数据库到面板 MySQL,完成后站点需改连接串。</span>" : "";
+        if (!(await confirmDlg("开始迁移所选 <b>" + sites.length + "</b> 个站点?" + dbNote + "<br><span style='font-size:12px;color:var(--text-3)'>过程中原宝塔站点继续运行,不影响现网;完成后需确认切换流量。</span>"))) return;
+        m.close();
+        try {
+          var d = await api("/migration/bt/apply", { method: "POST", body: { sites: sites, import_certs: true, migrate_cron: true, databases: dbs } });
+          taskModal(d.task_id, async function(st) {
+            if (st !== "success") return;
+            confirmDlg("迁移完成!<br><span style='font-size:12.5px'>现在将停止宝塔 Nginx(并禁用其自启),由坤面板接管 80/443 流量;<br>切换后面板会自动为迁移站点重新签发证书接管续期。如遇问题可一键回滚到宝塔。</span>", { danger: true }).then(async function(ok) {
+              if (!ok) { toast("未切换流量。原宝塔 Nginx 仍在服务,可稍后在网站页执行切换", "info", 8000); self.render(el); return; }
+              try {
+                var d2 = await api("/migration/bt/switch", { method: "POST", body: {} });
+                taskModal(d2.task_id, function(st2) {
+                  if (st2 === "success") { toast("流量已切换到坤面板,证书续期已接管", "success", 8000); self.render(el); }
+                });
+              } catch (e2) { toast(e2.message, "error", 8000); self.render(el); }
+            });
           });
-        });
-      } catch (e) { toast(e.message, "error", 8000); }
-    };
+        } catch (e) { toast(e.message, "error", 8000); }
+      };
+    }
+
+    /* ---------- 方向二:坤面板 → 宝塔 ---------- */
+    function drawOut(plan) {
+      goBtn.textContent = "导出到宝塔";
+      goBtn.style.display = "";
+      var rows = (plan.sites || []).map(function(s2) {
+        var typeTxt = s2.type === "php" ? "PHP(容器)" : s2.type === "phpfpm" ? "PHP-FPM" : s2.type === "proxy" ? "反向代理" : "静态";
+        var sslTxt = s2.ssl_cert_id ? '<span class="tag tag-success">SSL</span>' : "";
+        var rootTxt = s2.type === "proxy" ? "-" : s2.root;
+        return '<tr><td><label class="radio-line"><input type="checkbox" data-pnsite="' + esc(s2.id) + '"> <b>' + esc(s2.domain) + "</b></label></td>" +
+          '<td><span class="tag tag-info">' + typeTxt + "</span> " + sslTxt + "</td>" +
+          '<td class="mono fm-ellipsis" style="max-width:200px" title="' + esc(rootTxt) + '">' + esc(rootTxt) + "</td></tr>";
+      }).join("");
+      var sysDbs = { information_schema: 1, mysql: 1, performance_schema: 1, sys: 1 };
+      var dbs = (plan.dbs || []).filter(function(d) { return !sysDbs[d]; });
+      var dbChecks = dbs.map(function(d) {
+        return '<label class="radio-line" style="display:inline-flex;margin:2px 18px 2px 0"><input type="checkbox" data-pndb="' + esc(d) + '"> <span class="mono">' + esc(d) + "</span></label>";
+      }).join("");
+      body.innerHTML =
+        '<div class="alert alert-info page-fade"><span class="alert-ico">' + I("info") + "</span>" +
+        "把坤面板的站点(域名/目录/SSL/伪静态/自定义规则)与数据库导出到本机宝塔;宝塔 Nginx 运行状态不变,导出后在宝塔里重载即可生效。</div>" +
+        '<div class="settings-section"><div class="settings-section-title">面板站点(' + (plan.sites || []).length + ')<span class="help" style="margin:0">宝塔未装的 PHP 版本站点将以静态方式导出并提示</span></div>' +
+        '<div class="table-wrap"><table class="table"><thead><tr><th>域名</th><th>类型</th><th>目录</th></tr></thead><tbody>' + (rows || '<tr><td colspan=3 class=help>面板暂无站点</td></tr>') + "</tbody></table></div></div>" +
+        '<div class="settings-section"><div class="settings-section-title">面板数据库(' + dbs.length + ')<span class="help" style="margin:0">导出到宝塔宿主机 MySQL;勾选才迁移</span></div>' +
+        (dbChecks || '<div class="help">面板 MySQL 暂无业务库或未安装</div>') + "</div>" +
+        ((plan.warnings || []).length ? '<div class="alert alert-warning"><span class="alert-ico">' + I("warn") + "</span>" + plan.warnings.map(function(x) { return esc(x); }).join("<br>") + "</div>" : "");
+      goBtn.onclick = async function() {
+        var sites = [], dbs2 = [];
+        qsa("[data-pnsite]", m.el).forEach(function(cb) { if (cb.checked) sites.push(cb.getAttribute("data-pnsite")); });
+        qsa("[data-pndb]", m.el).forEach(function(cb) { if (cb.checked) dbs2.push(cb.getAttribute("data-pndb")); });
+        if (!sites.length && !dbs2.length) { toast("请至少勾选一项", "error"); return; }
+        if (!(await confirmDlg("开始导出所选 <b>" + sites.length + "</b> 个站点、<b>" + dbs2.length + "</b> 个数据库到宝塔?<br><span style='font-size:12px;color:var(--text-3)'>宝塔现有站点不受影响;同名站点目录/证书将被覆盖。</span>"))) return;
+        m.close();
+        try {
+          var d = await api("/migration/bt/reverse-apply", { method: "POST", body: { sites: sites, dbs: dbs2 } });
+          taskModal(d.task_id, function(st) {
+            if (st === "success") { toast("已导出到宝塔", "success", 8000); self.render(el); }
+          });
+        } catch (e) { toast(e.message, "error", 8000); }
+      };
+    }
+
+    function switchDir(dir) {
+      curDir = dir;
+      qsa(".hub-tab", m.el).forEach(function(x) { x.classList.toggle("active", x.getAttribute("data-dir") === dir); });
+      if (dir === "in") { drawIn(); return; }
+      body.innerHTML = '<div class="boot-loading" style="height:80px"><div class="spinner"></div><p>读取面板与宝塔信息...</p></div>';
+      goBtn.style.display = "none";
+      api("/migration/bt/reverse-plan").then(function(plan) {
+        if (curDir !== "out") return;
+        if (!plan.bt_ready) { body.innerHTML = '<div class="alert alert-warning"><span class="alert-ico">' + I("warn") + "</span>未检测到宝塔面板,无法导出</div>"; return; }
+        drawOut(plan);
+      }).catch(function(e) { body.innerHTML = emptyState("warn", "加载失败", e.message); });
+    }
+    qsa(".hub-tab", m.el).forEach(function(t) {
+      t.onclick = function() { switchDir(t.getAttribute("data-dir")); };
+    });
+    drawIn();
   },
 
   addDialog(el) {

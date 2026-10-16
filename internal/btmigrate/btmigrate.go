@@ -12,6 +12,7 @@
 package btmigrate
 
 import (
+	"strconv"
 	"encoding/json"
 	"io"
 	"fmt"
@@ -32,11 +33,13 @@ import (
 
 const (
 	btPanelDir  = "/www/server/panel"
+	btDBPath    = "/www/server/panel/data/default.db"
 	btVhostDir  = "/www/server/panel/vhost/nginx"
 	btRewrite   = "/www/server/panel/vhost/rewrite"
 	btCertDir   = "/www/server/panel/vhost/cert"
 	btWwwRoot   = "/www/wwwroot"
 	btNginxBin  = "/www/server/nginx/sbin/nginx"
+	btMySQLBin  = "/www/server/mysql/bin"
 	btPHPDir    = "/www/server/php"
 	poolGateway = "172.17.0.1"
 	poolBase    = 9070
@@ -161,22 +164,23 @@ func Scan() (*ScanResult, error) {
 		}
 		sort.Strings(vers)
 		for _, v := range vers {
-			sock := fmt.Sprintf("/tmp/php-cgi-%s.sock", v)
-			if _, err := os.Stat(sock); err != nil {
-				// 部分版本 socket 在 /tmp/php-cgi.sock 或未运行
-				res.Warnings = append(res.Warnings, "PHP "+v+" 的 socket 未找到("+sock+"),该版本站点迁移后需确认 php-fpm 运行中")
-			}
-			res.FPMs = append(res.FPMs, BtFPM{Ver: v, Sock: sock,
+			// 注意:面板 systemd 开了 PrivateTmp,看不到真实 /tmp,这里探测不到是常态;
+			// 迁移用 TCP pool(172.17.0.1:907x)直连,不依赖 socket,提示改为中性说明
+			res.FPMs = append(res.FPMs, BtFPM{Ver: v, Sock: fmt.Sprintf("/tmp/php-cgi-%s.sock", v),
 				PoolDir: filepath.Join(btPHPDir, v, "etc", "php-fpm.d"),
 				Service: "php-fpm-" + v})
 		}
 	}
 
-	// 数据库清单(宝塔 pyenv python3 读 default.db)
-	if out, err := util.RunWithTimeout(15*time.Second, filepath.Join(btPanelDir, "pyenv", "bin", "python3"), "-c",
-		`import sqlite3,json;c=sqlite3.connect('/www/server/panel/data/default.db');c.row_factory=sqlite3.Row;print(json.dumps([dict(r) for r in c.execute('select name,username,ps from databases')]))`); err == nil {
+	// 数据库清单(default.db databases 表,错误透出不再静默)
+	if out, err := pythonJSON(fmt.Sprintf(
+		`import sqlite3,json;c=sqlite3.connect('%s');c.row_factory=sqlite3.Row;print(json.dumps([dict(r) for r in c.execute('select name,username as user,ps from databases')]))`, btDBPath)); err != nil {
+		res.Warnings = append(res.Warnings, "读取宝塔数据库清单失败(不影响站点迁移): "+err.Error())
+	} else {
 		var dbs []BtDB
-		if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &dbs); err == nil {
+		if err := json.Unmarshal([]byte(out), &dbs); err != nil {
+			res.Warnings = append(res.Warnings, "解析宝塔数据库清单失败: "+err.Error())
+		} else {
 			res.DBs = dbs
 		}
 	}
@@ -185,54 +189,51 @@ func Scan() (*ScanResult, error) {
 	}
 
 	// 计划任务(default.db crontab 表)
-	if out, err := util.RunWithTimeout(15*time.Second, filepath.Join(btPanelDir, "pyenv", "bin", "python3"), "-c",
-		`import sqlite3,json;c=sqlite3.connect('/www/server/panel/data/default.db');c.row_factory=sqlite3.Row;print(json.dumps([dict(r) for r in c.execute('select name,type,where_hour,where_minute,sType,sBody from crontab where status=0 or status is null')]))`); err == nil {
-		var crons []map[string]any
-		if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &crons); err == nil {
-			for _, cr := range crons {
-				name, _ := cr["name"].(string)
-				typ := fmt.Sprint(cr["type"])
-				styp, _ := cr["sType"].(string)
-				sbody, _ := cr["sBody"].(string)
-				hh := fmt.Sprint(cr["where_hour"])
-				mm := fmt.Sprint(cr["where_minute"])
-				c := BtCron{Name: name, Shell: strings.TrimSpace(sbody)}
-				h := strings.TrimSpace(hh)
-				if h == "" {
-					h = "0"
+	// 宝塔各版本 schema 不一致:老版本有 sType,11.x 起只有 type 字段。
+	// 用 PRAGMA 先探测可用列再拼查询,查询错误必须透出(此前被吞,界面显示"迁移 0 条")
+	cronSQL := func() string {
+		cols := map[string]bool{}
+		var colNames []string
+		if raw, err := pythonJSON(fmt.Sprintf(
+			`import sqlite3,json;c=sqlite3.connect('%s');print(json.dumps([r[1] for r in c.execute('PRAGMA table_info(crontab)')]))`, btDBPath)); err == nil {
+			_ = json.Unmarshal([]byte(raw), &colNames)
+		}
+		for _, c := range colNames {
+			cols[c] = true
+		}
+		want := []string{"name", "type", "sType", "where1", "where_hour", "where_minute", "week", "sBody", "status"}
+		var sel []string
+		for _, w := range want {
+			if cols[w] {
+				sel = append(sel, w)
+			}
+		}
+		if !cols["name"] {
+			return ""
+		}
+		statusFilter := ""
+		if cols["status"] {
+			statusFilter = " where status=0 or status is null"
+		}
+		return fmt.Sprintf(`import sqlite3,json;c=sqlite3.connect('%s');c.row_factory=sqlite3.Row;print(json.dumps([dict(r) for r in c.execute('select %s from crontab%s')]))`,
+			btDBPath, strings.Join(sel, ","), statusFilter)
+	}()
+	if cronSQL == "" {
+		res.Warnings = append(res.Warnings, "宝塔 crontab 表读取失败(无该表或 schema 异常),计划任务清单为空;站点迁移不受影响")
+	}
+	if cronSQL != "" {
+		cronRaw, err := pythonJSON(cronSQL)
+		if err != nil {
+			res.Warnings = append(res.Warnings, "读取宝塔计划任务失败(不影响站点迁移): "+err.Error())
+		} else {
+			var crons []map[string]any
+			if err := json.Unmarshal([]byte(cronRaw), &crons); err != nil {
+				res.Warnings = append(res.Warnings, "解析宝塔计划任务失败: "+err.Error())
+			} else {
+				for _, cr := range crons {
+					c := parseBTCron(cr)
+					res.Crons = append(res.Crons, c)
 				}
-				m := strings.TrimSpace(mm)
-				if m == "" {
-					m = "0"
-				}
-				switch styp {
-				case "day":
-					c.Cycle = "每天 " + h + ":" + m
-					c.Spec = m + " " + h + " * * *"
-					c.Mig = true
-				case "hour":
-					c.Cycle = "每小时第 " + m + " 分"
-					c.Spec = m + " * * * *"
-					c.Mig = true
-				case "nmonth":
-					c.Cycle = "每月 " + mm + " 日 " + h + ":" + m
-					c.Spec = m + " " + h + " * * *"
-					c.Mig = true
-				case "week":
-					c.Cycle = "每周" + mm
-					c.Spec = "0 " + h + " * * " + m
-					c.Mig = true
-				default:
-					c.Cycle = styp
-				}
-				_ = typ
-				if strings.TrimSpace(sbody) == "" {
-					c.Mig = false
-				}
-				if !c.Mig {
-					c.Cycle += "(无法自动迁移)"
-				}
-				res.Crons = append(res.Crons, c)
 			}
 		}
 	}
@@ -302,6 +303,18 @@ func parseSiteConf(path string) (BtSite, error) {
 			site.Rewrite = rw
 		}
 	}
+	// 证书目录存在即视为 SSL 站点(个别 conf 只听 80、靠 if 跳转,漏判会导致
+	// 证书不迁移、续期不接管)
+	if !site.SSL {
+		name := site.CertName
+		if name == "" {
+			name = site.Domain
+		}
+		if _, err := os.Stat(filepath.Join(btCertDir, name, "fullchain.pem")); err == nil {
+			site.SSL = true
+			site.CertName = name
+		}
+	}
 	return site, nil
 }
 
@@ -336,6 +349,7 @@ type ApplyOptions struct {
 	Sites       []string // 要迁移的站点域名
 	ImportCerts bool
 	MigrateCron bool
+	Databases   []string // 可选:迁移宝塔数据库到面板 MySQL(导入后需改站点连接串)
 }
 
 // Apply 执行迁移(任务体内调用,进度写 w)。
@@ -348,6 +362,8 @@ func Apply(opts ApplyOptions, w io.Writer, siteDone func(domain, siteID string))
 	if !res.Found {
 		return fmt.Errorf("未检测到宝塔面板(%s)", btPanelDir)
 	}
+	// php-fpm pool 访问控制(allowed_clients + iptables 限源,防任意容器直连 FastCGI)
+	EnsurePoolSecurity(w)
 	// Nginx 容器挂载宝塔站点目录(phpfpm 站点 root 保持宿主机路径)
 	if err := appstore.EnsureBtRootMount(w); err != nil {
 		return err
@@ -385,7 +401,7 @@ func Apply(opts ApplyOptions, w io.Writer, siteDone func(domain, siteID string))
 	}
 
 	// 2) 逐站点迁移(此处不做重载,统一在最后 Nginx reload)
-	var importedSites []string
+	var importedSites []ImportedSite
 	for _, s := range res.Sites {
 		if !sel[s.Domain] {
 			continue
@@ -407,7 +423,12 @@ func Apply(opts ApplyOptions, w io.Writer, siteDone func(domain, siteID string))
 			}
 			siteID, err = createFpmSite(s.Domain, s.Root, fpmAddr, s.PhpVer)
 		case "proxy":
-			siteID, err = createProxySite(s.Domain, s.ProxyTo, s.Port80())
+			// 面板 Nginx 跑在容器里,127.0.0.1/localhost 是容器自己,直接迁会整站 502
+			proxyTo := rewriteLoopback(s.ProxyTo)
+			if proxyTo != s.ProxyTo {
+				fmt.Fprintf(w, "   反代目标已改写: %s → %s(容器内回环不可达宿主机)\n", s.ProxyTo, proxyTo)
+			}
+			siteID, err = createProxySite(s.Domain, proxyTo, s.Port80())
 		default:
 			siteID, err = createStaticSite(s.Domain, s.Root)
 		}
@@ -418,7 +439,15 @@ func Apply(opts ApplyOptions, w io.Writer, siteDone func(domain, siteID string))
 			}
 			return fmt.Errorf("迁移站点 %s 失败: %v", s.Domain, err)
 		}
-		importedSites = append(importedSites, siteID)
+		importedSites = append(importedSites, ImportedSite{Domain: s.Domain, SiteID: siteID, SSL: s.SSL && s.CertName != ""})
+		// 自定义配置保真提取(反代子目录/websocket/自定义 location 等)
+		if extra, locs, err := extractExtras(s.Conf, s.Type); err == nil && strings.TrimSpace(extra) != "" {
+			if err := saveExtras(siteID, extra); err == nil {
+				fmt.Fprintf(w, "   自定义配置已保留(%d 个 location/指令块)\n", locs)
+			} else {
+				fmt.Fprintf(w, "   自定义配置保存失败(%v),站点基础功能不受影响\n", err)
+			}
+		}
 		// 伪静态
 		if s.Rewrite != "" {
 			if rw, err := os.ReadFile(s.Rewrite); err == nil && len(strings.TrimSpace(string(rw))) > 0 {
@@ -443,7 +472,8 @@ func Apply(opts ApplyOptions, w io.Writer, siteDone func(domain, siteID string))
 	}
 	_ = importedSites
 
-	// 3) 计划任务
+	// 3) 计划任务(迁移成功后注释宝塔原 crontab,防止同一任务跑两遍)
+	migratedCrons := 0
 	if opts.MigrateCron {
 		n := 0
 		for _, c := range res.Crons {
@@ -456,7 +486,19 @@ func Apply(opts ApplyOptions, w io.Writer, siteDone func(domain, siteID string))
 			}
 			n++
 		}
+		migratedCrons = n
 		fmt.Fprintf(w, ">> 计划任务已迁移 %d 条\n", n)
+		if n > 0 {
+			disableBTCron(w)
+		}
+	}
+
+	// 3.5) 可选:迁移宝塔数据库到面板 MySQL
+	for _, name := range opts.Databases {
+		fmt.Fprintf(w, ">> 迁移数据库 %s ...\n", name)
+		if err := MigrateBTDatabase(w, name); err != nil {
+			fmt.Fprintf(w, "   失败: %v(继续)\n", err)
+		}
 	}
 
 	// 4) Nginx 校验与重载(先不切换 80/443)
@@ -464,6 +506,11 @@ func Apply(opts ApplyOptions, w io.Writer, siteDone func(domain, siteID string))
 		return fmt.Errorf("Nginx 配置校验失败: %v", err)
 	}
 	_, _ = dockerx.ExecIn("kun-nginx", "nginx", "-s", "reload")
+	// 记录迁移状态(供切换后证书续期接管与回滚恢复自启使用)
+	st := loadState()
+	st.Imported = importedSites
+	st.MigratedCrons = migratedCrons
+	saveState(st)
 	fmt.Fprintf(w, ">> 迁移完成。请确认站点在本面板可访问后,再执行「切换流量」接管 80/443\n")
 	return nil
 }
@@ -475,6 +522,128 @@ func findFPM(fpms []BtFPM, ver string) *BtFPM {
 		}
 	}
 	return nil
+}
+
+// pythonJSON 用宝塔自带 pyenv python3 执行脚本并返回输出(schema 探测/读库统一入口)。
+// pyenv 缺失时回退系统 python3,仍失败才报错(不再静默吞掉)
+func pythonJSON(script string) (string, error) {
+	var out string
+	var err error
+	if _, e := os.Stat(filepath.Join(btPanelDir, "pyenv", "bin", "python3")); e == nil {
+		out, err = util.RunWithTimeout(15*time.Second,
+			filepath.Join(btPanelDir, "pyenv", "bin", "python3"), "-c", script)
+		if err == nil {
+			return strings.TrimSpace(out), nil
+		}
+	}
+	out2, err2 := util.RunWithTimeout(15*time.Second, "python3", "-c", script)
+	if err2 != nil {
+		return "", fmt.Errorf("pyenv 与系统 python3 均不可用: %v / %v", err, err2)
+	}
+	return strings.TrimSpace(out2), nil
+}
+
+func strOf(m map[string]any, k string) string {
+	if v, ok := m[k]; ok && v != nil {
+		return strings.TrimSpace(fmt.Sprint(v))
+	}
+	return ""
+}
+
+// parseBTCron 把宝塔 crontab 行换算成面板计划任务。
+// 类型字段兼容:sType(老版本)/ type(11.x);where1 按类型是「几号/N 分钟/URL」。
+// 周类型 BT 的 week 字段 1~7 对应周一~周日,cron 里周日是 0(7%7)。
+func parseBTCron(cr map[string]any) BtCron {
+	name := strOf(cr, "name")
+	styp := strOf(cr, "sType")
+	if styp == "" {
+		styp = strOf(cr, "type")
+	}
+	// 有些版本 type 存的是数字枚举(1=天 2=周 ...),带字母才算周期类型
+	sbody := strings.TrimSpace(strOf(cr, "sBody"))
+	where1 := strOf(cr, "where1")
+	h := strOf(cr, "where_hour")
+	m := strOf(cr, "where_minute")
+	week := strOf(cr, "week")
+	if h == "" {
+		h = "0"
+	}
+	if m == "" {
+		m = "0"
+	}
+	c := BtCron{Name: name, Shell: sbody}
+	switch styp {
+	case "day", "1":
+		c.Cycle = "每天 " + h + ":" + m
+		c.Spec = m + " " + h + " * * *"
+	case "hour", "3":
+		c.Cycle = "每小时第 " + m + " 分"
+		c.Spec = m + " * * * *"
+	case "nmonth", "month", "2":
+		// 每月 where1 号执行(此前把 where1 丢了变成每天跑,已修)
+		day := where1
+		if day == "" {
+			day = "1"
+		}
+		c.Cycle = "每月 " + day + " 日 " + h + ":" + m
+		c.Spec = m + " " + h + " " + day + " * *"
+	case "week", "4":
+		dow := week
+		if n, e := strconv.Atoi(week); e == nil && n >= 0 && n <= 7 {
+			dow = strconv.Itoa(n % 7) // BT 1~7=周一~周日,cron 0=周日
+		}
+		if dow == "" {
+			dow = "1"
+		}
+		names := map[string]string{"0": "日", "1": "一", "2": "二", "3": "三", "4": "四", "5": "五", "6": "六"}
+		c.Cycle = "每周" + names[dow] + " " + h + ":" + m
+		c.Spec = m + " " + h + " * * " + dow
+	case "minute", "5", "n":
+		// 每 N 分钟(where1=N)
+		n := where1
+		if n == "" {
+			n = "30"
+		}
+		c.Cycle = "每 " + n + " 分钟"
+		c.Spec = "*/" + n + " * * * *"
+	case "day_n", "tz", "url":
+		// 访问 URL/特殊类型:面板无法等价执行,保留展示
+		c.Cycle = styp + "(宝塔专属类型,无法自动迁移)"
+	default:
+		c.Cycle = styp + "(无法自动迁移)"
+	}
+	c.Mig = c.Spec != "" && sbody != ""
+	if !c.Mig && !strings.Contains(c.Cycle, "无法") {
+		c.Cycle += "(无法自动迁移)"
+	}
+	return c
+}
+
+// disableBTCron 迁移后注释宝塔原计划任务(/var/spool/cron/root 中引用
+// /www/server/cron/ 的行),防止同一任务面板与宝塔各跑一遍。
+// 注释保留原文,回滚(取消注释)即可恢复。
+func disableBTCron(w io.Writer) {
+	for _, spool := range []string{"/var/spool/cron/root", "/var/spool/cron/crontabs/root"} {
+		b, err := os.ReadFile(spool)
+		if err != nil {
+			continue
+		}
+		var lines []string
+		changed := false
+		for _, ln := range strings.Split(string(b), "\n") {
+			if strings.Contains(ln, "/www/server/cron/") && !strings.HasPrefix(strings.TrimSpace(ln), "#") {
+				lines = append(lines, "#kunmig# "+ln)
+				changed = true
+			} else {
+				lines = append(lines, ln)
+			}
+		}
+		if changed {
+			if err := util.AtomicWrite(spool, []byte(strings.Join(lines, "\n")), 0o600); err == nil {
+				fmt.Fprintf(w, "   已注释宝塔原 crontab 中的迁移任务(%s),避免双跑;回滚时去除 #kunmig# 前缀即可恢复\n", spool)
+			}
+		}
+	}
 }
 
 // Port80 返回 HTTP 端口(宝塔站点 conf 的 listen 80)
@@ -632,9 +801,21 @@ func SwitchTraffic(w io.Writer) error {
 	if !res.Found {
 		return fmt.Errorf("未检测到宝塔面板")
 	}
-	// 1) 停宝塔 Nginx(仅停 nginx,不动 php-fpm/mysql)
+	// 0) 刷新 php-fpm pool 访问控制(容器 IP 可能已变)
+	EnsurePoolSecurity(w)
+	// 1) 停宝塔 Nginx(systemd → init.d → 二进制逐级回退;仅停 nginx,不动 php-fpm/mysql)
 	fmt.Fprintln(w, ">> 停止宝塔 Nginx(php-fpm 与 MySQL 保持运行)...")
-	_ = exec.Command(btNginxBin, "-s", "stop").Run()
+	if err := stopBTNginx(w); err != nil {
+		return err
+	}
+	// 1.5) 禁宝塔 Nginx 自启:服务器重启后不再与面板抢 80/443(回滚时恢复)
+	st := loadState()
+	if !st.AutostartOff {
+		if off, via := disableBTNginxAutostart(w); off {
+			st.AutostartOff, st.AutostartVia = true, via
+			saveState(st)
+		}
+	}
 	time.Sleep(1 * time.Second)
 
 	// 2) 面板 Nginx 改绑 80/443
@@ -676,13 +857,19 @@ func SwitchTraffic(w io.Writer) error {
 			out, err := dockerx.Compose(dir, "up", "-d")
 			fmt.Fprintln(w, out)
 			if err != nil {
-				// 失败回滚:重启宝塔 Nginx
-				_ = exec.Command(btNginxBin).Run()
+				// 失败回滚:按原方式拉起宝塔 Nginx
+				_ = startBTNginx(io.Discard)
 				return fmt.Errorf("[%s] 容器重建失败,已恢复宝塔 Nginx: %s", key, tailStr(out, 300))
 			}
 		}
 	}
 	fmt.Fprintln(w, ">> 流量已切换到面板 Nginx。如需回滚,请使用「回滚到宝塔」。")
+	// 记录切换状态
+	st2 := loadState()
+	st2.Switched = true
+	saveState(st2)
+	// 证书续期接管:迁移导入的宝塔证书改由面板 ACME 重签并自动续期
+	RenewMigratedSites(w)
 	return nil
 }
 
@@ -698,10 +885,18 @@ func RollbackTraffic(w io.Writer) error {
 		fmt.Fprintln(w, out)
 		_ = err
 	}
-	fmt.Fprintln(w, ">> 启动宝塔 Nginx ...")
-	if err := exec.Command(btNginxBin).Start(); err != nil {
+	fmt.Fprintln(w, ">> 启动宝塔 Nginx(systemd/init.d 优先)...")
+	if err := startBTNginx(w); err != nil {
 		return fmt.Errorf("启动宝塔 Nginx 失败: %v", err)
 	}
+	// 恢复宝塔 Nginx 自启
+	st := loadState()
+	if st.AutostartOff {
+		restoreBTNginxAutostart(w, st.AutostartVia)
+		st.AutostartOff, st.AutostartVia = false, ""
+	}
+	st.Switched = false
+	saveState(st)
 	time.Sleep(2 * time.Second)
 	fmt.Fprintln(w, ">> 已回滚到宝塔。原站点配置未改动,应立即恢复访问。")
 	return nil

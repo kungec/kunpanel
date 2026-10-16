@@ -113,7 +113,12 @@ func TrashRestore(id string) error {
 		return err
 	}
 	if err := os.Rename(src, item.OrigPath); err != nil {
-		return fmt.Errorf("恢复失败(可能跨磁盘): %v", err)
+		// 跨设备挂载点(如 /tmp 是 tmpfs 而 /opt 在磁盘):回退为复制后清理。
+		// 入回收站(ToTrash)有同样的回退,恢复也必须有,否则跨盘删除的文件无法恢复
+		if err2 := Copy(src, item.OrigPath); err2 != nil {
+			return fmt.Errorf("恢复失败: %v", err)
+		}
+		_ = os.RemoveAll(src)
 	}
 	_ = os.Remove(trashMetaPath(id))
 	return nil

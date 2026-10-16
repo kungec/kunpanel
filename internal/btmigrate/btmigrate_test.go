@@ -42,7 +42,7 @@ func TestExtractExtras(t *testing.T) {
 	if err := os.WriteFile(conf, []byte(sampleBTConf), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	extra, locs, err := extractExtras(conf, "php")
+	extra, locs, _, err := extractExtras(conf, "php")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestExtractExtrasProxySite(t *testing.T) {
 		t.Fatal(err)
 	}
 	// proxy 类型:宝塔 fastcgi location 也应剔除(反代站用不到 PHP)
-	extra, locs, err := extractExtras(conf, "proxy")
+	extra, locs, _, err := extractExtras(conf, "proxy")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestExtractExtrasNativeFormat(t *testing.T) {
 	if site.Type == "php" || site.PhpVer != "" {
 		t.Errorf("enable-php-00 应视为纯静态,got type=%s php_ver=%s", site.Type, site.PhpVer)
 	}
-	extra, locs, err := extractExtras(conf, site.Type)
+	extra, locs, _, err := extractExtras(conf, site.Type)
 	if err != nil {
 		t.Fatal(err)
 	}

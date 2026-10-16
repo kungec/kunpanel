@@ -168,7 +168,8 @@ func fetchRemoteMeta(cr RemoteCred, w io.Writer) (metaRoot string, fp string, er
 		shQuote(strings.TrimPrefix(btRemoteRoot+"/panel/vhost/nginx", "/")) + " " +
 		shQuote(strings.TrimPrefix(btRemoteRoot+"/panel/vhost/rewrite", "/")) + " " +
 		shQuote(strings.TrimPrefix(btRemoteRoot+"/panel/vhost/cert", "/")) + " " +
-		shQuote(strings.TrimPrefix(btDBPath, "/")) + " 2>/dev/null || true"
+		shQuote(strings.TrimPrefix(btDBPath, "/")) + " " +
+		shQuote(strings.TrimPrefix(btCronDBNew, "/")) + " 2>/dev/null || true"
 	tgz := filepath.Join(tmp, "meta.tgz")
 	if err := streamRemoteFile(cl, meta, tgz, 120*time.Second); err != nil {
 		return "", actualFP, fmt.Errorf("拉取元数据失败: %v", err)
@@ -520,9 +521,12 @@ func RemoteApply(opts RemoteOptions, w io.Writer) error {
 			fmt.Fprintf(w, "   伪静态已迁移\n")
 		}
 		// 保真提取(include 重映射到元数据包;回环上游改指远程机)
-		if extra, locs, err := extractExtrasRemote(cf, site.Type, metaRoot, cr.Host); err == nil && strings.TrimSpace(extra) != "" {
+		extra, locs, _, err := extractExtrasRemote(cf, site.Type, metaRoot, cr.Host)
+		if err == nil && strings.TrimSpace(extra) != "" {
 			_ = websites.SetSiteRawExtra(siteID, extra)
+			_ = websites.RefreshSiteConf(siteID)
 			fmt.Fprintf(w, "   自定义配置已保留(%d 个 location/指令块)\n", locs)
+			// 远程迁移的反代回源远程机,不需要本地端口转发
 		}
 		// 证书导入绑定 + 异步重签接管续期
 		if site.SSL {

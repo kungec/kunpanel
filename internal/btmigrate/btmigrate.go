@@ -35,6 +35,7 @@ import (
 const (
 	btPanelDir  = "/www/server/panel"
 	btDBPath    = "/www/server/panel/data/default.db"
+	btCronDBNew = "/www/server/panel/data/db/crontab.db"
 	btVhostDir  = "/www/server/panel/vhost/nginx"
 	btRewrite   = "/www/server/panel/vhost/rewrite"
 	btCertDir   = "/www/server/panel/vhost/cert"
@@ -210,7 +211,7 @@ func Scan() (*ScanResult, error) {
 
 	// 数据库清单(default.db databases 表,错误透出不再静默)
 	if out, err := pythonJSON(fmt.Sprintf(
-		`import sqlite3,json;c=sqlite3.connect('%s');c.row_factory=sqlite3.Row;print(json.dumps([dict(r) for r in c.execute('select name,username as user,ps from databases')]))`, btDBPath)); err != nil {
+		`import sqlite3,json;c=sqlite3.connect('%s');c.row_factory=sqlite3.Row;print(json.dumps([dict(r) for r in c.execute('select name,username as user,ps from databases')]))`, cronDbPath())); err != nil {
 		res.Warnings = append(res.Warnings, "读取宝塔数据库清单失败(不影响站点迁移): "+err.Error())
 	} else {
 		var dbs []BtDB
@@ -231,7 +232,7 @@ func Scan() (*ScanResult, error) {
 		cols := map[string]bool{}
 		var colNames []string
 		if raw, err := pythonJSON(fmt.Sprintf(
-			`import sqlite3,json;c=sqlite3.connect('%s');print(json.dumps([r[1] for r in c.execute('PRAGMA table_info(crontab)')]))`, btDBPath)); err == nil {
+			`import sqlite3,json;c=sqlite3.connect('%s');print(json.dumps([r[1] for r in c.execute('PRAGMA table_info(crontab)')]))`, cronDbPath())); err == nil {
 			_ = json.Unmarshal([]byte(raw), &colNames)
 		}
 		for _, c := range colNames {
@@ -247,12 +248,10 @@ func Scan() (*ScanResult, error) {
 		if !cols["name"] {
 			return ""
 		}
-		statusFilter := ""
-		if cols["status"] {
-			statusFilter = " where status=0 or status is null"
-		}
-		return fmt.Sprintf(`import sqlite3,json;c=sqlite3.connect('%s');c.row_factory=sqlite3.Row;print(json.dumps([dict(r) for r in c.execute('select %s from crontab%s')]))`,
-			btDBPath, strings.Join(sel, ","), statusFilter)
+		// status 语义随宝塔版本漂移(旧 0=正常 / 11.x 1=启用),不过滤——
+		// 全量列出由向导勾选,避免语义猜错漏掉正在用的任务
+		return fmt.Sprintf(`import sqlite3,json;c=sqlite3.connect('%s');c.row_factory=sqlite3.Row;print(json.dumps([dict(r) for r in c.execute('select %s from crontab')]))`,
+			cronDbPath(), strings.Join(sel, ","))
 	}()
 	if cronSQL == "" {
 		res.Warnings = append(res.Warnings, "宝塔 crontab 表读取失败(无该表或 schema 异常),计划任务清单为空;站点迁移不受影响")
@@ -420,6 +419,8 @@ func Apply(opts ApplyOptions, w io.Writer, siteDone func(domain, siteID string))
 	// php-fpm pool 访问控制(allowed_clients + iptables 限源,防任意容器直连 FastCGI)
 	EnsurePoolSecurity(w)
 	// Nginx 容器挂载宝塔站点目录(phpfpm 站点 root 保持宿主机路径)
+	// websocket 变量全局定义(宝塔反代规则普遍引用 $connection_upgrade)
+	ensureWSMap(w)
 	if err := appstore.EnsureBtRootMount(w); err != nil {
 		return err
 	}
@@ -502,9 +503,14 @@ func Apply(opts ApplyOptions, w io.Writer, siteDone func(domain, siteID string))
 		}
 		importedSites = append(importedSites, ImportedSite{Domain: s.Domain, SiteID: siteID, SSL: s.SSL && s.CertName != ""})
 		// 自定义配置保真提取(反代子目录/websocket/自定义 location 等)
-		if extra, locs, err := extractExtras(s.Conf, s.Type); err == nil && strings.TrimSpace(extra) != "" {
+		extra, locs, xports, err := extractExtras(s.Conf, s.Type)
+		if err == nil && strings.TrimSpace(extra) != "" {
 			if err := saveExtras(siteID, extra); err == nil {
 				fmt.Fprintf(w, "   自定义配置已保留(%d 个 location/指令块)\n", locs)
+				// 反代子目录的所有回环上游端口一并注册端口转发
+				for _, pn := range xports {
+					RegisterProxyForward(w, pn)
+				}
 			} else {
 				fmt.Fprintf(w, "   自定义配置保存失败(%v),站点基础功能不受影响\n", err)
 			}
@@ -586,6 +592,15 @@ func findFPM(fpms []BtFPM, ver string) *BtFPM {
 		}
 	}
 	return nil
+}
+
+// cronDbPath 宝塔计划任务库路径:11.x 迁移至 data/db/crontab.db,旧版在
+// data/default.db——按存在性探测,避免读错空库漏掉全部任务
+func cronDbPath() string {
+	if _, err := os.Stat(btCronDBNew); err == nil {
+		return btCronDBNew
+	}
+	return btDBPath
 }
 
 // pythonJSON 用宝塔自带 pyenv python3 执行脚本并返回输出(schema 探测/读库统一入口)。
@@ -681,6 +696,43 @@ func parseBTCron(cr map[string]any) BtCron {
 		c.Cycle += "(无法自动迁移)"
 	}
 	return c
+}
+
+// ensureWSMap 确保面板 Nginx 全局存在 $connection_upgrade 的 map 定义。
+// 宝塔站点反代规则普遍引用该变量(其定义在宝塔全局 0.websocket.conf),
+// 面板镜像无此定义 → include 的规则迁入后 nginx -t 报未知变量。
+// 文件名 k 开头,conf.d 按字母序展开时先于 site_* 站点配置;幂等
+func ensureWSMap(w io.Writer) {
+	dst := "/opt/kunpanel/data/websites/conf.d/kunmap.conf"
+	if _, err := os.Stat(dst); err == nil {
+		return
+	}
+	_ = os.MkdirAll(filepath.Dir(dst), 0o755)
+	content := `# websocket 连接升级变量(由坤面板生成,供反代规则引用)
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+`
+	if err := util.AtomicWriteString(dst, content, 0o644); err == nil {
+		fmt.Fprintln(w, "   已生成 websocket 变量全局定义(conf.d/kunmap.conf)")
+	}
+}
+
+// (此前只注册"反代类型站点的主上游",内联反代子目录的端口全部漏掉)
+func registerExtraPorts(extra string, w io.Writer) {
+	if strings.TrimSpace(extra) == "" {
+		return
+	}
+	seen := map[int]bool{}
+	for _, m := range regexp.MustCompile(`127\.0\.0\.1:(\d{2,5})`).FindAllStringSubmatch(extra, -1) {
+		pn, err := strconv.Atoi(m[1])
+		if err != nil || pn < 1 || pn > 65535 || seen[pn] {
+			continue
+		}
+		seen[pn] = true
+		RegisterProxyForward(w, pn)
+	}
 }
 
 // btCronScript 宝塔 11.8.1 crontab 表无 sBody 时,从 /www/server/cron/<id>/

@@ -116,11 +116,12 @@ func acceptLoop(ln net.Listener, port int) {
 // StartProxyForwards 面板启动时恢复全部已登记的反代端口转发
 func StartProxyForwards(stop <-chan struct{}) {
 	go func() {
-		time.Sleep(20 * time.Second) // 等 docker/网关就绪
+		// 立即恢复:转发器监听网桥地址是本机操作,不依赖 docker daemon 就绪;
+		// 恢复越早,面板重启窗口内的反代 502 越短
 		select {
 		case <-stop:
 			return
-		default:
+		case <-time.After(2 * time.Second):
 		}
 		for _, port := range loadProxyPorts() {
 			registerQuiet(port)
@@ -144,6 +145,11 @@ func registerQuiet(port int) {
 	pfListeners[port] = ln
 	pfMu.Unlock()
 	go acceptLoop(ln, port)
-	_ = exec.Command("iptables", "-C", "INPUT", "-p", "tcp", "--dport",
-		strconv.Itoa(port), "-s", "172.16.0.0/12", "-j", "ACCEPT")
+	// iptables 规则不持久化:重启后必须重新插入(此前只检查不插入,防火墙拦截致 502)
+	if out, err := exec.Command("iptables", "-C", "INPUT", "-p", "tcp", "--dport",
+		strconv.Itoa(port), "-s", "172.16.0.0/12", "-j", "ACCEPT").CombinedOutput(); err != nil {
+		_, _ = exec.Command("iptables", "-I", "INPUT", "-p", "tcp", "--dport",
+			strconv.Itoa(port), "-s", "172.16.0.0/12", "-j", "ACCEPT").CombinedOutput()
+		_ = out
+	}
 }

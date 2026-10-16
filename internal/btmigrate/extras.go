@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,7 +27,7 @@ import (
 // fastcgi_pass/index/param 全族;此前 "ssl_session_\b" 因 _ 后必接字母
 // 永远匹配不上,一条都没过滤掉,与面板生成的重复致 nginx -t 整批失败
 var (
-	reDropDirective = regexp.MustCompile(`(?m)^\s*(listen|server_name|root|index|ssl_\w+|access_log|error_log|fastcgi_\w+)(\s|;).*$`)
+	reDropDirective = regexp.MustCompile(`(?m)^\s*(listen|server_name|root|index|ssl_\w+|access_log|error_log|fastcgi_\w+|proxy_cache_purge)(\s|;).*$`)
 	// 宝塔标记注释与内部 include(#SSL-START/#SSL-STOP/#REWRITE-END 等)
 	reBtMarkers = regexp.MustCompile(`(?m)^\s*#.*-(START|STOP|END).*$`)
 	// enable-php include:PHP 由面板 fastcgi 直连宝塔 php-fpm,不能重复
@@ -34,36 +35,42 @@ var (
 	// 伪静态 include:单独迁移到面板 rewrite
 	reIncludeRewrite = regexp.MustCompile(`(?m)^\s*include\s+/www/server/panel/vhost/rewrite/[^;]*;.*$`)
 
+	// 宝塔 well-known include:非通配、指向容器内不存在的文件,致命错误,剔除
+	reIncludeWellKnown = regexp.MustCompile(`(?m)^\s*include\s+[^;]*vhost/nginx/well-known/[^;]*;.*$`)
+	// 宝塔专有第三方模块指令(proxy_cache_purge):官方 nginx 镜像无此模块,保留必炸
+	reBtModuleDirective = regexp.MustCompile(`(?m)^\s*proxy_cache_purge\s.*$`)
 	// 面板已内置 ACME 挑战 location(^~ 优先),宝塔的同类块剔除避免重复
 	reAcmeLoc = regexp.MustCompile(`(?ms)^\s*location\s+[^\n]*acme-challenge[^\n]*\{[^}]*\}\s*$`)
-	// 宝塔反代子目录 include(解析时内联文件内容,容器内读不到宝塔路径)
-	reIncludeProxyDir = regexp.MustCompile(`(?m)^(\s*)include\s+(/www/server/panel/vhost/nginx/proxy/[^;]+);.*$`)
+	// 宝塔 vhost include(反代子目录 proxy/、well-known 等):解析时内联文件内容,
+	// 容器内读不到宝塔路径——凡 /www/server/panel 的 include 原样保留都会成为
+	// nginx -t 致命错误(include 不存在的文件),必须全部处理
+	reIncludeProxyDir = regexp.MustCompile(`(?m)^(\s*)include\s+(/www/server/panel/vhost/nginx/[^;]+);.*$`)
 	// 回环地址:面板 nginx 跑在容器里,127.0.0.1/localhost 是容器自己,必须改成宿主机网关
 	reLoopback = regexp.MustCompile(`(https?://)(127\.0\.0\.1|\[::1\]|localhost)([:\s;/]|$)`)
 )
 
 // extractExtras 从宝塔 vhost conf 提取保真额外配置(空串=没有需要保留的)。
 // siteType 用于区分:php 站点的宝塔 fastcgi location 整块剔除(面板自己生成)
-func extractExtras(confPath, siteType string) (string, int, error) {
+func extractExtras(confPath, siteType string) (string, int, []int, error) {
 	return extractExtrasAt(confPath, siteType, "", "")
 }
 
 // extractExtrasRemote 远程元数据包内的提取:宝塔 include 路径重映射到元数据包,
 // 回环上游(远程机的 127.0.0.1)改指远程机地址(DNS 切换前继续回源旧机)
-func extractExtrasRemote(confPath, siteType, metaRoot, remoteHost string) (string, int, error) {
+func extractExtrasRemote(confPath, siteType, metaRoot, remoteHost string) (string, int, []int, error) {
 	return extractExtrasAt(confPath, siteType, metaRoot, remoteHost)
 }
 
 // extractExtrasAt 提取核心:rootRemap 非空时,宝塔 include 的绝对路径前缀重映射
 // (远程元数据解压根);loopbackHost 非空时,回环地址改写为该主机而非本地网关
-func extractExtrasAt(confPath, siteType, rootRemap, loopbackHost string) (string, int, error) {
+func extractExtrasAt(confPath, siteType, rootRemap, loopbackHost string) (string, int, []int, error) {
 	b, err := os.ReadFile(confPath)
 	if err != nil {
-		return "", 0, err
+		return "", 0, nil, err
 	}
 	body := firstServerBlock(string(b))
 	if strings.TrimSpace(body) == "" {
-		return "", 0, nil
+		return "", 0, nil, nil
 	}
 
 	// 反代子目录 include → 内联文件内容(逐个文件再过滤一遍回环地址)
@@ -78,9 +85,11 @@ func extractExtrasAt(confPath, siteType, rootRemap, loopbackHost string) (string
 		}
 		files, _ := filepath.Glob(pattern)
 		if len(files) == 0 {
-			// 通配可能带具体 conf 路径
+			// 通配可能带具体 conf 路径;仍不存在(如 well-known 挑战目录)则整体剔除
 			if st, err := os.Stat(pattern); err == nil && !st.IsDir() {
 				files = []string{pattern}
+			} else {
+				return ""
 			}
 		}
 		var sb strings.Builder
@@ -119,6 +128,10 @@ func extractExtrasAt(confPath, siteType, rootRemap, loopbackHost string) (string
 			continue
 		case reIncludeRewrite.MatchString(ln):
 			continue
+		case reIncludeWellKnown.MatchString(ln):
+			continue
+		case reBtModuleDirective.MatchString(ln):
+			continue
 		case reAcmeLoc.MatchString(ln):
 			continue
 		}
@@ -128,7 +141,7 @@ func extractExtrasAt(confPath, siteType, rootRemap, loopbackHost string) (string
 	// 去掉剔除指令后留下的连续空行
 	extra = regexp.MustCompile(`\n{3,}`).ReplaceAllString(extra, "\n\n")
 	if strings.TrimSpace(extra) == "" {
-		return "", 0, nil
+		return "", 0, nil, nil
 	}
 	// 回环地址改写:同机迁移 → 宿主机网关;远程迁移 → 远程机地址(DNS 切换前回源旧机)
 	if loopbackHost != "" {
@@ -137,7 +150,23 @@ func extractExtrasAt(confPath, siteType, rootRemap, loopbackHost string) (string
 		extra = rewriteLoopback(extra)
 	}
 	locs := len(regexp.MustCompile(`(?m)^\s*location\s`).FindAllString(extra, -1))
-	return extra + "\n", locs, nil
+	// 收集全部回环上游端口(改写后为网桥地址),供端口转发器逐一注册
+	var ports []int
+	for _, m := range regexp.MustCompile(`:(\d{1,5})`).FindAllStringSubmatch(extra, -1) {
+		if pn, e := strconv.Atoi(m[1]); e == nil && pn > 0 && pn < 65536 {
+			dup := false
+			for _, have := range ports {
+				if have == pn {
+					dup = true
+					break
+				}
+			}
+			if !dup {
+				ports = append(ports, pn)
+			}
+		}
+	}
+	return extra + "\n", locs, ports, nil
 }
 
 // dropBlocks 删除文本中匹配谓词的花括号块(head=块首行,blk=完整块文本)

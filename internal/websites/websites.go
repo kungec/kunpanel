@@ -931,6 +931,27 @@ func GetRewrite(id string) (string, error) {
 	return string(b), nil
 }
 
+// RefreshSiteConf 按当前存储状态重写指定站点配置(不触发重载)。
+// 供批量迁移场景使用:extras/伪静态落盘后统一由调用方重载
+func RefreshSiteConf(id string) error {
+	mu.Lock()
+	load()
+	var site *Site
+	for i := range list {
+		if list[i].ID == id {
+			cp := list[i]
+			site = &cp
+			break
+		}
+	}
+	if site == nil {
+		mu.Unlock()
+		return fmt.Errorf("站点不存在")
+	}
+	mu.Unlock()
+	return writeConf(site)
+}
+
 // ExtraPath 站点原始额外配置文件路径(保真迁移用:自定义 location/include 等,
 // 原样注入生成的 server 块;与 rewrite 分离,避免面板重新生成时丢失)
 func ExtraPath(id string) string { return filepath.Join(extrasDir(), id+".conf") }

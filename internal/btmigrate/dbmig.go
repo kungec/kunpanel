@@ -35,7 +35,7 @@ type btDBAccount struct {
 // btDBList 读宝塔数据库清单(账号+备注)
 func btDBList() ([]btDBAccount, error) {
 	out, err := pythonJSON(fmt.Sprintf(
-		`import sqlite3,json;c=sqlite3.connect('%s');c.row_factory=sqlite3.Row;print(json.dumps([dict(r) for r in c.execute('select name,username,password,ps from databases')]))`, btDBPath))
+		`import sqlite3,json;c=sqlite3.connect('%s');c.row_factory=sqlite3.Row;print(json.dumps([dict(r) for r in c.execute('select name,username,password,ps from databases')]))`, cronDbPath()))
 	if err != nil {
 		return nil, err
 	}
@@ -49,7 +49,7 @@ func btDBList() ([]btDBAccount, error) {
 // btMySQLRoot 宝塔记录的 MySQL root 密码(config 表)
 func btMySQLRoot() string {
 	out, err := pythonJSON(fmt.Sprintf(
-		`import sqlite3,json;c=sqlite3.connect('%s');print(json.dumps([dict(r) for r in c.execute('select mysql_root from config limit 1')]))`, btDBPath))
+		`import sqlite3,json;c=sqlite3.connect('%s');print(json.dumps([dict(r) for r in c.execute('select mysql_root from config limit 1')]))`, cronDbPath()))
 	if err != nil {
 		return ""
 	}

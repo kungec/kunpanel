@@ -20,6 +20,30 @@
 实测:屏蔽 api.github.com / github.com 直连(模拟国内被墙)后,gh-proxy
 加速代理的 API 与 SHA256SUMS 均可达(200);海外直连链路回归测试正常。
 
+## [v2.71.8] - 2026-10-16
+
+### 修复(外部复审三轮:真实 15 站点迁移复测)
+
+1. **well-known 等非通配 include 未处理**:宝塔 vhost 里
+   `include /www/server/panel/vhost/nginx/well-known/<站点>.conf` 是具体文件
+   (非通配),容器内不存在该文件即 nginx -t 致命错误,11 个站直接报错——
+   现所有 /www/server/panel 的 include 统一处理(存在则内联,不存在则剔除)
+2. **proxy_cache_purge**:宝塔 nginx 额外编译的第三方模块指令,官方镜像无——
+   迁入时剔除
+3. **$connection_upgrade 变量**:定义在宝塔全局 0.websocket.conf 的 map 里,
+   面板没有——现自动生成全局定义(conf.d/kunmap.conf,幂等)
+4. **端口转发只覆盖主上游漏一半**:反代子目录内联后,所有 127.0.0.1 上游端口
+   一并自动注册转发(此前只注册反代类型站点的主上游)
+5. **服务器重启后反代全部 502**:恢复转发时 iptables 只建了命令没执行
+   (缺 .Run()),且用检查(-C)不是插入(-I);启动恢复延迟 20 秒期间也 502——
+   现启动 2 秒即恢复+规则不存在时真正插入
+6. **计划任务读错库**(复审者前次描述勘误):宝塔 11.x 计划任务库在
+   data/db/crontab.db(非 default.db),且 status=1 才是启用——现库路径
+   按存在性探测 + 不过滤 status(全量列出由向导勾选),避免漏掉在用任务
+
+实测:原生格式站点(含 well-known include/proxy_cache_purge/$connection_upgrade)
+迁移后 nginx -t 通过、extras 注入正确、端口转发监听生效。
+
 ## [v2.71.7] - 2026-10-16
 
 ### 修复(第十轮实测:防火墙规则增删整体失效)

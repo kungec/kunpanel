@@ -148,6 +148,8 @@ func Run(o Options) error {
 		// 宝塔迁移 php-fpm pool 访问控制刷新(容器 IP 可能变化;非宝塔环境自动跳过)
 		time.Sleep(5 * time.Second)
 		btmigrate.EnsurePoolSecurity(io.Discard)
+		// 同机迁移反代上游端口转发恢复(127.0.0.1 上游的容器可达性)
+		btmigrate.StartProxyForwards(stop)
 	}()
 
 	// 面板在线更新:定时检查 GitHub 新版本,发现即写消息中心

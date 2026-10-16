@@ -98,3 +98,62 @@ func TestExtractExtrasProxySite(t *testing.T) {
 		t.Errorf("保留 location 数 = %d, want 1", locs)
 	}
 }
+
+
+// 宝塔原生两行 server/{ 格式 + enable-php-00 纯静态 + ssl_session 指令
+const nativeBTConf = `server
+{
+    listen 80;
+    server_name native.test;
+    index index.php;
+    root /www/wwwroot/native.test;
+    #SSL-START
+    #SSL-STOP
+    include enable-php-00.conf;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
+    #PROXY-START
+    location /sub-store/ {
+        proxy_pass http://127.0.0.1:5000/;
+        proxy_set_header Host $host;
+    }
+    #PROXY-END
+    access_log /www/wwwlogs/native.test.log;
+}
+`
+
+// 宝塔原生格式:server 与 { 分两行、enable-php-00 纯静态、ssl_session_ 过滤、反代保留
+func TestExtractExtrasNativeFormat(t *testing.T) {
+	dir := t.TempDir()
+	conf := filepath.Join(dir, "native.test.conf")
+	if err := os.WriteFile(conf, []byte(nativeBTConf), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// 站点识别:enable-php-00 → 纯静态(不是 PHP 00)
+	site, err := parseSiteConf(conf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if site.Type == "php" || site.PhpVer != "" {
+		t.Errorf("enable-php-00 应视为纯静态,got type=%s php_ver=%s", site.Type, site.PhpVer)
+	}
+	extra, locs, err := extractExtras(conf, site.Type)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// ssl_session 指令必须被剔除(否则与面板生成的重复,nginx -t 失败)
+	if strings.Contains(extra, "ssl_session") {
+		t.Error("ssl_session_ 指令应被剔除")
+	}
+	// 反代子目录保留且回环改写为宿主机网关
+	if !strings.Contains(extra, "location /sub-store/") {
+		t.Error("反代子目录应保留")
+	}
+	if !strings.Contains(extra, "172.17.0.1:5000") || strings.Contains(extra, "127.0.0.1:5000") {
+		t.Error("反代上游应改写为宿主机网关")
+	}
+	if locs != 1 {
+		t.Errorf("保留 location 数 = %d, want 1", locs)
+	}
+	// firstServerBlock 支持两行格式本身已在上方隐式验证(能提取即通过)
+}

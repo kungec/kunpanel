@@ -77,6 +77,7 @@ type BtDB struct {
 
 // BtCron 宝塔计划任务
 type BtCron struct {
+	ID    string `json:"id,omitempty"` // 宝塔 crontab 表 id(spool 脚本目录 /www/server/cron/<id>/)
 	Name  string `json:"name"`
 	Shell string `json:"shell"`
 	Cycle string `json:"cycle"`
@@ -236,7 +237,7 @@ func Scan() (*ScanResult, error) {
 		for _, c := range colNames {
 			cols[c] = true
 		}
-		want := []string{"name", "type", "sType", "where1", "where_hour", "where_minute", "week", "sBody", "status"}
+		want := []string{"id", "name", "type", "sType", "where1", "where_hour", "where_minute", "week", "sBody", "status"}
 		var sel []string
 		for _, w := range want {
 			if cols[w] {
@@ -267,6 +268,20 @@ func Scan() (*ScanResult, error) {
 			} else {
 				for _, cr := range crons {
 					c := parseBTCron(cr)
+					if v := strOf(cr, "id"); v != "" {
+						c.ID = v
+					}
+					// 宝塔 11.8.1 的 crontab 表没有 sBody 列,命令存在
+					// /www/server/cron/<id>/ 的脚本文件里,读不出来会全部误判"无法迁移"
+					if strings.TrimSpace(c.Shell) == "" && c.ID != "" {
+						if script, serr := btCronScript(c.ID); serr == nil && script != "" {
+							c.Shell = script
+							c.Mig = c.Spec != ""
+							if c.Mig && strings.Contains(c.Cycle, "无法") {
+								c.Cycle = strings.ReplaceAll(c.Cycle, "(无法自动迁移)", "")
+							}
+						}
+					}
 					res.Crons = append(res.Crons, c)
 				}
 			}
@@ -315,8 +330,12 @@ func parseSiteConf(path string) (BtSite, error) {
 		site.CertName = strings.TrimSpace(filepath.Base(filepath.Dir(m[1])))
 	}
 	if m := rePHP.FindStringSubmatch(content); m != nil {
-		site.PhpVer = m[1]
-		site.Type = "php"
+		// enable-php-00 = 宝塔"纯静态,不启用 PHP"(00 不是版本号);
+		// 此前误判为 "PHP 00 版本",找不到该版本会被随机接到别的 PHP 池
+		if v := m[1]; v != "00" && v != "0" {
+			site.PhpVer = v
+			site.Type = "php"
+		}
 	}
 	if m := reProxy.FindStringSubmatch(content); m != nil && site.Type == "" {
 		site.Type = "proxy"
@@ -463,6 +482,12 @@ func Apply(opts ApplyOptions, w io.Writer, siteDone func(domain, siteID string))
 			proxyTo := rewriteLoopback(s.ProxyTo)
 			if proxyTo != s.ProxyTo {
 				fmt.Fprintf(w, "   反代目标已改写: %s → %s(容器内回环不可达宿主机)\n", s.ProxyTo, proxyTo)
+				// 上游服务多半只监听 127.0.0.1,启动端口转发器让容器可达
+				if m := regexp.MustCompile(`:(\d{1,5})`).FindStringSubmatch(s.ProxyTo); m != nil {
+					if p, perr := strconv.Atoi(m[1]); perr == nil {
+						RegisterProxyForward(w, p)
+					}
+				}
 			}
 			siteID, err = createProxySite(s.Domain, proxyTo, s.Port80())
 		default:
@@ -508,8 +533,10 @@ func Apply(opts ApplyOptions, w io.Writer, siteDone func(domain, siteID string))
 	}
 	_ = importedSites
 
-	// 3) 计划任务(迁移成功后注释宝塔原 crontab,防止同一任务跑两遍)
+	// 3) 计划任务(迁移成功后只注释"已迁移"的宝塔原 crontab 行,防止双跑;
+	// 没迁移的宝塔任务照常运行)
 	migratedCrons := 0
+	var migratedCronIDs []string
 	if opts.MigrateCron {
 		n := 0
 		for _, c := range res.Crons {
@@ -520,12 +547,13 @@ func Apply(opts ApplyOptions, w io.Writer, siteDone func(domain, siteID string))
 				fmt.Fprintf(w, "   计划任务[%s]迁移失败: %v\n", c.Name, err)
 				continue
 			}
+			migratedCronIDs = append(migratedCronIDs, c.ID)
 			n++
 		}
 		migratedCrons = n
 		fmt.Fprintf(w, ">> 计划任务已迁移 %d 条\n", n)
 		if n > 0 {
-			disableBTCron(w)
+			disableBTCron(w, migratedCronIDs)
 		}
 	}
 
@@ -655,10 +683,38 @@ func parseBTCron(cr map[string]any) BtCron {
 	return c
 }
 
+// btCronScript 宝塔 11.8.1 crontab 表无 sBody 时,从 /www/server/cron/<id>/
+// 读取任务脚本,返回可执行命令("bash <脚本路径>")
+func btCronScript(id string) (string, error) {
+	dir := filepath.Join("/www/server/cron", id)
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return "", err
+	}
+	var script string
+	for _, e := range ents {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sh") {
+			continue
+		}
+		script = filepath.Join(dir, e.Name())
+		break
+	}
+	if script == "" {
+		return "", fmt.Errorf("脚本不存在")
+	}
+	return "bash " + script, nil
+}
+
 // disableBTCron 迁移后注释宝塔原计划任务(/var/spool/cron/root 中引用
 // /www/server/cron/ 的行),防止同一任务面板与宝塔各跑一遍。
 // 注释保留原文,回滚(取消注释)即可恢复。
-func disableBTCron(w io.Writer) {
+func disableBTCron(w io.Writer, migratedIDs []string) {
+	// 只注释"已成功迁移"的任务:按 crontab 表 id 匹配 spool 行里的
+	// /www/server/cron/<id>/;没迁移的宝塔任务照常运行——此前一刀切
+	// 全部注释,把没迁移的任务也停了
+	if len(migratedIDs) == 0 {
+		return
+	}
 	for _, spool := range []string{"/var/spool/cron/root", "/var/spool/cron/crontabs/root"} {
 		b, err := os.ReadFile(spool)
 		if err != nil {
@@ -668,11 +724,20 @@ func disableBTCron(w io.Writer) {
 		changed := false
 		for _, ln := range strings.Split(string(b), "\n") {
 			if strings.Contains(ln, "/www/server/cron/") && !strings.HasPrefix(strings.TrimSpace(ln), "#") {
-				lines = append(lines, "#kunmig# "+ln)
-				changed = true
-			} else {
-				lines = append(lines, ln)
+				hit := false
+				for _, id := range migratedIDs {
+					if id != "" && strings.Contains(ln, "/www/server/cron/"+id+"/") {
+						hit = true
+						break
+					}
+				}
+				if hit {
+					lines = append(lines, "#kunmig# "+ln)
+					changed = true
+					continue
+				}
 			}
+			lines = append(lines, ln)
 		}
 		if changed {
 			if err := util.AtomicWrite(spool, []byte(strings.Join(lines, "\n")), 0o600); err == nil {

@@ -21,9 +21,12 @@ import (
 	"kunpanel/internal/websites"
 )
 
-// 面板自己会生成的指令 → 从提取内容里剔除,避免重复/冲突
+// 面板自己会生成的指令 → 从提取内容里剔除,避免重复/冲突。
+// \w+ 通配覆盖 ssl_certificate/session_cache/protocols/stapling 与
+// fastcgi_pass/index/param 全族;此前 "ssl_session_\b" 因 _ 后必接字母
+// 永远匹配不上,一条都没过滤掉,与面板生成的重复致 nginx -t 整批失败
 var (
-	reDropDirective = regexp.MustCompile(`(?m)^\s*(listen|server_name|root|index|ssl_certificate|ssl_certificate_key|ssl_protocols|ssl_ciphers|ssl_session_|ssl_stapling|access_log|error_log|fastcgi_pass|fastcgi_index|fastcgi_param)\b.*$`)
+	reDropDirective = regexp.MustCompile(`(?m)^\s*(listen|server_name|root|index|ssl_\w+|access_log|error_log|fastcgi_\w+)(\s|;).*$`)
 	// 宝塔标记注释与内部 include(#SSL-START/#SSL-STOP/#REWRITE-END 等)
 	reBtMarkers = regexp.MustCompile(`(?m)^\s*#.*-(START|STOP|END).*$`)
 	// enable-php include:PHP 由面板 fastcgi 直连宝塔 php-fpm,不能重复
@@ -173,9 +176,10 @@ func dropBlocks(text string, match func(head, blk string) bool) string {
 func firstServerBlock(content string) string {
 	start := strings.Index(content, "server")
 	for start >= 0 {
-		// 必须是 server 指令(而非 server_name)
+		// 必须是 server 指令(而非 server_name);宝塔原生格式 server 与 {
+		// 分两行写,必须连换行一起跳过(此前只跳空格制表符,一个站都解析不出)
 		rest := content[start+len("server"):]
-		trimmed := strings.TrimLeft(rest, " \t")
+		trimmed := strings.TrimLeft(rest, " \t\r\n")
 		if strings.HasPrefix(trimmed, "{") {
 			brace := strings.Index(trimmed, "{")
 			depth := 0

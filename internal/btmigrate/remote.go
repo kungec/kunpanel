@@ -217,9 +217,12 @@ func RemoteScan(cr RemoteCred) (*RemoteScanResult, error) {
 		rs.DirName = strings.TrimPrefix(rs.Root, "/")
 		// 类型:enable-php include → php;否则若 main conf 或宝塔反代子目录
 		// include 中存在 proxy_pass → proxy;再否则 static
+		// enable-php-00 = 宝塔"纯静态不启用 PHP",不是 PHP 00 版本
 		if m := reRemotePHPInclude.FindStringSubmatch(content); m != nil {
-			rs.Type = "php"
-			rs.PhpVer = m[1]
+			if v := m[1]; v != "00" && v != "0" {
+				rs.Type = "php"
+				rs.PhpVer = v
+			}
 		}
 		// 反代子目录 include 文件里找上游
 		proxyInclude := regexp.MustCompile(`include\s+([^;]*vhost/nginx/proxy/[^;]+);`)

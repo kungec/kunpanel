@@ -485,6 +485,14 @@ func Apply(opts ApplyOptions, w io.Writer, siteDone func(domain, siteID string))
 		}
 		if !reloaded[ver] {
 			reloadFpm(ver, fpm.Service)
+			// pool 可达性校验:以网关容器视角为准——fpm 的 allowed_clients 与
+			// KUNFPM 链只放行容器 IP,宿主机侧拨号会被拒,不能作为校验依据;
+			// 宝塔 php-fpm 未运行/reload 失败时容器内也连不上,该站 PHP 将 502
+			if err := waitPoolReachable(plan.Port, 8*time.Second); err != nil {
+				fmt.Fprintf(w, "   警告: PHP %s 进程池 %s:%d 不可达(%v),相关站点 PHP 请求将 502;请在宝塔启动 php-fpm 后重试迁移\n", ver, poolGateway, plan.Port, err)
+			} else {
+				fmt.Fprintf(w, "   PHP %s 进程池已就绪(%s:%d,容器内可达)\n", ver, poolGateway, plan.Port)
+			}
 			reloaded[ver] = true
 		}
 	}
@@ -578,6 +586,44 @@ func findFPM(fpms []BtFPM, ver string) *BtFPM {
 		}
 	}
 	return nil
+}
+
+// waitPoolListening 等待 fpm pool 端口在本机出现监听(reload 后 fpm 需要短暂
+// 时间;仅宿主机网关模式使用——容器网关场景请用 waitPoolReachable)
+func waitPoolListening(port int, timeout time.Duration) error {
+	addr := net.JoinHostPort(poolGateway, strconv.Itoa(port))
+	deadline := time.Now().Add(timeout)
+	for {
+		if conn, err := net.DialTimeout("tcp", addr, time.Second); err == nil {
+			conn.Close()
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("等待 %s 监听超时(fpm 未运行或 reload 失败)", addr)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// waitPoolReachable 以网关容器视角等待 pool 端口可连(KUNFPM 链与 fpm
+// allowed_clients 只放行容器 IP,宿主机侧拨号必然被拒,不能作为校验依据)。
+// 纯 TCP 探测即可:fpm 说的是 FastCGI,curl 首选失败后自然落到 bash 兜底。
+func waitPoolReachable(port int, timeout time.Duration) error {
+	mode := websites.DetectNginx()
+	if mode.Mode != "container" || mode.Target == "" {
+		return waitPoolListening(port, timeout) // 宿主机网关:本机直拨即为消费者视角
+	}
+	deadline := time.Now().Add(timeout)
+	probe := fmt.Sprintf(`timeout 2 bash -c "exec 3<>/dev/tcp/%s/%d" 2>/dev/null && echo POOL_OK`, poolGateway, port)
+	for {
+		if out, err := dockerx.ExecIn(mode.Target, "sh", "-c", probe); err == nil && strings.Contains(out, "POOL_OK") {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("网关容器内无法连通 %s:%d(php-fpm 未运行/reload 失败/allowed_clients 未含容器 IP)", poolGateway, port)
+		}
+		time.Sleep(700 * time.Millisecond)
+	}
 }
 
 // cronSelected 判断任务是否被勾选迁移(按 echo 匹配;无 echo 的老库回退任务名)
@@ -1258,8 +1304,24 @@ func restoreComposePorts(key, orig string, w io.Writer) error {
 	return nil
 }
 
-func appComposeDir(key string) string {
-	return filepath.Join("/opt/kunpanel/apps", key)
+// appComposeDir 网关应用的 compose 目录:容器名(kun-nginx)与安装 key(nginx)
+// 差一个前缀,且新版装在 /opt/kunpanel/apps、旧版在数据目录下——组合探测,
+// 按 compose 文件存在性返回第一个命中,老机器切换/回滚才不会落空
+func appComposeDir(container string) string {
+	keys := []string{container, strings.TrimPrefix(container, "kun-")}
+	var first string
+	for _, key := range keys {
+		for _, base := range []string{"/opt/kunpanel/apps", filepath.Join(util.DataDir(), "apps")} {
+			p := filepath.Join(base, key)
+			if first == "" {
+				first = p
+			}
+			if _, err := os.Stat(filepath.Join(p, "docker-compose.yml")); err == nil {
+				return p
+			}
+		}
+	}
+	return first
 }
 
 // httpProbe 用 --resolve 把域名指到本机探测状态码(不依赖 DNS 已切换;
@@ -1283,7 +1345,14 @@ func httpProbe(domain string, https bool) string {
 }
 
 // captureBaseline 切换前逐域名记录状态码(宝塔正在服务),切换后逐一比对。
-func captureBaseline(w io.Writer) map[string]probeResult {
+// 只比对宝塔认识的域名(btSites):面板原生站点(multi82 这类自建站)宝塔
+// 从未用同名 vhost 服务过,其"基线"是宝塔默认服务器的响应——部分迁移场景
+// 下与面板必然不一致,会把切换误判失败触发回滚。
+func captureBaseline(w io.Writer, btSites []BtSite) map[string]probeResult {
+	btDomains := map[string]BtSite{}
+	for _, s := range btSites {
+		btDomains[s.Domain] = s
+	}
 	base := map[string]probeResult{}
 	all, err := websites.List()
 	if err != nil {
@@ -1295,10 +1364,14 @@ func captureBaseline(w io.Writer) map[string]probeResult {
 			continue
 		}
 		d := strings.Fields(s.Domain)[0]
-		https := s.SslCertID != ""
+		bt, known := btDomains[d]
+		if !known {
+			continue
+		}
+		https := bt.SSL // 以宝塔侧是否 SSL 站决定探测协议,与切换前服务形态对齐
 		base[d] = probeResult{code: httpProbe(d, https), https: https}
 	}
-	fmt.Fprintf(w, ">> 已采集 %d 个域名的切换前状态码基线\n", len(base))
+	fmt.Fprintf(w, ">> 已采集 %d 个宝塔域名的切换前状态码基线\n", len(base))
 	return base
 }
 
@@ -1408,8 +1481,8 @@ func SwitchTraffic(w io.Writer) error {
 	if err != nil {
 		return err
 	}
-	// 0.5) 基线:切换前逐域名状态码(宝塔正在服务)
-	baseline := captureBaseline(w)
+	// 0.5) 基线:切换前逐域名状态码(宝塔正在服务;只比宝塔认识的域名)
+	baseline := captureBaseline(w, res.Sites)
 	// 刷新 php-fpm pool 访问控制(容器 IP 可能已变)
 	EnsurePoolSecurity(w)
 

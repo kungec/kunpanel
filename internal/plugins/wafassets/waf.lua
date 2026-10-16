@@ -446,14 +446,39 @@ local function cc_check(conf)
     local bucket = math.floor(ngx.now() / window)
     local key = ip .. "|" .. bucket
     local newval = dict:incr(key, 1, 0, window * 3)
+    local ccmode = conf.cc_mode or "rate"
+    if ccmode ~= "rate" then
+        -- 人机验证模式(宝塔式):选了模式即启用防护——未验证访客立即出挑战页,
+        -- 无需等到超限;通过后 Cookie 免验。阈值降级为"已验证访客"的频率上限,
+        -- 超限照样拒绝(保留对验证后仍在刷的脚本/浏览器的兜底)。
+        -- 豁免:ACME 签发路径(挑战页会卡死 Let's Encrypt HTTP 验证)、
+        --       非 GET/HEAD 请求(首访 POST 打成挑战页会弄坏登录表单/API;
+        --       它们仍计数,超限照 403,规则扫描照常)
+        if uri:find("/.well-known/acme-challenge/", 1, true) then return end
+        local method = ngx.req.get_method()
+        if method ~= "GET" and method ~= "HEAD" then return end
+        if cc_cookie_valid(conf) then
+            if newval and newval > limit then
+                write_log("cc", newval .. "/" .. window .. "s")
+                if conf.mode ~= "alert" then
+                    ngx.status = 403
+                    ngx.header.content_type = "text/plain"
+                    ngx.say("403 Too Many Requests")
+                    return ngx.exit(403)
+                end
+            end
+            return
+        end
+        if newval and newval > limit then
+            write_log("cc", newval .. "/" .. window .. "s")
+        end
+        if conf.mode == "alert" then return end -- 观察模式只记日志不拦截
+        return serve_challenge(conf, ccmode)
+    end
+    -- rate 限流模式:超阈值直接 403(原逻辑)
     if newval and newval > limit then
         write_log("cc", newval .. "/" .. window .. "s")
         if conf.mode == "alert" then return end
-        local ccmode = conf.cc_mode or "rate"
-        if ccmode ~= "rate" then
-            if cc_cookie_valid(conf) then return end
-            return serve_challenge(conf, ccmode)
-        end
         ngx.status = 403
         ngx.header.content_type = "text/plain"
         ngx.say("403 Too Many Requests")
@@ -461,33 +486,9 @@ local function cc_check(conf)
     end
 end
 
-local function url_rate_check(conf)
-dirscan_check(conf)
-method_whitelist_check(conf)
-cc_check(conf)
-    if not conf.cc_enable then return end
-    local dict = ngx.shared.kunwaf_cc
-    if not dict then return end
-    local window = tonumber(conf.cc_interval) or 10
-    local limit = tonumber(conf.cc_limit) or 120
-    local bucket = math.floor(ngx.now() / window)
-    local key = ip .. "|" .. bucket
-    local newval = dict:incr(key, 1, 0, window * 3)
-    if newval and newval > limit then
-        write_log("cc", newval .. "/" .. window .. "s")
-        if conf.mode == "alert" then return end
-        local ccmode = conf.cc_mode or "rate"
-        if ccmode ~= "rate" then
-            -- 人机验证模式:已验证(Cookie 有效)放行,否则出挑战页
-            if cc_cookie_valid(conf) then return end
-            return serve_challenge(conf, ccmode)
-        end
-        ngx.status = 403
-        ngx.header.content_type = "text/plain"
-        ngx.say("403 Too Many Requests")
-        return ngx.exit(403)
-    end
-end
+-- (曾经的第二个 url_rate_check 死副本已删除:它覆盖了上方真正的敏感路径
+--  限速实现,体内还内嵌旧版超限挑战逻辑,且自身从未被主流程调用——
+--  导致目录扫描/方法白名单/敏感路径限速三个检查全部从未执行)
 
 -- ============ 主流程 ============
 local conf = load_conf()
@@ -673,6 +674,13 @@ end
 if not spider_skip_cc then
     cc_check(conf)
 end
+
+-- 敏感路径限速 / 目录扫描防御 / HTTP 方法白名单。
+-- 此前三个检查从未被主流程调用(唯一的调用链在被同名定义覆盖的死副本里,
+-- 而该副本自身也无人调用)——界面配置齐全但引擎从未执行,现接回主流程
+url_rate_check(conf)
+dirscan_check(conf)
+method_whitelist_check(conf)
 
 -- 规则扫描
 local targets = {}

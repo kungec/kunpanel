@@ -3376,13 +3376,13 @@ PAGES.plugins = {
     var self = this;
     var st = this.st;
     var ccModes = [
-      { k: "rate", name: "限流拦截", desc: "超限直接返回 403,最简单直接" },
-      { k: "jump", name: "5 秒跳转", desc: "超限后展示 5 秒等待页,通过后放行;真人友好,机器无法通过" },
-      { k: "js", name: "JS 无感验证", desc: "浏览器自动完成验证,真人无感知,脚本工具无法通过" },
-      { k: "cf", name: "Cloudflare 风格", desc: "全屏 Verifying 动画页后无感放行,观感最接近 CDN 厂商,对脚本工具极不友好" },
-      { k: "click", name: "点击验证", desc: "需点击确认按钮后继续访问" },
-      { k: "captcha", name: "算术验证码", desc: "需输入算式答案,防护强度最高" },
-      { k: "slider", name: "滑块验证", desc: "按住滑块拖到最右侧完成验证,真人体验好,脚本难以模拟拖动轨迹" },
+      { k: "rate", name: "限流拦截", desc: "不做人机验证;同一 IP 超过阈值直接返回 403,最简单直接" },
+      { k: "jump", name: "5 秒跳转", desc: "首次访问展示 5 秒等待页,通过后免验放行;真人友好,机器无法通过" },
+      { k: "js", name: "JS 无感验证", desc: "首次访问浏览器自动完成验证,真人无感知,脚本工具无法通过" },
+      { k: "cf", name: "Cloudflare 风格", desc: "首次访问全屏 Verifying 动画页后无感放行,观感最接近 CDN 厂商,对脚本工具极不友好" },
+      { k: "click", name: "点击验证", desc: "首次访问需点击确认按钮后继续访问" },
+      { k: "captcha", name: "算术验证码", desc: "首次访问需输入算式答案,防护强度最高" },
+      { k: "slider", name: "滑块验证", desc: "首次访问按住滑块拖到最右侧完成验证,真人体验好,脚本难以模拟拖动轨迹" },
     ];
     var modeCards = ccModes.map(function(mo) {
       var on = (st.cc_mode || "rate") === mo.k;
@@ -3390,13 +3390,13 @@ PAGES.plugins = {
     }).join("");
     body.innerHTML =
       '<div class="waf-set-body">' +
-      '<div class="waf-set-sec"><div class="waf-sec-head">' + I("pulse") + 'CC 攻击防御<span class="settings-hint" style="margin:0 0 0 4px">同一 IP 在窗口期内请求超过阈值即触发</span></div>' +
+      '<div class="waf-set-sec"><div class="waf-sec-head">' + I("pulse") + 'CC 攻击防御<span class="settings-hint" style="margin:0 0 0 4px">限流模式超阈值即拒绝;人机验证模式选完即全站启用,首次访问先验证</span></div>' +
       '<div class="waf-params-row">' +
       '<label style="display:flex;align-items:center;gap:8px"><span class="switch' + (st.cc_enable ? " on" : "") + '" id="sw-cc"></span><span>启用</span></label>' +
       '<span class="waf-param">统计窗口 <input class="input" id="cc-interval" type="number" value="' + (st.cc_interval || 60) + '"> 秒</span>' +
-      '<span class="waf-param">请求阈值 <input class="input" id="cc-limit" type="number" value="' + (st.cc_limit || 120) + '"> 次<span class="settings-hint" style="margin:0">(建议 60-600)</span></span>' +
+      '<span class="waf-param">请求阈值 <input class="input" id="cc-limit" type="number" value="' + (st.cc_limit || 120) + '"> 次<span class="settings-hint" style="margin:0">(限流模式=触发上限;验证模式=已验证访客的频率上限,建议 60-600)</span></span>' +
       "</div></div>" +
-      '<div class="waf-set-sec"><div class="waf-sec-head">' + I("shield2") + '触发后的验证方式<span class="settings-hint" style="margin:0 0 0 4px">真人可完成、脚本工具被拦</span></div>' +
+      '<div class="waf-set-sec"><div class="waf-sec-head">' + I("shield2") + '触发后的验证方式<span class="settings-hint" style="margin:0 0 0 4px">选择人机验证模式后立即生效:首次访问先验证,通过后免验;真人可完成、脚本工具被拦</span></div>' +
       '<div class="waf-mode-grid cc-grid">' + modeCards + "</div>" +
       '<div class="waf-params-row" style="margin-top:14px"><span class="waf-param"><b>验证有效期</b> <input class="input" id="cc-ttl" type="number" value="' + Math.round((st.cc_clear_ttl || 3600) / 60) + '"> 分钟<span class="settings-hint" style="margin:0">(通过验证后该 IP 在此期限内免验证)</span></span></div></div>' +
       '<div class="waf-set-sec"><div class="waf-sec-head">' + I("stop") + 'IP 临时封禁<span class="settings-hint" style="margin:0 0 0 4px">触发 CC 或多次命中规则后临时封禁该 IP</span></div>' +

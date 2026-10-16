@@ -3,13 +3,13 @@
 package plugins
 
 import (
-	"net"
 	"crypto/rand"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -20,8 +20,8 @@ import (
 
 	"kunpanel/internal/appstore"
 	"kunpanel/internal/config"
-	"kunpanel/internal/websites"
 	"kunpanel/internal/util"
+	"kunpanel/internal/websites"
 )
 
 //go:embed wafassets/waf.lua wafassets/kunwaf.conf
@@ -62,17 +62,38 @@ func Init() {
 
 // syncWafLua 升级同步:面板二进制内嵌的 waf.lua 比磁盘新(或内容不同)时自动覆盖,
 // 保证 WAF 引擎随面板升级(旧部署的 waf.lua 不会停留在旧版本)。
+// 同时自愈 http 级片段:conf.d 里的 kunwaf.conf 一旦丢失(被清理/误删),
+// lua_shared_dict 缺失 → CC 计数/自动封禁的 dict 为 nil → 全部检查静默失效,
+// 且没有任何报错。WAF 已安装(引擎文件在)时启动即按内嵌内容补齐;
+// 内容有实际变化时顺手 reload 网关使其生效。
 func syncWafLua() {
 	dst := filepath.Join(wafDir(), "waf.lua")
 	b, err := assets.ReadFile("wafassets/waf.lua")
 	if err != nil {
 		return
 	}
+	healed := false
+	if _, e := os.Stat(dst); e == nil {
+		if sb, e2 := assets.ReadFile("wafassets/kunwaf.conf"); e2 == nil {
+			if old, e3 := os.ReadFile(wafConfSnippet()); e3 != nil || string(old) != string(sb) {
+				_ = os.MkdirAll(filepath.Dir(wafConfSnippet()), 0o755)
+				if werr := os.WriteFile(wafConfSnippet(), sb, 0o644); werr == nil {
+					healed = true
+				}
+			}
+		}
+	}
 	if old, e := os.ReadFile(dst); e == nil && string(old) == string(b) {
+		if healed {
+			_ = websites.Reload() // 片段是 http 级指令,必须重载才生效
+		}
 		return
 	}
 	_ = os.MkdirAll(wafDir(), 0o755)
 	_ = os.WriteFile(dst, b, 0o644)
+	if healed {
+		_ = websites.Reload()
+	}
 }
 
 // List 插件列表
@@ -117,8 +138,8 @@ type WafSettings struct {
 	UaBlack        []string        `json:"ua_black"`
 	RuleGroups     map[string]bool `json:"rule_groups"`
 	// 蜘蛛白名单:启用的搜索引擎爬虫完全跳过检测(CC 验证也不会拦)
-	SpiderWhiteEnable bool      `json:"spider_white_enable"`
-	SpiderWhite       []string  `json:"spider_white"`
+	SpiderWhiteEnable bool     `json:"spider_white_enable"`
+	SpiderWhite       []string `json:"spider_white"`
 	// SpiderVerifyDNS 严格模式:UA 命中蜘蛛白名单后,再做反向 DNS + 正向确认,
 	// 防止攻击者伪造 Googlebot UA 整体绕过 WAF(第三轮审计遗留建议)。默认关闭。
 	SpiderVerifyDNS bool `json:"spider_verify_dns"`
@@ -186,8 +207,8 @@ func defaultRules() map[string][]string {
 			`('|%27)\s*(or|and)\s*['\d=]`,
 			`(or|and)\s+\d+\s*=\s*\d+`,
 			`information_schema`,
-			`/\*!`,                    // MySQL 内联注释(/*!50000union*/ 类绕过)
-			`\(\s*select`,             // 子查询注入
+			`/\*!`,        // MySQL 内联注释(/*!50000union*/ 类绕过)
+			`\(\s*select`, // 子查询注入
 			`(or|and)\s+(substring|ascii|ord|mid|left|right|hex|if|elt)\s*\(`, // 盲注提取函数
 			`sleep\s*\(`,
 			`waitfor\s+delay`,
@@ -259,11 +280,11 @@ func defaultRules() map[string][]string {
 func defaultWafConfig() *wafConfigFile {
 	return &wafConfigFile{
 		WafSettings: WafSettings{
-			Enabled:           true,
-			Mode:              "block",
-			CcEnable:          true,
-			CcLimit:           120,
-			CcInterval:        10,
+			Enabled:    true,
+			Mode:       "block",
+			CcEnable:   true,
+			CcLimit:    120,
+			CcInterval: 10,
 			// 蜘蛛白名单默认关闭:伪造 Googlebot UA 可豁免 CC;确需开启请在
 			// 设置里同时打开「反向 DNS 验证」(规则扫描与封禁不受白名单豁免)
 			SpiderWhiteEnable: false,
@@ -354,30 +375,30 @@ func loadWafConfig() *wafConfigFile {
 				c.SpiderWhiteEnable = true
 				migrated = true
 			}
-		if c.MethodBlockList == nil {
-			c.MethodBlockList = def.MethodBlockList
-			c.MethodBlockEnable = true
-			migrated = true
-		}
-		// 数值缺省迁移(第六轮):目录扫描/自动封禁阈值。
-		// lua 端 tonumber(0) 为 0 而非 nil,`or 默认值` 不会触发:
-		// threshold=0 会让目录扫描判定恒真(首个 URI 即封)、封禁阈值恒真
-		if c.DirscanThreshold <= 0 {
-			c.DirscanThreshold = 30
-			migrated = true
-		}
-		if c.DirscanWindow <= 0 {
-			c.DirscanWindow = 60
-			migrated = true
-		}
-		if c.AutoBanThreshold <= 0 {
-			c.AutoBanThreshold = 50
-			migrated = true
-		}
-		if c.CcClearTTL <= 0 {
-			c.CcClearTTL = 3600
-			migrated = true
-		}
+			if c.MethodBlockList == nil {
+				c.MethodBlockList = def.MethodBlockList
+				c.MethodBlockEnable = true
+				migrated = true
+			}
+			// 数值缺省迁移(第六轮):目录扫描/自动封禁阈值。
+			// lua 端 tonumber(0) 为 0 而非 nil,`or 默认值` 不会触发:
+			// threshold=0 会让目录扫描判定恒真(首个 URI 即封)、封禁阈值恒真
+			if c.DirscanThreshold <= 0 {
+				c.DirscanThreshold = 30
+				migrated = true
+			}
+			if c.DirscanWindow <= 0 {
+				c.DirscanWindow = 60
+				migrated = true
+			}
+			if c.AutoBanThreshold <= 0 {
+				c.AutoBanThreshold = 50
+				migrated = true
+			}
+			if c.CcClearTTL <= 0 {
+				c.CcClearTTL = 3600
+				migrated = true
+			}
 			if migrated {
 				_ = saveWafConfig(&c)
 			}
@@ -964,11 +985,11 @@ func AutoBlacklistRun(threshold int) (added []string, list []string) {
 
 // WafDigest 24 小时威胁摘要(供消息中心每日推送)
 type WafDigest struct {
-	Total    int               `json:"total"`
-	ByRule   map[string]int    `json:"by_rule"`
-	TopIP    string            `json:"top_ip"`
-	TopIPCnt int               `json:"top_ip_cnt"`
-	Sites    map[string]int    `json:"sites"`
+	Total    int            `json:"total"`
+	ByRule   map[string]int `json:"by_rule"`
+	TopIP    string         `json:"top_ip"`
+	TopIPCnt int            `json:"top_ip_cnt"`
+	Sites    map[string]int `json:"sites"`
 }
 
 // WafDailyDigest 汇总最近 24 小时的拦截记录

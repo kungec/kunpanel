@@ -7,8 +7,8 @@ package plugins
 
 import (
 	"fmt"
-	"sync"
 	"strings"
+	"sync"
 	"time"
 
 	"kunpanel/internal/dockerx"

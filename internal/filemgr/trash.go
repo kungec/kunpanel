@@ -37,7 +37,8 @@ func ToTrash(path string) (*TrashItem, error) {
 	if err != nil {
 		return nil, err
 	}
-	_ = os.MkdirAll(TrashDir(), 0o755)
+	// 0700:回收站存放的是用户"删掉的"文件,不能让本机其他用户列目录读取
+	_ = os.MkdirAll(TrashDir(), 0o700)
 	id := fmt.Sprintf("%d_%s", time.Now().UnixNano(), sanitizeName(filepath.Base(path)))
 	dst := filepath.Join(TrashDir(), id)
 	if err := os.Rename(path, dst); err != nil {

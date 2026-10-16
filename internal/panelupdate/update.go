@@ -73,9 +73,13 @@ type release struct {
 
 // Check 拉取 GitHub 最新 release 并与当前版本比较
 func Check() (*Info, error) {
+	// 检查更新:直连 GitHub API,失败回退 gh-proxy(国内服务器直连常被重置)
 	b, err := fetchJSON("https://api.github.com/repos/"+Repo+"/releases/latest", 6*time.Second)
 	if err != nil {
-		return nil, fmt.Errorf("连接 GitHub 失败: %v", err)
+		b, err = fetchJSON("https://gh-proxy.com/https://api.github.com/repos/"+Repo+"/releases/latest", 10*time.Second)
+		if err != nil {
+			return nil, fmt.Errorf("连接 GitHub 失败(直连与加速代理均不可用): %v", err)
+		}
 	}
 	var r release
 	if err := jsonUnmarshal(b, &r); err != nil {
@@ -169,10 +173,11 @@ func Semver(v string) ([3]int, bool) {
 
 // ---------- 下载与安装 ----------
 
-// checksumsURL 校验和清单固定从 GitHub 官方直连获取(不经过加速代理),
-// 代理链路被篡改时哈希对不上即中止升级
-func checksumsURL(tag string) string {
-	return "https://github.com/kungec/kunpanel/releases/download/" + tag + "/SHA256SUMS"
+// checksumsURL 校验和清单获取地址:直连 GitHub 优先,失败回退 gh-proxy
+// (经代理的校验和只能防传输损坏,供应链信任弱于直连——响应中会标记来源)
+func checksumsURLs(tag string) []string {
+	u := "https://github.com/kungec/kunpanel/releases/download/" + tag + "/SHA256SUMS"
+	return []string{u, "https://gh-proxy.com/" + u}
 }
 
 // expectedHash 从 SHA256SUMS 里取目标资产的哈希(行格式:<hash>  ./<name> 或 <hash>  <name>)
@@ -284,14 +289,32 @@ func Apply(tag string, w io.Writer) error {
 		wantAsset = fmt.Sprintf("kunpanel_%s_windows_amd64.zip", tag)
 	}
 	fmt.Fprintln(w, "校验安装包完整性(SHA-256)...")
-	if sums, err := directGet(checksumsURL(tag)); err != nil {
-		return fmt.Errorf("获取官方校验和失败,已中止升级(不走代理,请检查网络): %v", err)
-	} else if want := expectedHash(sums, wantAsset); want == "" {
+	// 校验和清单:依次尝试直连 GitHub 与 gh-proxy。直连成功=完整供应链信任;
+	// 仅代理可用时仍校验(防传输损坏),但提示信任来源为代理
+	var sums string
+	var sumErr error
+	sumVia := "直连 GitHub"
+	for i, u := range checksumsURLs(tag) {
+		if i > 0 {
+			sumVia = "gh-proxy 加速代理"
+		}
+		sums, sumErr = directGet(u)
+		if sumErr == nil {
+			break
+		}
+	}
+	if sumErr != nil {
+		return fmt.Errorf("获取官方校验和失败(直连与代理均不可用),已中止升级: %v", sumErr)
+	}
+	if want := expectedHash(sums, wantAsset); want == "" {
 		return fmt.Errorf("官方校验和中没有 %s 的记录,已中止升级", wantAsset)
 	} else if got, err := fileHash(archive); err != nil {
 		return fmt.Errorf("计算安装包哈希失败: %v", err)
 	} else if got != want {
 		return fmt.Errorf("安装包校验失败(期望 %s... 实际 %s...),已中止升级:发布链路可能被篡改", want[:12], got[:12])
+	}
+	if sumVia != "直连 GitHub" {
+		fmt.Fprintln(w, "注意: 校验和经加速代理获取(仅防传输损坏,供应链信任弱于直连)")
 	}
 	fmt.Fprintln(w, "校验通过")
 

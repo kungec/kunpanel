@@ -150,6 +150,8 @@ func Run(o Options) error {
 		btmigrate.EnsurePoolSecurity(io.Discard)
 		// 同机迁移反代上游端口转发恢复(127.0.0.1 上游的容器可达性)
 		btmigrate.StartProxyForwards(stop)
+		// 服务列表预热:systemctl list-units 要 2.4s,别让重启后第一个访问者付全价
+		_, _ = system.ListServicesCached()
 	}()
 
 	// 面板在线更新:定时检查 GitHub 新版本,发现即写消息中心

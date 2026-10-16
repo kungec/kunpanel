@@ -1694,13 +1694,18 @@ PAGES.apps = {
         // WAF 状态只取一次:nginx 升级会换掉 Lua 定制镜像,需要提醒
         var wafOn = false;
         try { var wf = await api("/waf"); wafOn = !!((wf.settings || wf).enabled); } catch (e) {}
-        for (var i = 0; i < instances.length; i++) {
-          var r = instances[i];
+        // 并行拉取各实例的 Hub 标签(此前串行,4 个实例要串 4 次外网请求)
+        var checks = instances.map(function(r) {
           var badge = body.querySelector('[data-upd-badge="' + r.key + '"]');
-          if (!badge) continue;
+          if (!badge) return null;
           var base = /^php[0-9]*$/.test(r.key) ? "php" : r.key;
-          var tags = [];
-          try { tags = (await api("/apps/hub-tags?key=" + encodeURIComponent(base))) || []; } catch (e) {}
+          return api("/apps/hub-tags?key=" + encodeURIComponent(base))
+            .then(function(tags) { return { r: r, badge: badge, tags: tags || [] }; })
+            .catch(function() { return { r: r, badge: badge, tags: [] }; });
+        }).filter(Boolean);
+        var results = await Promise.all(checks);
+        for (var i = 0; i < results.length; i++) {
+          var r = results[i].r, badge = results[i].badge, tags = results[i].tags;
           var cur = (r.params && r.params.Version) || "";
           if (!tags.length || !cur) { badge.innerHTML = ""; continue; }
           var rolling = /^(latest|edge|alpine|stable|slim.*|bookworm|bullseye)$/i.test(cur);

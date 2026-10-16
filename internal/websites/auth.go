@@ -170,7 +170,17 @@ func SetSiteHotlink(id string, enabled bool, allow string) error {
 // 静态资源请求 Referer 不在白名单时返回 403(set+if 组合兼容所有 nginx 版本)
 func hotlinkConfLines(s *Site) string {
 	refs := "none blocked server_names"
+	// valid_referers 的 server_names 参数会展开本 server 块的全部域名;
+	// 若 allow 里再显式列出站点自己的域名,哈希插入同键会报
+	// conflicting parameter,nginx -t 直接失败——跳过与本站域名相同的条目
+	own := map[string]bool{}
+	for _, d := range strings.Fields(s.Domain) {
+		own[strings.ToLower(d)] = true
+	}
 	for _, d := range strings.Fields(s.HotlinkAllow) {
+		if own[strings.ToLower(d)] {
+			continue
+		}
 		refs += " *." + d + " " + d
 	}
 	return fmt.Sprintf(`    # 防盗链(由坤面板生成)

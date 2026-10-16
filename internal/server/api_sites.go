@@ -30,16 +30,17 @@ func (s *Server) handleSiteUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ProxyTo string `json:"proxy_to"`
-		Remark  string `json:"remark"`
-		PhpKey  string `json:"php_key"` // PHP 站点:切换 PHP 实例(多版本)
-		Port    int    `json:"port"`
+		ProxyTo   string `json:"proxy_to"`
+		ProxyHost string `json:"proxy_host"` // 发往上游的 Host 头(空 = $http_host)
+		Remark    string `json:"remark"`
+		PhpKey    string `json:"php_key"` // PHP 站点:切换 PHP 实例(多版本)
+		Port      int    `json:"port"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		Fail(w, http.StatusBadRequest, "参数错误")
 		return
 	}
-	if err := websites.UpdateSite(id, req.ProxyTo, req.Remark, req.Port); err != nil {
+	if err := websites.UpdateSiteEx(id, req.ProxyTo, req.Remark, req.Port, req.ProxyHost); err != nil {
 		Fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -57,10 +58,44 @@ func (s *Server) handleSiteUpdate(w http.ResponseWriter, r *http.Request) {
 	OK(w, site)
 }
 
+// handleSiteSetType 站点类型互转(static / proxy / php)
+func (s *Server) handleSiteSetType(w http.ResponseWriter, r *http.Request) {
+	id, ok := safeID(r.PathValue("id"))
+	if !ok {
+		Fail(w, http.StatusBadRequest, "非法站点 ID")
+		return
+	}
+	var req struct {
+		Type      string `json:"type"`       // 目标类型:static / proxy / php
+		Target    string `json:"target"`     // proxy:反代目标
+		PhpKey    string `json:"php_key"`    // php:PHP 实例键
+		ProxyHost string `json:"proxy_host"` // 发送域名(空 = $http_host)
+	}
+	if err := readJSON(r, &req); err != nil {
+		Fail(w, http.StatusBadRequest, "参数错误")
+		return
+	}
+	if err := websites.SetSiteType(id, req.Type, req.Target, req.PhpKey, req.ProxyHost); err != nil {
+		Fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// 转为容器 PHP 类型时,确保 PHP 运行时挂载了站点根目录
+	if req.Type == "php" {
+		_ = appstore.EnsurePhpMounts(nil)
+	}
+	site, err := websites.GetSite(id)
+	if err != nil {
+		Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	OK(w, site)
+}
+
 type siteAddReq struct {
 	Domain     string `json:"domain"`
 	Type       string `json:"type"`
 	ProxyTo    string `json:"proxy_to"`
+	ProxyHost  string `json:"proxy_host"` // 发往上游的 Host 头(空 = $http_host)
 	Port       int    `json:"port"`
 	Remark     string `json:"remark"`
 	RootDir    string `json:"root_dir"`
@@ -77,7 +112,7 @@ func (s *Server) handleSiteAdd(w http.ResponseWriter, r *http.Request) {
 	}
 	site, err := websites.Create(websites.CreateOpts{
 		Domain: req.Domain, SiteType: req.Type, ProxyTo: req.ProxyTo,
-		RootDir: req.RootDir, Remark: req.Remark, Port: req.Port, PhpKey: req.PhpKey,
+		ProxyHost: req.ProxyHost, RootDir: req.RootDir, Remark: req.Remark, Port: req.Port, PhpKey: req.PhpKey,
 	})
 	if err != nil {
 		Fail(w, http.StatusBadRequest, err.Error())

@@ -797,6 +797,14 @@ func Install(key string, params map[string]string) (string, error) {
 			return "", err
 		}
 		key = instKey
+	} else {
+		// 非 PHP 应用:已安装即返回明确错误。重复安装会覆盖 compose 并与
+		// 运行中的容器撞名/撞端口,任务只报"compose up -d 失败"让用户一头雾水
+		for _, it := range loadInstances() {
+			if it.Key == key {
+				return "", fmt.Errorf("%s 已安装(运行中可在列表里管理)。如需更改参数请先卸载再安装", tpl.Name)
+			}
+		}
 	}
 
 	dir := filepath.Join(dataRoot(), key)
@@ -1031,21 +1039,29 @@ func Apply(key, action string, w io.Writer) error {
 	if _, err := os.Stat(filepath.Join(dir, "docker-compose.yml")); err != nil {
 		return fmt.Errorf("实例不存在或未安装")
 	}
-	// 任务日志模式:输出实时流式写入,安装/拉取进度全程可见
+	// 任务日志模式:输出实时流式写入,安装/拉取进度全程可见;
+	// tailWriter 保留输出尾部,失败时把 docker 的真实原因带进错误信息
+	var dst io.Writer = w
+	tw := &tailWriter{w: w}
+	if w != nil {
+		dst = tw
+	}
 	if w != nil {
 		if strings.HasPrefix(action, "up") {
 			fmt.Fprintln(w, "[1/2] 拉取镜像(首次可能需要数分钟)...")
-			if err := dockerx.ComposeStream(dir, w, "pull"); err != nil {
+			if err := dockerx.ComposeStream(dir, dst, "pull"); err != nil {
 				fmt.Fprintln(w, "镜像拉取出现问题(本地可能已有镜像),继续尝试启动 ...")
 			}
 			fmt.Fprintln(w, "[2/2] 创建并启动容器 ...")
 		}
-		if err := dockerx.ComposeStream(dir, w, strings.Fields(action)...); err != nil {
+		if err := dockerx.ComposeStream(dir, dst, strings.Fields(action)...); err != nil {
 			fmt.Fprintln(w, "启动出现问题,尝试自动修复 compose 后重试 ...")
 			if rerr := ReRenderCompose(key); rerr == nil {
-				return dockerx.ComposeStream(dir, w, strings.Fields(action)...)
+				if err := dockerx.ComposeStream(dir, dst, strings.Fields(action)...); err == nil {
+					return nil
+				}
 			}
-			return fmt.Errorf("compose %s 失败", action)
+			return fmt.Errorf("compose %s 失败: %s", action, tw.tail(300))
 		}
 		fmt.Fprintln(w, "完成。")
 		return nil
@@ -1419,4 +1435,28 @@ func EnsureBtRootMount(w io.Writer) error {
 		return fmt.Errorf("挂载宝塔站点目录失败: %s", anyErr)
 	}
 	return nil
+}
+// tailWriter 透传写入并保留尾部若干字节,失败时把 compose 的真实报错带进任务错误
+type tailWriter struct {
+	w   io.Writer
+	buf []byte
+}
+
+func (t *tailWriter) Write(p []byte) (int, error) {
+	t.buf = append(t.buf, p...)
+	if len(t.buf) > 4096 {
+		t.buf = t.buf[len(t.buf)-2048:]
+	}
+	if t.w == nil {
+		return len(p), nil
+	}
+	return t.w.Write(p)
+}
+
+func (t *tailWriter) tail(n int) string {
+	s := strings.TrimSpace(string(t.buf))
+	if len(s) <= n {
+		return s
+	}
+	return s[len(s)-n:]
 }

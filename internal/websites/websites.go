@@ -50,11 +50,14 @@ type Site struct {
 	ID          string `json:"id"`
 	Domain      string `json:"domain"` // 多个用空格分隔
 	Alias       string `json:"alias"`
-	Type        string `json:"type"` // static / proxy
+	Type        string `json:"type"` // static / php / phpfpm / proxy
 	Root        string `json:"root"`
 	ProxyTo     string `json:"proxy_to"`
-	Port        int    `json:"port"` // 监听端口,默认 80
-	Enabled     bool   `json:"enabled"`
+	// 反代/PHP 站点发送给上游的 Host 头:空 = $http_host(默认),
+	// 可自定义域名或变量(如 api.example.com、$host)
+	ProxyHost  string `json:"proxy_host,omitempty"`
+	Port       int    `json:"port"` // 监听端口,默认 80
+	Enabled    bool   `json:"enabled"`
 	SslCertID   string `json:"ssl_cert_id"`  // 绑定的证书 ID,空 = 未启用 HTTPS
 	SslRedirect bool   `json:"ssl_redirect"` // HTTP 强制跳转 HTTPS
 	AuthEnabled bool   `json:"auth_enabled"` // 密码访问(HTTP Basic Auth)
@@ -222,14 +225,15 @@ func List() ([]Site, error) {
 
 // CreateOpts 创建站点参数
 type CreateOpts struct {
-	Domain   string
-	SiteType string // static / php / phpfpm / proxy
-	ProxyTo  string // proxy 类型必填
-	RootDir  string // 可选:自定义根目录(默认自动生成)
-	Remark   string
-	Port     int
-	PhpKey   string // php 类型:PHP 实例键(php/php82...;空=默认)
-	FpmPass  string // phpfpm 类型:fastcgi 上游(如 172.17.0.1:9072)
+	Domain    string
+	SiteType  string // static / php / phpfpm / proxy
+	ProxyTo   string // proxy 类型必填
+	ProxyHost string // 可选:发往上游的 Host 头(空 = $http_host)
+	RootDir   string // 可选:自定义根目录(默认自动生成)
+	Remark    string
+	Port      int
+	PhpKey    string // php 类型:PHP 实例键(php/php82...;空=默认)
+	FpmPass   string // phpfpm 类型:fastcgi 上游(如 172.17.0.1:9072)
 }
 
 // Add 新建站点(兼容旧签名)
@@ -282,6 +286,7 @@ func Create(o CreateOpts) (*Site, error) {
 	}
 	if o.SiteType == "proxy" {
 		s.ProxyTo = strings.TrimSpace(o.ProxyTo)
+		s.ProxyHost = SanitizeProxyHost(o.ProxyHost)
 	}
 	// 自定义根目录(仅 static/php;需绝对路径且不与系统目录冲突)
 	if rd := strings.TrimSpace(o.RootDir); rd != "" && o.SiteType != "proxy" {
@@ -502,8 +507,13 @@ func DeleteMany(ids []string) (int, error) {
 	return len(removed), Reload()
 }
 
-// UpdateSite 编辑站点(代理目标 / 端口 / 备注)
+// UpdateSite 编辑站点(代理目标 / 端口 / 备注 / 发送域名)
 func UpdateSite(id, proxyTo, remark string, port int) error {
+	return UpdateSiteEx(id, proxyTo, remark, port, "")
+}
+
+// UpdateSiteEx 同 UpdateSite,额外支持自定义发送域名 Host(空 = 默认 $http_host)
+func UpdateSiteEx(id, proxyTo, remark string, port int, proxyHost string) error {
 	mu.Lock()
 	load()
 	var site *Site
@@ -538,11 +548,90 @@ func UpdateSite(id, proxyTo, remark string, port int) error {
 	site.ProxyTo = strings.TrimSpace(proxyTo)
 	site.Remark = remark
 	site.Port = port
+	site.ProxyHost = SanitizeProxyHost(proxyHost)
 	if err := save(); err != nil {
 		mu.Unlock()
 		return err
 	}
 	cp := *site // 解锁后写 conf 用副本
+	mu.Unlock()
+	if err := writeConf(&cp); err != nil {
+		return err
+	}
+	return Reload()
+}
+
+// proxyHostHeader 反代/PHP 站点发往上游的 Host 头:自定义值优先,默认 $http_host
+func proxyHostHeader(s *Site) string {
+	if h := SanitizeProxyHost(s.ProxyHost); h != "" {
+		return h
+	}
+	return "$http_host"
+}
+
+// SanitizeProxyHost 校验自定义 Host:仅允许域名/变量/IPv6 括号字符;
+// 分号、花括号、空白会破坏 nginx conf(指令注入),出现即整体丢弃回默认
+func SanitizeProxyHost(h string) string {
+	h = strings.TrimSpace(h)
+	if h == "" || len(h) > 200 {
+		return ""
+	}
+	var b strings.Builder
+	for _, r := range h {
+		ok := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' ||
+			r == '.' || r == '-' || r == '_' || r == '$' || r == '[' || r == ']' || r == ':'
+		if !ok {
+			return ""
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// SetSiteType 站点类型互转(static / proxy / php)。
+// → proxy 需要 target(反代目标);→ php 可选 phpKey(PHP 实例键);
+// → static 沿用站点现有根目录。转换即重写配置并重载,失败不动类型。
+func SetSiteType(id, newType, target, phpKey, proxyHost string) error {
+	newType = strings.TrimSpace(newType)
+	if newType != "static" && newType != "proxy" && newType != "php" {
+		return fmt.Errorf("不支持的目标类型: %s", newType)
+	}
+	mu.Lock()
+	load()
+	var site *Site
+	for i := range list {
+		if list[i].ID == id {
+			site = &list[i]
+			break
+		}
+	}
+	if site == nil {
+		mu.Unlock()
+		return fmt.Errorf("站点不存在")
+	}
+	if site.Type == newType {
+		mu.Unlock()
+		return fmt.Errorf("站点已经是 %s 类型", newType)
+	}
+	switch newType {
+	case "proxy":
+		target = strings.TrimSpace(target)
+		if target == "" {
+			mu.Unlock()
+			return fmt.Errorf("代理目标不能为空")
+		}
+		site.ProxyTo = target
+	case "php":
+		site.PhpKey = normalizePHPKey(phpKey)
+		site.ProxyTo = PhpUpstreamFor(site.PhpKey, site.ID)
+	}
+	site.Type = newType
+	site.ProxyHost = SanitizeProxyHost(proxyHost)
+	if err := save(); err != nil {
+		mu.Unlock()
+		return err
+	}
+	cp := *site
 	mu.Unlock()
 	if err := writeConf(&cp); err != nil {
 		return err
@@ -712,7 +801,7 @@ func writeConf(s *Site) error {
 				}
 				return s.ProxyTo
 			}())
-			b.WriteString(`        proxy_set_header Host $host;
+			b.WriteString(`        proxy_set_header Host ` + proxyHostHeader(s) + `;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;

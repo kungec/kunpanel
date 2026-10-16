@@ -715,7 +715,9 @@ PAGES.websites = {
         }).catch(function() {});
       } else {
         dyn.innerHTML = '<div class="form-item required"><label>目标 URL</label><input class="input mono" id="w-proxy" placeholder="如: http://127.0.0.1:3000">' +
-          '<div class="help">Go / Node / Java 等应用先在本机或容器中启动,再反代到其端口</div></div>';
+          '<div class="help">Go / Node / Java 等应用先在本机或容器中启动,再反代到其端口</div></div>' +
+          '<div class="form-item"><label>发送域名 Host</label><input class="input mono" id="w-proxy-host" placeholder="$http_host(默认;可写域名如 api.example.com 或 $host)">' +
+          '<div class="help">转发给上游的 Host 请求头;留空使用访客原始域名。上游按域名区分站点时需在此指定</div></div>';
       }
     }
     qsa(".wz-type-card", m.el).forEach(function(c) { c.onclick = function() { renderDyn(c.getAttribute("data-t")); }; });
@@ -746,6 +748,7 @@ PAGES.websites = {
       var body = {
         domain: domain, type: curType, port: port,
         proxy_to: curType === "proxy" ? qs("#w-proxy", m.el).value.trim() : "",
+        proxy_host: curType === "proxy" && qs("#w-proxy-host", m.el) ? qs("#w-proxy-host", m.el).value.trim() : "",
         root_dir: qs("#w-root", m.el) ? qs("#w-root", m.el).value.trim() : "",
         remark: qs("#w-remark", m.el).value.trim(),
       };
@@ -1033,14 +1036,25 @@ PAGES.websites = {
       body.innerHTML = '<div class="form-item"><label>域名(每行一个)</label>' +
         '<textarea class="textarea mono" id="ws-domains" rows="3">' + esc(s.domain.split(" ").join("\n")) + "</textarea>" +
         '<div class="help">修改后自动重载 Nginx 生效;请确保域名已解析到本服务器</div></div>' +
+        '<div class="form-item"><label>转换站点类型</label><select class="select" id="ws-type" style="max-width:320px">' +
+          ["static", "php", "proxy"].map(function(t) {
+            var names = { static: "静态站点", php: "PHP 站点(容器运行时)", proxy: "反向代理" };
+            return '<option value="' + t + '"' + (t === s.type ? " selected" : "") + ">" + names[t] + (t === s.type ? "(当前)" : "") + "</option>";
+          }).join("") + '</select>' +
+          '<div id="ws-type-params"></div>' +
+          '<div class="help">转换即改写站点配置并立即生效,原目录与数据保留;PHP 站点 = 反代到容器 PHP 运行时(可回选版本)</div></div>' +
         (s.type === "proxy"
           ? '<div class="form-item required"><label>代理目标</label><input class="input mono" id="ws-proxy" value="' + esc(s.proxy_to || "") + '" placeholder="http://127.0.0.1:8080"></div>' +
+            '<div class="form-item"><label>发送域名 Host</label><input class="input mono" id="ws-proxy-host" value="' + esc(s.proxy_host || "") + '" placeholder="$http_host(默认;可写域名如 api.example.com 或 $host)">' +
+            '<div class="help">转发给上游的 Host 请求头;留空使用访客原始域名</div></div>' +
             '<div class="form-item"><label>负载均衡后端(可选)</label>' +
             '<textarea class="textarea mono" id="ws-upstreams" rows="3" placeholder="每行一个:\nhttp://127.0.0.1:8080 5\nhttp://127.0.0.1:8081">' + esc(upstreamsText) + '</textarea>' +
             '<div class="help">每行「地址 [权重]」,多个后端自动加权轮询;配置后替代上方代理目标。格式错误会被 nginx 校验拦截并回滚</div></div>'
           : s.type === "php"
           ? '<div class="form-item"><label>PHP 版本</label><select class="select" id="ws-php-key" style="max-width:320px"></select>' +
-            '<div class="help">切换后自动重载 Nginx 生效;选项为当前运行中的 PHP 版本(多版本可在应用商店安装)</div></div>'
+            '<div class="help">切换后自动重载 Nginx 生效;选项为当前运行中的 PHP 版本(多版本可在应用商店安装)</div></div>' +
+            '<div class="form-item"><label>发送域名 Host</label><input class="input mono" id="ws-proxy-host" value="' + esc(s.proxy_host || "") + '" placeholder="$http_host(默认;可写域名如 api.example.com 或 $host)">' +
+            '<div class="help">转发给 PHP 运行时的 Host 请求头;留空使用访客原始域名</div></div>'
           : "") +
         '<div class="form-item"><label>监听端口</label><input class="input" id="ws-port" type="number" value="' + (s.port || 80) + '" style="max-width:180px"></div>' +
         (s.type === "static"
@@ -1064,22 +1078,71 @@ PAGES.websites = {
           } catch (e) { sel.innerHTML = '<option value="' + esc(s.php_key || "php") + '">PHP(当前)</option>'; }
         })();
       }
+      // 转换类型:选择非当前类型时,渲染对应的目标参数输入
+      var typeSel = document.getElementById("ws-type");
+      if (typeSel) {
+        var renderTypeParams = function() {
+          var box = document.getElementById("ws-type-params");
+          var nt = typeSel.value;
+          if (nt === s.type) { box.innerHTML = ""; return; }
+          if (nt === "proxy") {
+            box.innerHTML = '<div class="form-item required" style="margin-top:8px"><label>反代目标</label><input class="input mono" id="ws-type-target" placeholder="http://127.0.0.1:8080"></div>' +
+              '<div class="form-item"><label>发送域名 Host</label><input class="input mono" id="ws-type-host" placeholder="$http_host(默认)"></div>';
+          } else if (nt === "php") {
+            box.innerHTML = '<div class="form-item" style="margin-top:8px"><label>PHP 版本</label><select class="select" id="ws-type-php" style="max-width:320px"><option value="php">默认</option></select></div>' +
+              '<div class="form-item"><label>发送域名 Host</label><input class="input mono" id="ws-type-host" placeholder="$http_host(默认)"></div>';
+            (async function() {
+              var sel2 = document.getElementById("ws-type-php");
+              try {
+                var insts = await api("/apps/instances");
+                var phps = (insts || []).filter(function(x) { return (x.key === "php" || /^php[0-9]+$/.test(x.key)) && x.status === "running"; });
+                if (phps.length) sel2.innerHTML = phps.map(function(x) {
+                  var v = (x.params && x.params.Version) || x.key;
+                  return '<option value="' + esc(x.key) + '">PHP ' + esc(v) + '</option>';
+                }).join("");
+              } catch (e) {}
+            })();
+          } else {
+            box.innerHTML = '<div class="help" style="margin-top:8px">转静态后将按站点根目录提供文件</div>';
+          }
+        };
+        typeSel.onchange = renderTypeParams;
+        renderTypeParams();
+      }
       qs("#ws-base-save", body).onclick = async function() {
         var domains = qs("#ws-domains", body).value.split("\n").map(function(x) { return x.trim(); }).filter(Boolean).join(" ");
         if (!domains) { toast("域名不能为空", "error"); return; }
+        // 类型转换:先转换(带目标参数与 Host),完成后整页刷新
+        var nt = typeSel ? typeSel.value : s.type;
+        if (nt !== s.type) {
+          try {
+            await api("/websites/" + s.id + "/type", { method: "POST", body: {
+              type: nt,
+              target: document.getElementById("ws-type-target") ? document.getElementById("ws-type-target").value.trim() : "",
+              php_key: document.getElementById("ws-type-php") ? document.getElementById("ws-type-php").value : "",
+              proxy_host: document.getElementById("ws-type-host") ? document.getElementById("ws-type-host").value.trim() : "",
+            }});
+            toast("已转换为 " + nt + " 类型");
+            m.close();
+            self.render(el);
+          } catch (e) { toast(e.message, "error", 6000); }
+          return;
+        }
         try {
           await api("/websites/" + s.id + "/domains", { method: "POST", body: { domain: domains } });
           if (s.type !== "php") {
             await api("/websites/" + s.id, { method: "PUT", body: {
               proxy_to: s.type === "proxy" ? qs("#ws-proxy", body).value.trim() : (s.proxy_to || ""),
+              proxy_host: s.type === "proxy" && qs("#ws-proxy-host", body) ? qs("#ws-proxy-host", body).value.trim() : (s.proxy_host || ""),
               port: Number(qs("#ws-port", body).value) || 80,
               remark: qs("#ws-remark", body).value.trim(),
             }});
           } else {
-            // PHP 站点:提交所选 PHP 版本(端口/备注随同保存)
+            // PHP 站点:提交所选 PHP 版本(端口/备注/Host 随同保存)
             var pk = document.getElementById("ws-php-key");
             await api("/websites/" + s.id, { method: "PUT", body: {
               proxy_to: s.proxy_to || "",
+              proxy_host: qs("#ws-proxy-host", body) ? qs("#ws-proxy-host", body).value.trim() : (s.proxy_host || ""),
               port: Number(qs("#ws-port", body).value) || 80,
               remark: qs("#ws-remark", body) ? qs("#ws-remark", body).value.trim() : (s.remark || ""),
               php_key: pk ? pk.value : (s.php_key || "php"),

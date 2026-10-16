@@ -57,11 +57,12 @@ func TraceRoute(host string) (*TraceResult, error) {
 	if runtime.GOOS == "windows" {
 		cmd = exec.Command("tracert", host)
 	} else if _, e := exec.LookPath("traceroute"); e == nil {
-		cmd = exec.Command("traceroute", "-m", "15", "-w", "2", host)
+		// -q 1 单探测 -w 1 秒等待:完整默认参数最坏要几分钟,必然撞前端超时
+		cmd = exec.Command("traceroute", "-m", "15", "-w", "1", "-q", "1", host)
 	} else {
 		cmd = exec.Command("tracepath", "-m", "15", host)
 	}
-	out, _ := util.RunWithTimeout(30*time.Second, cmd.Path, cmd.Args[1:]...)
+	out, _ := util.RunWithTimeout(25*time.Second, cmd.Path, cmd.Args[1:]...)
 	return &TraceResult{Target: host, Output: out}, nil
 }
 

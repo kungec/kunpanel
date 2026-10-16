@@ -4983,7 +4983,7 @@ PAGES.nettools = {
       res.innerHTML = '<div class="nt-loading">' + skeletonBlock(14, "70%") + skeletonBlock(14, "50%") + skeletonBlock(14, "60%") + "</div>";
       var ep = { ping: "/nettools/ping", trace: "/nettools/trace", dns: "/nettools/dns", portscan: "/nettools/portscan", http: "/nettools/http" }[self.tab];
       try {
-        var d = await api(ep, { method: "POST", body: { host: target, url: target } });
+        var d = await api(ep, { method: "POST", body: { host: target, url: target }, timeout: self.tab === "trace" ? 60000 : 30000 });
         self.renderResult(res, d);
       } catch (e) {
         res.innerHTML = emptyState("warn", "执行失败", e.message);

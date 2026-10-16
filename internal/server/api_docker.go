@@ -274,8 +274,8 @@ func (s *Server) handleContainerInfoDocker(w http.ResponseWriter, r *http.Reques
 				Name string `json:"Name"`
 			} `json:"RestartPolicy"`
 			// Docker 29+:NanoCpus/Memory 直接在 HostConfig 顶层(不再嵌套 Resources)
-			NanoCPUs int64 `json:"NanoCpus"`
-			Memory   int64 `json:"Memory"`
+			NanoCPUs  int64 `json:"NanoCpus"`
+			Memory    int64 `json:"Memory"`
 			Resources struct {
 				NanoCPUs int64 `json:"NanoCpus"`
 				Memory   int64 `json:"Memory"`

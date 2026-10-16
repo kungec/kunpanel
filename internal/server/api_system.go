@@ -35,9 +35,9 @@ func (s *Server) handleSystemQuick(w http.ResponseWriter, r *http.Request) {
 	snap := system.Get()
 	cfg := config.M.Get()
 	OK(w, map[string]any{
-		"system":       snap,
-		"panel_name":   cfg.PanelName,
-		"version":      Version,
+		"system":     snap,
+		"panel_name": cfg.PanelName,
+		"version":    Version,
 	})
 }
 

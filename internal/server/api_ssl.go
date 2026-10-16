@@ -134,10 +134,10 @@ func (s *Server) handleAcmeProviders(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAcmeIssue(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		SiteID  string `json:"site_id"`
-		Staging bool   `json:"staging"`
-		Method  string `json:"method"` // http / dns(默认 http)
-		Alias   string `json:"alias"`  // DNS 别名域名(CNAME 委托目标,可选)
+		SiteID   string `json:"site_id"`
+		Staging  bool   `json:"staging"`
+		Method   string `json:"method"` // http / dns(默认 http)
+		Alias    string `json:"alias"`  // DNS 别名域名(CNAME 委托目标,可选)
 		Provider string `json:"provider"`
 	}
 	if err := readJSON(r, &req); err != nil || req.SiteID == "" {

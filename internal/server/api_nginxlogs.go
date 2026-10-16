@@ -121,8 +121,8 @@ func (s *Server) handleNginxLogsClear(w http.ResponseWriter, r *http.Request) {
 
 // logCleanCfg 自动清理配置
 type logCleanCfg struct {
-	Enabled  bool `json:"enabled"`
-	KeepDays int  `json:"keep_days"`
+	Enabled  bool   `json:"enabled"`
+	KeepDays int    `json:"keep_days"`
 	LastRun  string `json:"last_run,omitempty"`
 }
 

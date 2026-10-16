@@ -1,12 +1,12 @@
 package server
 
 import (
-	"io"
 	"bytes"
 	"image"
 	_ "image/gif"
 	_ "image/jpeg"
 	"image/png"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"

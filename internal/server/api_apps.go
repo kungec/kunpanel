@@ -1,13 +1,13 @@
 package server
 
 import (
-	"sync"
 	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"kunpanel/internal/appstore"
@@ -363,7 +363,7 @@ func (s *Server) handleAppRuntimeAction(w http.ResponseWriter, r *http.Request) 
 			}
 			// 2) 编译安装
 			if meta.Pecl {
-				fmt.Fprintln(w, "[2/3] pecl install " + ext + " (编译约 2~5 分钟)...")
+				fmt.Fprintln(w, "[2/3] pecl install "+ext+" (编译约 2~5 分钟)...")
 				if err := util.RunWithTimeoutWriter(12*time.Minute, w, "docker", "exec", container, "pecl", "install", ext); err != nil {
 					return fmt.Errorf("pecl 安装失败: %v", err)
 				}
@@ -378,7 +378,7 @@ func (s *Server) handleAppRuntimeAction(w http.ResponseWriter, r *http.Request) 
 						return fmt.Errorf("编译配置失败: %v", err)
 					}
 				}
-				fmt.Fprintln(w, "[2/3] 源码编译 " + ext + " (约 1~5 分钟)...")
+				fmt.Fprintln(w, "[2/3] 源码编译 "+ext+" (约 1~5 分钟)...")
 				if err := util.RunWithTimeoutWriter(12*time.Minute, w, "docker", "exec", container, "docker-php-ext-install", ext); err != nil {
 					return fmt.Errorf("编译安装失败: %v", err)
 				}

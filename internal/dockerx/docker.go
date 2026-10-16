@@ -110,25 +110,33 @@ func StartCacheRefresher(stop <-chan struct{}) {
 		defer tick.Stop()
 		var lastRefresh time.Time
 		for now := range tick.C {
-			// 自适应频率:面板 API 最近活跃 → 3 秒;空闲 → 30 秒。
-			// docker CLI 轮询本身不便宜(实测 dockerd+containerd 常驻 60%+ CPU),
-			// 无人使用时不能照常 3 秒一刷
-			interval := 30 * time.Second
+			// 自适应频率:面板 API 最近活跃(排除状态类轮询,见 server 中间件)
+			// → 8 秒;空闲 → 60 秒。docker CLI 轮询不便宜(高频时
+			// dockerd+containerd 常驻吃掉约四成系统 CPU),频率必须压住
+			interval := 60 * time.Second
 			if activeRecently() {
-				interval = 3 * time.Second
+				interval = 8 * time.Second
 			}
 			if now.Sub(lastRefresh) < interval {
 				continue
 			}
 			lastRefresh = now
-			st := containerStatesReal()
-			dockerSnapMu.Lock()
-			statesCache, statesCacheAt = st, time.Now()
-			dockerSnapMu.Unlock()
+			// 一条 docker ps -a 同时供容器列表与状态缓存使用(此前各跑一条,
+			// 轮询引发的 dockerd+containerd CPU 直接翻倍);json 解析失败才兜底
 			cl, err := containersReal()
 			if err == nil {
+				st := make(map[string]string, len(cl))
+				for _, c := range cl {
+					st[c.Names] = c.State
+				}
 				dockerSnapMu.Lock()
 				containersCache, containersCacheAt = cl, time.Now()
+				statesCache, statesCacheAt = st, time.Now()
+				dockerSnapMu.Unlock()
+			} else {
+				st := containerStatesReal()
+				dockerSnapMu.Lock()
+				statesCache, statesCacheAt = st, time.Now()
 				dockerSnapMu.Unlock()
 			}
 			// 镜像列表(docker images)是三者里最贵的一条命令,不再周期刷新:
@@ -241,10 +249,10 @@ func Version() string {
 }
 
 var (
-	infoMu     sync.Mutex
-	infoCache  map[string]any
-	infoAt     time.Time
-	infoBusy   bool // 已有后台刷新在跑
+	infoMu    sync.Mutex
+	infoCache map[string]any
+	infoAt    time.Time
+	infoBusy  bool // 已有后台刷新在跑
 )
 
 // Info Docker 引擎概要。每次计算要拉起 3 个以上 docker CLI 子进程(每个超时 8s),
@@ -998,7 +1006,6 @@ func InstallEngine(mirror string, w io.Writer) error {
 	}
 	return ensureEngineRunning(w)
 }
-
 
 // pmInstallAny 逐个尝试安装包,返回成功安装的个数(单包失败不中断后续)
 func pmInstallAny(pm string, pkgs ...string) int {

@@ -4,12 +4,12 @@ import (
 	"net/http"
 	"time"
 
-	"kunpanel/internal/authx"
 	"kunpanel/internal/alertx"
+	"kunpanel/internal/authx"
 	"kunpanel/internal/captcha"
-	"kunpanel/internal/notifyx"
 	"kunpanel/internal/config"
 	"kunpanel/internal/logsx"
+	"kunpanel/internal/notifyx"
 )
 
 // CaptchaStore 全局验证码存储;CaptchaFreq 限制每 IP 获取频率

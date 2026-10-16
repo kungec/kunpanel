@@ -1,9 +1,9 @@
 package server
 
 import (
-	"runtime/debug"
 	"bytes"
 	"compress/gzip"
+	"runtime/debug"
 
 	"crypto/sha1"
 	"crypto/sha256"
@@ -37,11 +37,11 @@ var Version = "dev"
 
 // Server 面板 HTTP 服务
 type Server struct {
-	mux         *http.ServeMux
-	limiter     *authx.Limiter
-	webFS       fs.FS
-	assetVer    string // 静态资源内容哈希(自动 cache-bust,替代手工 ?v= 递增)
-	cspScript   string // script-src 值(按 index.html 内联脚本动态计算哈希)
+	mux       *http.ServeMux
+	limiter   *authx.Limiter
+	webFS     fs.FS
+	assetVer  string // 静态资源内容哈希(自动 cache-bust,替代手工 ?v= 递增)
+	cspScript string // script-src 值(按 index.html 内联脚本动态计算哈希)
 }
 
 // Options 服务构建参数
@@ -56,9 +56,9 @@ func New(o Options) *http.Server {
 	cfg := config.M.Get()
 
 	s := &Server{
-		mux:         http.NewServeMux(),
-		limiter:     authx.NewLimiter(),
-		webFS:       o.WebFS,
+		mux:     http.NewServeMux(),
+		limiter: authx.NewLimiter(),
+		webFS:   o.WebFS,
 	}
 	s.initAssetVer()
 	s.registerAPI()
@@ -218,8 +218,17 @@ func (s *Server) withSecurityHeaders(next http.Handler) http.Handler {
 		h.Set("Content-Security-Policy", s.cspScript+
 			" style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws: wss:; "+
 			"font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
-		// 标记面板活跃:Docker 后台刷新据此自适应降频(空闲 30s,活跃 3s)
-		dockerx.MarkActive()
+		// 只把真正消费 Docker 数据的页面标记为活跃(容器/应用/网站/数据库/
+		// 概览/迁移)——Docker 后台刷新据此降频(活跃 8s,空闲 60s)。
+		// 此前全局标记:只要开着面板(哪怕停在安全页),顶栏/WAF 轮询就把
+		// 刷新器钉在最高频,dockerd+containerd 常驻吃掉约四成系统 CPU
+		p := r.URL.Path
+		for _, pre := range []string{"/api/v1/docker", "/api/v1/apps", "/api/v1/websites", "/api/v1/databases", "/api/v1/dashboard", "/api/v1/migration"} {
+			if strings.HasPrefix(p, pre) {
+				dockerx.MarkActive()
+				break
+			}
+		}
 		next.ServeHTTP(w, r)
 	})
 }

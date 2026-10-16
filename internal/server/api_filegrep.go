@@ -66,9 +66,9 @@ func (s *Server) handleFileGrep(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		results = append(results, map[string]string{
-			"file":  parts[0],
-			"line":  strings.TrimSpace(parts[1]),
-			"text":  strings.TrimSpace(parts[2]),
+			"file": parts[0],
+			"line": strings.TrimSpace(parts[1]),
+			"text": strings.TrimSpace(parts[2]),
 		})
 		if len(results) >= 200 {
 			break

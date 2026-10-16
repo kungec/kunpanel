@@ -12,8 +12,8 @@ import (
 func TestInitAssetVerAndCSP(t *testing.T) {
 	fsys := fstest.MapFS{
 		"index.html": &fstest.MapFile{Data: []byte(`<!DOCTYPE html><html><head><script>try{if(localStorage.getItem('kp_theme')==='dark')document.documentElement.setAttribute('data-theme','dark')}catch(e){}</script><script src="/static/app.js?v=__ASSET_VER__"></script></head><body></body></html>`)},
-		"app.js":      &fstest.MapFile{Data: []byte("console.log(1)")},
-		"app.css":     &fstest.MapFile{Data: []byte("body{}")},
+		"app.js":     &fstest.MapFile{Data: []byte("console.log(1)")},
+		"app.css":    &fstest.MapFile{Data: []byte("body{}")},
 	}
 	s := &Server{webFS: fsys, limiter: nil}
 	s.initAssetVer() // 曾在此 panic:regexp.MustCompile 负向断言

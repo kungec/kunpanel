@@ -508,6 +508,52 @@ volumes:
             WebURL: func(p map[string]string) string { return fmt.Sprintf("http://<IP>:%s", pval(p, "Port", "8090")) },
         },
         {
+            Key: "kunying-cms", Name: "坤影CMS", Category: "建站", Icon: "film", Version: "latest",
+            Desc: "免费开源影视CMS:采集聚合/会员VIP/多主题(含2套加密付费主题)/SEO,浏览器安装向导一键部署",
+            Params: []Param{
+                {Key: "Port", Label: "监听端口", Default: "8083", Type: "port", Required: true},
+                {Key: "DBRootPassword", Label: "MySQL root 密码", Default: "Kun@KY2026", Required: true},
+            },
+            ComposeFrom: func(p map[string]string) string {
+                port := pval(p, "Port", "8083")
+                return `services:
+  web:
+    build: ./src
+    image: kunying-local:latest
+    container_name: kun-kunying
+    restart: unless-stopped
+    ports:
+      - "` + port + `:80"
+    environment:
+      TZ: Asia/Shanghai
+    volumes:
+      - kunying_data:/var/www/html/data
+      - kunying_upload:/var/www/html/upload
+    depends_on:
+      - db
+  db:
+    image: mariadb:10.11
+    container_name: kun-kunying-db
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: kunying
+      MYSQL_ROOT_PASSWORD: ` + pval(p, "DBRootPassword", "Kun@KY2026") + `
+      MYSQL_CHARSET: utf8mb4
+      TZ: Asia/Shanghai
+    volumes:
+      - kunying_db:/var/lib/mysql
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_general_ci
+volumes:
+  kunying_data:
+  kunying_upload:
+  kunying_db:
+`
+            },
+            WebURL: func(p map[string]string) string {
+                return fmt.Sprintf("http://<IP>:%s", pval(p, "Port", "8083"))
+            },
+        },
+        {
             Key: "npm", Name: "Nginx Proxy Manager", Category: "Web服务器", Icon: "shuffle", Version: "latest",
 			Desc: "可视化反向代理管理,自动申请 SSL 证书",
 			Params: []Param{
@@ -849,6 +895,14 @@ func Install(key string, params map[string]string) (string, error) {
 		return "", err
 	}
 
+	// 坤影CMS:下载源码包到 compose 目录(镜像由 ./src 本地构建;
+	// 不用远程 Git 上下文——BuildKit 对 git 仓库有深层缓存,修复后拉不到新代码)
+	if key == "kunying-cms" {
+		if err := installKunyingCMS(dir); err != nil {
+			return "", fmt.Errorf("坤影CMS 初始化失败: %w", err)
+		}
+	}
+
 	// 坤发卡:下载 database.sql 供 MySQL 首次启动自动导入
 	if key == "kunfaka" {
 		if err := installKunfaka(dir, params); err != nil {
@@ -928,6 +982,45 @@ func installKunfaka(dir string, params map[string]string) error {
 }
 
 // installNatCloud 下载 nat-cloud 源码包并解压到 compose 目录
+// installKunyingCMS 下载坤影CMS源码包并解压到 compose 目录 ./src
+// (compose build: ./src;升级 = 卸载重装或手动重新下载,镜像随之更新)
+func installKunyingCMS(dir string) error {
+	// 用 tag 引用而非 main:GitHub 对 main 的 archive tar.gz 有缓存,
+// Dockerfile 修复后可能长时间仍下发旧包;tag archive 独立生成即时生效
+	tarURL := "https://github.com/kungec/kunying-cms/archive/refs/tags/v1.0.61.tar.gz"
+	data, err := downloadFile(tarURL, 60*time.Second)
+	if err != nil {
+		return fmt.Errorf("下载源码包失败: %w", err)
+	}
+	tmp := filepath.Join(dir, ".tmp_install")
+	_ = os.RemoveAll(tmp)
+	_ = os.MkdirAll(tmp, 0o755)
+	tgz := filepath.Join(tmp, "src.tar.gz")
+	if err := os.WriteFile(tgz, data, 0o644); err != nil {
+		return err
+	}
+	src := filepath.Join(dir, "src")
+	_ = os.RemoveAll(src)
+	cmd := exec.Command("tar", "-xzf", tgz, "-C", tmp, "--strip-components=1")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		_ = os.RemoveAll(tmp)
+		return fmt.Errorf("解压失败: %v %s", err, strings.TrimSpace(string(out)))
+	}
+	_ = os.MkdirAll(src, 0o755)
+	if out, err := exec.Command("sh", "-c",
+		fmt.Sprintf("cp -a %s/. %s/ && rm -rf %s/.tmp_install %s/src/.tmp_install",
+			p1ShTmp(tmp), p1ShTmp(src), p1ShTmp(dir), p1ShTmp(src))).CombinedOutput(); err != nil {
+		_ = os.RemoveAll(tmp)
+		return fmt.Errorf("源码就位失败: %v %s", err, strings.TrimSpace(string(out)))
+	}
+	_ = os.RemoveAll(tmp)
+	return nil
+}
+
+func p1ShTmp(p string) string {
+	return "'" + strings.ReplaceAll(p, "'", `'\''`) + "'"
+}
+
 func installNatCloud(dir string) error {
 	tarURL := "https://github.com/kungec/nat-cloud/archive/refs/heads/main.tar.gz"
 	data, err := downloadFile(tarURL, 60*time.Second)

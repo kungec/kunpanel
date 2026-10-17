@@ -401,13 +401,16 @@ type manualDNSProvider struct {
 
 func (p *manualDNSProvider) Present(domain, token, keyAuth string) error {
 	info := dns01.GetChallengeInfo(domain, keyAuth)
+	aliasHost := ""
 	if p.alias != "" {
-		fmt.Fprintf(p.w, ">> [别名模式] 请添加 TXT 记录: 主机 %s | 值 %s\n", "_acme-challenge."+p.alias, info.Value)
-		fmt.Fprintf(p.w, ">> (需在主域 DNS 添加 CNAME: %s → %s)\n", info.FQDN, "_acme-challenge."+p.alias)
+		aliasHost = "_acme-challenge." + p.alias
+		fmt.Fprintf(p.w, ">> [别名模式] 请添加 TXT 记录: 主机 %s | 值 %s\n", aliasHost, info.Value)
+		fmt.Fprintf(p.w, ">> (需在主域 DNS 添加 CNAME: %s → %s)\n", info.FQDN, aliasHost)
 	} else {
 		fmt.Fprintf(p.w, ">> 请添加 TXT 记录: 主机 %s | 值 %s\n", info.FQDN, info.Value)
 	}
 	deadline := time.Now().Add(10 * time.Minute)
+	lastBeat := time.Now()
 	for time.Now().Before(deadline) {
 		txts, err := net.LookupTXT(info.FQDN)
 		if err == nil {
@@ -418,9 +421,36 @@ func (p *manualDNSProvider) Present(domain, token, keyAuth string) error {
 				}
 			}
 		}
+		// 每分钟报一次两侧 DNS 现状,便于判断是 CNAME 未加还是 TXT 未生效
+		if aliasHost != "" && time.Since(lastBeat) >= time.Minute {
+			lastBeat = time.Now()
+			fmt.Fprintf(p.w, ">> 仍在等待 DNS 生效 ... %s\n", dnsAliasDiag(info.FQDN, aliasHost))
+		}
 		time.Sleep(8 * time.Second)
 	}
-	return fmt.Errorf("等待 %s 的 TXT 记录超时:请确认记录已保存且已生效", info.FQDN)
+	msg := fmt.Sprintf("等待 %s 的 TXT 记录超时", info.FQDN)
+	if aliasHost != "" {
+		msg += ";当前 DNS 现状:" + dnsAliasDiag(info.FQDN, aliasHost) +
+			"。别名模式需要两条记录:①主域 DNS 加 CNAME(主域挑战名 → 别名挑战名);②别名域加 TXT 记录(值见任务日志)"
+	} else {
+		msg += ":请确认记录已保存且已生效"
+	}
+	return fmt.Errorf("%s", msg)
+}
+
+// dnsAliasDiag 别名模式下主域/别名两侧挑战名的 DNS 现状(诊断用)
+func dnsAliasDiag(mainFQDN, aliasHost string) string {
+	describe := func(host string) string {
+		txts, err := net.LookupTXT(host)
+		if err != nil {
+			return host + " 查询失败(" + err.Error() + ")"
+		}
+		if len(txts) == 0 {
+			return host + " 无 TXT 记录"
+		}
+		return host + " TXT=" + strings.Join(txts, ",")
+	}
+	return "主域[" + describe(mainFQDN) + "] 别名[" + describe(aliasHost) + "]"
 }
 
 func (p *manualDNSProvider) CleanUp(domain, token, keyAuth string) error { return nil }

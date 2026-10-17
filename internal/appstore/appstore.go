@@ -124,8 +124,8 @@ func builtinTemplates() []Template {
 			Desc: "官方 PHP-Apache 运行环境,上传 PHP 程序即可运行,可配合网站反向代理",
 			Params: []Param{
 				{Key: "Version", Label: "PHP 版本", Default: "8.4", Type: "select", Required: true,
-					Options: []string{"7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5"},
-					Help:    "8.5=最新版 · 8.4/8.3/8.2=稳定维护版 · 8.1/8.0/7.4=旧版兼容(远程迁移自动匹配用)"},
+					Options: []string{"5.6", "7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5"},
+					Help:    "8.5=最新版 · 8.4/8.3/8.2=稳定维护版 · 8.1/8.0/7.4=旧版兼容(远程迁移自动匹配用) · 5.6=老项目专用(EOL,仅内置类扩展可装;gd/zip 等需系统库的扩展因基础镜像源已归档无法安装)"},
 				{Key: "Port", Label: "访问端口", Default: "8088", Type: "port", Required: true},
 			},
 			ComposeFrom: func(p map[string]string) string {

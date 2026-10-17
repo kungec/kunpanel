@@ -341,6 +341,13 @@ func (s *Server) handleAppRuntimeAction(w http.ResponseWriter, r *http.Request) 
 			Fail(w, http.StatusBadRequest, "暂不支持该扩展: "+ext)
 			return
 		}
+		// PHP 5.x 基础镜像(Debian Stretch)apt 源已归档:需要系统库的扩展无法自动编译,提前明示
+		if strings.TrimSpace(meta.Deps) != "" {
+			if vout, verr := dockerx.ExecIn(container, "php", "-r", "echo PHP_VERSION_ID;"); verr == nil && strings.HasPrefix(strings.TrimSpace(vout), "5") {
+				Fail(w, http.StatusBadRequest, "PHP 5.6 基础镜像的软件源已归档(EOL),扩展 "+ext+" 所需的系统依赖无法自动安装;5.6 仅支持无需系统库的内置扩展(如 opcache/bcmath/mysqli 等)")
+				return
+			}
+		}
 		// 已加载守卫:避免重复安装产生混乱状态(opcache 在 PHP 8.4 php -m 显示为 "Zend OPcache")
 		if mout, err := dockerx.ExecIn(container, "php", "-m"); err == nil {
 			for _, line := range strings.Split(mout, "\n") {

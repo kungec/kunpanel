@@ -3,6 +3,22 @@
 所有重要变更都会记录在此文件中。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v2.75.6] - 2026-10-17
+
+### 新功能:PHP 运行时新增 5.6 版本(老项目兼容)
+
+应用商店 PHP 运行时版本列表新增 **5.6**(老项目专用):
+
+- 官方 `php:5.6-apache` 镜像(amd64/arm64 均有),多版本机制自动派生实例键
+  `php56`、容器 `kun-php56`、独立端口,与 8.x 共存互不影响
+- 宝塔远程迁移自动匹配同步受益:宝塔 PHP 5.6(目录 56)现在可自动装对应运行时
+- **扩展管理限制(如实提示)**:5.6 基础镜像基于 Debian Stretch,apt 源已归档——
+  需要系统库的扩展(gd/zip/imagick/pgsql 等)在 5.6 上**前置拦截并明示原因**,
+  不再让用户撞一屏归档源报错;无需系统库的内置扩展(opcache/bcmath/mysqli 等)
+  可正常源码编译安装(真机实测 mysqli 编译→重启→php -m 加载→页面确认)
+- 真机全链路验证:API 安装派生 php56 → 容器 Up(PHP 5.6.40)→ 共享站点目录
+  页面渲染 5.6.40 → gd 拦截 400 提示清晰 → mysqli 安装成功 → 卸载干净
+
 ## [v2.75.5] - 2026-10-17
 
 ### 修复:Docker 一键安装在全新服务器失败(curl 23 / dpkg Broken pipe)——移除 systemd 文件系统沙箱(用户报障,Vultr Debian 12)

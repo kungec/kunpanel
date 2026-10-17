@@ -3,6 +3,27 @@
 所有重要变更都会记录在此文件中。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v2.73.7] - 2026-10-17
+
+### 修复:宝塔迁移三项复审问题
+
+1. **well-known include 被内联进 lua 指令**:宝塔 11.x 的
+   `well-known/<域名>.conf` 真实存在,内容是 `set_by_lua_block` 等 lua 指令。
+   此前目录 include 的内联先行,well-known 的专项剔除永远轮不到——lua 指令
+   进入无 lua 模块的 nginx 后 nginx -t 报 unknown directive。现在凡路径含
+   /well-known/ 的 include 直接剔除(ACME 验证由面板自己的 location 处理)。
+   单测实际创建含 set_by_lua_block 的 well-known 文件断言
+2. **被注释掉的 proxy_pass 也建转发**:端口提取扫描的是配置原文,`#` 注释
+   里的回环上游会被抓去建端口转发+防火墙放行(给死端口开门)。现提取前
+   先剥注释行
+3. **切换验证只测首页**:反代子路径(如 /bepusdt/)切换后是否有问题测不到。
+   现迁移时记录站点的字面 location 前缀(≤6 条,正则 location 排除),
+   切换前后的逐路径状态码比对覆盖子路径;旧状态文件无路径时只测 /(兼容)
+
+真机实测:带 well-known lua 文件 + 注释 proxy_pass + 子路径 location 的
+站点迁移后 nginx -t 通过、注释端口无转发/无放行、子路径 200 可访问;
+切换冒烟日志确认「域名×路径状态码与切换前一致」。
+
 ## [v2.73.6] - 2026-10-17
 
 ### 新功能:站点类型互转 + 反代自定义 Host;修复:重复安装应用报错不明

@@ -38,6 +38,9 @@ type ImportedSite struct {
 	Domain string `json:"domain"`
 	SiteID string `json:"site_id"`
 	SSL    bool   `json:"ssl"`
+	// Paths 迁移时从站点 conf 提取的字面 location 前缀(如 /bepusdt/),
+	// 切换流量的逐路径验证据此覆盖反代子路径;旧状态文件无此字段时只测 /
+	Paths []string `json:"paths,omitempty"`
 }
 
 func stateFile() string { return filepath.Join(util.DataDir(), "btmigrate_state.json") }

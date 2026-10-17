@@ -325,3 +325,109 @@ func TestRewriteComposePorts(t *testing.T) {
 		t.Errorf("重复改写应幂等: changed=%v orig=%d/%d", changed2, o80b, o443b)
 	}
 }
+
+// 宝塔 11.x 的 well-known/<域名>.conf 真实存在(set_by_lua_block 等 lua 指令):
+// 内联会让 lua 指令进入无 lua 模块的 nginx,nginx -t 报 unknown directive
+func TestExtractExtrasWellKnownFileInlined(t *testing.T) {
+	dir := t.TempDir()
+	wkDir := filepath.Join(dir, "www", "server", "panel", "vhost", "nginx", "well-known", "demo.example.com")
+	if err := os.MkdirAll(wkDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// 把样例里的 proxy 目录 include 换成 well-known 目录 include(宝塔 11.x 原生形态)
+	confPath := filepath.Join(dir, "demo.example.com.conf")
+	confTxt := strings.Replace(sampleNative443,
+		"include /www/server/panel/vhost/nginx/proxy/demo.example.com/*.conf;",
+		"include /www/server/panel/vhost/nginx/well-known/demo.example.com/*.conf;", 1)
+	if err := os.WriteFile(confPath, []byte(confTxt), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// well-known 文件真实存在,内容是 lua 指令(nginx:alpine 无 lua 模块)
+	if err := os.WriteFile(filepath.Join(wkDir, "demo.example.com.conf"),
+		[]byte("set_by_lua_block $kw { return 1 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	extra, _, _, err := extractExtrasAt(confPath, "static", dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"set_by_lua", "well-known", "kw"} {
+		if strings.Contains(extra, bad) {
+			t.Errorf("well-known 文件内容不应被内联(含 %q):\n%s", bad, extra)
+		}
+	}
+}
+
+// 被注释掉的 proxy_pass 不是生效配置,端口提取不得为它建转发
+func TestPortExtractionIgnoresComments(t *testing.T) {
+	dir := t.TempDir()
+	confTxt := strings.Replace(sampleBTConf, "upay.test", "cm.test", -1)
+	confTxt = strings.Replace(confTxt,
+		"proxy_pass http://127.0.0.1:8080/;",
+		"# proxy_pass http://127.0.0.1:9999;\n        proxy_pass http://127.0.0.1:8080/;", 1)
+	conf := filepath.Join(dir, "cm.test.conf")
+	if err := os.WriteFile(conf, []byte(confTxt), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, _, ports, err := extractExtras(conf, "php")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range ports {
+		if p == 9999 {
+			t.Errorf("注释里的端口 9999 不应被提取: %v", ports)
+		}
+	}
+	found := false
+	for _, p := range ports {
+		if p == 8080 {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("生效端口 8080 应被提取: %v", ports)
+	}
+}
+
+// 探测路径提取:字面前缀 location,排除正则与精确匹配以外的杂质,"/" 恒在
+func TestProbePathsFromConf(t *testing.T) {
+	dir := t.TempDir()
+	conf := filepath.Join(dir, "p.test.conf")
+	txt := `server {
+    listen 80;
+    server_name p.test;
+    root /www/wwwroot/p.test;
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+    }
+    location /bepusdt/ {
+        proxy_pass http://127.0.0.1:8889/;
+    }
+    location ~ \.php$ {
+        fastcgi_pass 127.0.0.1:9000;
+    }
+    location = /exact {
+        return 200 "x";
+    }
+    location ^~ /static/ {
+        alias /www/static/;
+    }
+}
+`
+	if err := os.WriteFile(conf, []byte(txt), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	paths := probePathsFromConf(conf)
+	if len(paths) == 0 || paths[0] != "/" {
+		t.Fatalf("/ 应恒在首位: %v", paths)
+	}
+	joined := strings.Join(paths, ",")
+	if !strings.Contains(joined, "/bepusdt") || !strings.Contains(joined, "/static") {
+		t.Errorf("字面前缀路径应被提取: %v", paths)
+	}
+	for _, p := range paths {
+		if strings.ContainsAny(p, `$~*`) {
+			t.Errorf("正则 location 不应作为探测路径: %v", paths)
+		}
+	}
+}

@@ -84,6 +84,13 @@ func extractExtrasAt(confPath, siteType, rootRemap, loopbackHost string) (string
 			return m0
 		}
 		pattern := strings.TrimSpace(m[2])
+		// well-known 的 include(宝塔 11.x 里文件真实存在,内容是 set_by_lua_block
+		// 等 lua 指令):直接剔除。ACME 验证由面板自己的 ^~ location 处理;
+		// 在这里内联会让 lua 指令进入 nginx(无 lua 模块时 nginx -t 报 unknown
+		// directive),且内联先行会让下方 reIncludeWellKnown 的剔除永远轮不到
+		if strings.Contains(pattern, "/well-known/") {
+			return ""
+		}
 		if rootRemap != "" {
 			pattern = filepath.Join(rootRemap, strings.TrimPrefix(pattern, "/"))
 		}
@@ -153,9 +160,10 @@ func extractExtrasAt(confPath, siteType, rootRemap, loopbackHost string) (string
 		return "", 0, nil, nil
 	}
 	// 回环上游端口只认 proxy_pass/grpc_pass 的回环地址(改写前的原文),
-	// 顺序即配置出现顺序; Alt-Svc/listen 等处的端口号不再混入
+	// 顺序即配置出现顺序; Alt-Svc/listen 等处的端口号不再混入。
+	// 先剥掉 # 注释行:被注释掉的 proxy_pass 不是生效配置,不能为它建转发
 	var ports []int
-	for _, m := range reLoopbackUpstreamPort.FindAllStringSubmatch(body, -1) {
+	for _, m := range reLoopbackUpstreamPort.FindAllStringSubmatch(stripCommentLines(body), -1) {
 		pn, e := strconv.Atoi(m[1])
 		if e != nil || pn <= 0 || pn > 65535 {
 			continue
@@ -262,6 +270,49 @@ func indentBlock(s, pad string) string {
 func rewriteLoopback(s string) string {
 	gw := bridgeGateway()
 	return reLoopback.ReplaceAllString(s, "${1}"+gw+"${3}")
+}
+
+// stripCommentLines 去掉整行 # 注释(行首允许空白);用于端口提取等
+// "只关心生效配置"的场景。行尾注释不动(其指令仍是生效的)
+func stripCommentLines(s string) string {
+	var out []string
+	for _, ln := range strings.Split(s, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(ln), "#") {
+			continue
+		}
+		out = append(out, ln)
+	}
+	return strings.Join(out, "\n")
+}
+
+// probePathsFromConf 从站点 conf 提取切换验证用的探测路径:仅字面前缀
+// location(排除 ~ 正则),去重限量;"/" 永远包含。
+// 切换流量后的逐路径比对覆盖反代子路径(如 /bepusdt/),不只测首页
+func probePathsFromConf(confPath string) []string {
+	b, err := os.ReadFile(confPath)
+	if err != nil {
+		return nil
+	}
+	body := firstServerBlock(string(b))
+	reLoc := regexp.MustCompile(`(?m)^\s*location\s+(?:[=~^]+\s+)?(/\S*)\s*\{`)
+	seen := map[string]bool{"/": true}
+	out := []string{"/"}
+	for _, m := range reLoc.FindAllStringSubmatch(body, -1) {
+		p := m[1]
+		if p == "" || seen[p] || strings.ContainsAny(p, `$*|?`) {
+			continue
+		}
+		p = strings.TrimSuffix(p, "/")
+		if p == "" {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+		if len(out) >= 6 {
+			break
+		}
+	}
+	return out
 }
 
 // loopbackUpstreamPort 判断单个反代目标是否回环地址,是则返回其端口

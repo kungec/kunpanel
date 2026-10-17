@@ -513,7 +513,11 @@ func Apply(opts ApplyOptions, w io.Writer, siteDone func(domain, siteID string))
 			fmt.Fprintf(w, "   站点 %s 迁移中止: %v(继续迁移其余站点)\n", s.Domain, err)
 			continue
 		}
-		importedSites = append(importedSites, ImportedSite{Domain: s.Domain, SiteID: siteID, SSL: s.SSL && s.CertName != ""})
+		importedSites = append(importedSites, ImportedSite{
+			Domain: s.Domain, SiteID: siteID, SSL: s.SSL && s.CertName != "",
+			// 记录 location 前缀路径,切换流量的逐路径验证据此覆盖反代子路径
+			Paths: probePathsFromConf(s.Conf),
+		})
 		if siteDone != nil {
 			siteDone(s.Domain, siteID)
 		}
@@ -1190,12 +1194,6 @@ type TrafficState struct {
 	Switched      bool `json:"switched"`
 }
 
-// probeResult 单域名的切换前状态码基线
-type probeResult struct {
-	code  string
-	https bool
-}
-
 // soleGatewayKey 面板网关容器必须唯一:两个网关同时改绑 80/443 会互相抢占,
 // 先起的一个占住端口、另一个启动失败,面板网站随机 502。
 func soleGatewayKey() (string, error) {
@@ -1326,14 +1324,14 @@ func appComposeDir(container string) string {
 
 // httpProbe 用 --resolve 把域名指到本机探测状态码(不依赖 DNS 已切换;
 // SSL 站点走 https -k,与切换前后两侧的服务形态对齐)。
-func httpProbe(domain string, https bool) string {
+func httpProbe(domain, path string, https bool) string {
 	scheme, port := "http", "80"
 	if https {
 		scheme, port = "https", "443"
 	}
 	out, err := util.Run("curl", "-sk", "-o", "/dev/null", "-w", "%{http_code}",
 		"--max-time", "8", "--resolve", net.JoinHostPort(domain, port)+":127.0.0.1",
-		scheme+"://"+domain+"/")
+		scheme+"://"+domain+path)
 	if err != nil {
 		return "000"
 	}
@@ -1344,16 +1342,32 @@ func httpProbe(domain string, https bool) string {
 	return code
 }
 
-// captureBaseline 切换前逐域名记录状态码(宝塔正在服务),切换后逐一比对。
+// probeItem 一条探测项:域名 × 路径 × 协议 → 切换前状态码基线
+type probeItem struct {
+	domain string
+	path   string
+	https  bool
+	code   string
+}
+
+// captureBaseline 切换前逐域名×逐路径记录状态码(宝塔正在服务),切换后逐一比对。
 // 只比对宝塔认识的域名(btSites):面板原生站点(multi82 这类自建站)宝塔
 // 从未用同名 vhost 服务过,其"基线"是宝塔默认服务器的响应——部分迁移场景
 // 下与面板必然不一致,会把切换误判失败触发回滚。
-func captureBaseline(w io.Writer, btSites []BtSite) map[string]probeResult {
+// 路径来自迁移时记录的 location 前缀(imported paths),反代子路径同样覆盖,
+// 不只测首页
+func captureBaseline(w io.Writer, btSites []BtSite, imported []ImportedSite) []probeItem {
+	pathsByDomain := map[string][]string{}
+	for _, im := range imported {
+		if len(im.Paths) > 0 {
+			pathsByDomain[im.Domain] = im.Paths
+		}
+	}
 	btDomains := map[string]BtSite{}
 	for _, s := range btSites {
 		btDomains[s.Domain] = s
 	}
-	base := map[string]probeResult{}
+	var base []probeItem
 	all, err := websites.List()
 	if err != nil {
 		fmt.Fprintf(w, "   警告: 读取面板站点失败(%v),切换后将无法做逐域名比对\n", err)
@@ -1369,15 +1383,21 @@ func captureBaseline(w io.Writer, btSites []BtSite) map[string]probeResult {
 			continue
 		}
 		https := bt.SSL // 以宝塔侧是否 SSL 站决定探测协议,与切换前服务形态对齐
-		base[d] = probeResult{code: httpProbe(d, https), https: https}
+		paths := pathsByDomain[d]
+		if len(paths) == 0 {
+			paths = []string{"/"}
+		}
+		for _, p := range paths {
+			base = append(base, probeItem{domain: d, path: p, https: https, code: httpProbe(d, p, https)})
+		}
 	}
-	fmt.Fprintf(w, ">> 已采集 %d 个宝塔域名的切换前状态码基线\n", len(base))
+	fmt.Fprintf(w, ">> 已采集 %d 个域名×路径的切换前状态码基线\n", len(base))
 	return base
 }
 
 // verifySwitched 切换后验证:80/443 必须由面板网关容器监听、宿主机不能残留
 // nginx 进程占用、逐域名状态码与切换前一致。任何一项失败返回错误(自动回滚)。
-func verifySwitched(w io.Writer, gwKey string, baseline map[string]probeResult) error {
+func verifySwitched(w io.Writer, gwKey string, baseline []probeItem) error {
 	p80, p443, err := containerPublishedPorts(gwKey)
 	if err != nil {
 		return fmt.Errorf("读取 %s 端口映射失败: %v", gwKey, err)
@@ -1397,21 +1417,21 @@ func verifySwitched(w io.Writer, gwKey string, baseline map[string]probeResult) 
 			}
 		}
 	}
-	// 逐域名比对(基线取不到的域名跳过——切换前就不通的站点无从比对)
+	// 逐域名×逐路径比对(基线取不到的项跳过——切换前就不通的无从比对)
 	var mism []string
-	for d, want := range baseline {
+	for _, want := range baseline {
 		if want.code == "" || want.code == "000" {
 			continue
 		}
-		got := httpProbe(d, want.https)
+		got := httpProbe(want.domain, want.path, want.https)
 		if got != want.code {
-			mism = append(mism, fmt.Sprintf("%s:切换前 %s → 切换后 %s", d, want.code, got))
+			mism = append(mism, fmt.Sprintf("%s%s:切换前 %s → 切换后 %s", want.domain, want.path, want.code, got))
 		}
 	}
 	if len(mism) > 0 {
 		return fmt.Errorf("%d 个域名状态码与切换前不一致: %s", len(mism), strings.Join(mism, "; "))
 	}
-	fmt.Fprintf(w, ">> 验证通过:80/443 已由 %s 监听,域名状态码与切换前一致\n", gwKey)
+	fmt.Fprintf(w, ">> 验证通过:80/443 已由 %s 监听,各域名×路径状态码与切换前一致\n", gwKey)
 	return nil
 }
 
@@ -1482,7 +1502,7 @@ func SwitchTraffic(w io.Writer) error {
 		return err
 	}
 	// 0.5) 基线:切换前逐域名状态码(宝塔正在服务;只比宝塔认识的域名)
-	baseline := captureBaseline(w, res.Sites)
+	baseline := captureBaseline(w, res.Sites, loadState().Imported)
 	// 刷新 php-fpm pool 访问控制(容器 IP 可能已变)
 	EnsurePoolSecurity(w)
 

@@ -125,7 +125,7 @@ func builtinTemplates() []Template {
 			Params: []Param{
 				{Key: "Version", Label: "PHP 版本", Default: "8.4", Type: "select", Required: true,
 					Options: []string{"5.6", "7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5"},
-					Help:    "8.5=最新版 · 8.4/8.3/8.2=稳定维护版 · 8.1/8.0/7.4=旧版兼容(远程迁移自动匹配用) · 5.6=老项目专用(EOL,仅内置类扩展可装;gd/zip 等需系统库的扩展因基础镜像源已归档无法安装)"},
+					Help:    "8.5=最新版 · 8.4/8.3/8.2=稳定维护版 · 8.1/8.0/7.4=旧版兼容(远程迁移自动匹配用) · 5.6=老项目专用(EOL,仅内置类扩展可装) · 运行镜像为官方 php:<版本>-apache"},
 				{Key: "Port", Label: "访问端口", Default: "8088", Type: "port", Required: true},
 			},
 			ComposeFrom: func(p map[string]string) string {
@@ -1343,6 +1343,52 @@ h1{font-size:22px;color:#303133}p{color:#909399;font-size:14px}</style></head>
 `
 	_ = os.WriteFile(filepath.Join(rootsDir(), "default", "index.html"), []byte(welcome), 0o644)
 	_ = os.WriteFile(filepath.Join(confDir(), "default.conf"), []byte(def), 0o644)
+}
+
+// EnsureComposeMount 把宿主机目录以指定容器路径挂载进面板管理的应用容器
+// (如把自定义根目录的站点文件挂进 php:<版本>-apache 容器的
+// /var/www/html/<siteID>,否则容器看不到站点文件会 404)。
+// 幂等:compose 已含该挂载时不重建;实例未安装时静默跳过(由启动自愈补挂)
+func EnsureComposeMount(key, hostPath, containerPath string, w io.Writer) error {
+	clean, ctn := filepath.Clean(hostPath), filepath.Clean(containerPath)
+	dir := InstanceDir(key)
+	composeFile := filepath.Join(dir, "docker-compose.yml")
+	b, err := os.ReadFile(composeFile)
+	if err != nil {
+		return nil
+	}
+	content := string(b)
+	if strings.Contains(content, "- "+clean+":"+ctn+"\n") ||
+		strings.HasSuffix(strings.TrimRight(content, "\n"), "- "+clean+":"+ctn) {
+		return nil
+	}
+	idx := strings.Index(content, "volumes:")
+	if idx < 0 {
+		return fmt.Errorf("%s compose 缺少 volumes 段,请卸载后重新安装", key)
+	}
+	lineEnd := strings.Index(content[idx:], "\n")
+	insert := "\n      - " + clean + ":" + ctn
+	content = content[:idx+lineEnd] + insert + content[idx+lineEnd:]
+	if err := util.AtomicWriteString(composeFile, content, 0o644); err != nil {
+		return err
+	}
+	if w != nil {
+		fmt.Fprintln(w, "  挂载站点目录到 "+key+" 容器,重建容器(数秒中断)...")
+	}
+	out, err := dockerx.Compose(dir, "up", "-d")
+	if w != nil {
+		fmt.Fprintln(w, out)
+	}
+	if err != nil {
+		return fmt.Errorf("重建容器失败: %s", tailStr(out))
+	}
+	for i := 0; i < 15; i++ {
+		if dockerx.ContainerRunning("kun-" + key) {
+			return nil
+		}
+		time.Sleep(time.Second)
+	}
+	return nil
 }
 
 // EnsureWebrootMount 站点根目录不在默认 roots 下(自定义默认目录/站点自定义

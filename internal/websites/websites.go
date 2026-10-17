@@ -309,6 +309,8 @@ func Create(o CreateOpts) (*Site, error) {
 		// PHP 站点:全部请求转发到所选 PHP 运行时实例,容器内按站点目录区分
 		s.PhpKey = normalizePHPKey(o.PhpKey)
 		s.ProxyTo = PhpUpstreamFor(s.PhpKey, id)
+		// 根目录不在默认 roots 下时,把站点目录挂进 PHP 容器(否则容器 404)
+		ensureSitePHPMount(s, io.Discard)
 	}
 	if o.SiteType == "phpfpm" {
 		// PHP-FPM 直连站点:root 保持宿主机原路径,fastcgi 直连宝塔 php-fpm
@@ -680,10 +682,48 @@ func SetSiteType(id, newType, target, phpKey, proxyHost string) error {
 	}
 	cp := *site
 	mu.Unlock()
+	if cp.Type == "php" {
+		// 转为 PHP 站点时,自定义根目录需要挂进 PHP 容器
+		ensureSitePHPMount(&cp, io.Discard)
+	}
 	if err := writeConf(&cp); err != nil {
 		return err
 	}
 	return Reload()
+}
+
+// ensureSitePHPMount PHP 站点根目录不在默认 roots 下时(自定义默认目录/建站
+// 自定义根目录),把根目录挂进 PHP 运行时容器的 /var/www/html/<siteID>
+// (php:apache 的 DocumentRoot),否则容器看不到站点文件、反代过去全是 404。
+// 幂等:已挂载或实例未安装时静默跳过;默认目录站点走既有 roots:/var/www/html 挂载
+func ensureSitePHPMount(s *Site, w io.Writer) {
+	if s == nil || s.Type != "php" || strings.TrimSpace(s.Root) == "" {
+		return
+	}
+	if underRootsDir(s.Root) {
+		return
+	}
+	key := normalizePHPKey(s.PhpKey)
+	if key == "" {
+		key = "php"
+	}
+	if err := appstore.EnsureComposeMount(key, s.Root, "/var/www/html/"+s.ID, w); err != nil {
+		if w != nil {
+			fmt.Fprintf(w, ">> 警告: 挂载站点目录到 PHP 容器失败: %v\n", err)
+		}
+	}
+}
+
+// EnsurePHPWebrootMounts 启动自愈:为所有根目录不在默认 roots 下的 PHP 站点
+// 补挂载(升级到本版本前创建的站点在启动后自动恢复)
+func EnsurePHPWebrootMounts(w io.Writer) {
+	sites, err := List()
+	if err != nil {
+		return
+	}
+	for i := range sites {
+		ensureSitePHPMount(&sites[i], w)
+	}
 }
 
 // underRootsDir 目录是否在面板默认站点目录(roots)下:容器模式仅默认目录
@@ -1312,6 +1352,8 @@ func UpdateSitePhp(id, phpKey string) error {
 	}
 	cp := *site
 	mu.Unlock()
+	// 切换 PHP 实例后,自定义根目录要挂到新实例的容器(kun-<phpKey>)
+	ensureSitePHPMount(&cp, io.Discard)
 	if err := writeConf(&cp); err != nil {
 		return err
 	}

@@ -148,6 +148,9 @@ func Run(o Options) error {
 		defer recoverPanic("docker-reapply")
 		time.Sleep(15 * time.Second)
 		fwmgmt.DockerReapply()
+		// PHP 站点自定义根目录自愈:升级前创建的站点补挂载到 PHP 运行时容器
+		time.Sleep(15 * time.Second)
+		websites.EnsurePHPWebrootMounts(io.Discard)
 		// 宝塔迁移 php-fpm pool 访问控制刷新(容器 IP 可能变化;非宝塔环境自动跳过)
 		time.Sleep(5 * time.Second)
 		btmigrate.EnsurePoolSecurity(io.Discard)

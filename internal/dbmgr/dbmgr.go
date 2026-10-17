@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"kunpanel/internal/appstore"
@@ -28,6 +29,9 @@ type Instance struct {
 	Name    string `json:"name"`
 	Type    string `json:"type"` // mysql / postgres
 	Running bool   `json:"running"`
+	// Databases 该实例的业务库数量(排除系统库;未运行时为 0)。
+	// 概览 KPI 与数据库页 hero 用同一口径,30s 缓存,建/删库时主动失效
+	Databases int `json:"databases,omitempty"`
 }
 
 var supported = []Instance{
@@ -36,7 +40,7 @@ var supported = []Instance{
 	{Key: "postgresql", Name: "PostgreSQL", Type: "postgres"},
 }
 
-// Instances 检测已安装的数据库容器
+// Instances 检测已安装的数据库容器(含运行实例的业务库数量)
 func Instances() []Instance {
 	out := make([]Instance, len(supported))
 	copy(out, supported)
@@ -44,8 +48,55 @@ func Instances() []Instance {
 	states := dockerx.ContainerStates()
 	for i := range out {
 		out[i].Running = states["kun-"+out[i].Key] == "running"
+		if out[i].Running {
+			out[i].Databases = businessDBCount(out[i].Key)
+		}
 	}
 	return out
+}
+
+// ---------- 业务库数量缓存(概览 KPI 用,避免每次切页都对每个实例 exec) ----------
+
+const dbCountTTL = 30 * time.Second
+
+type dbCountEntry struct {
+	n  int
+	at time.Time
+}
+
+var (
+	dbCountMu    sync.Mutex
+	dbCountCache = map[string]dbCountEntry{}
+)
+
+// businessDBCount 运行实例的业务库数量(排除系统库),30s 缓存;查询失败按 0 处理
+func businessDBCount(key string) int {
+	dbCountMu.Lock()
+	if e, ok := dbCountCache[key]; ok && time.Since(e.at) < dbCountTTL {
+		dbCountMu.Unlock()
+		return e.n
+	}
+	dbCountMu.Unlock()
+
+	n := 0
+	if dbs, err := Databases(key); err == nil {
+		for _, d := range dbs {
+			if !systemDBs[d] {
+				n++
+			}
+		}
+	}
+	dbCountMu.Lock()
+	dbCountCache[key] = dbCountEntry{n: n, at: time.Now()}
+	dbCountMu.Unlock()
+	return n
+}
+
+// invalidateDBCount 建/删库后主动失效,概览与数据库页口径立即可见
+func invalidateDBCount(key string) {
+	dbCountMu.Lock()
+	delete(dbCountCache, key)
+	dbCountMu.Unlock()
 }
 
 // passwordFor 从应用实例参数里读取 root 密码(面板自己保存的,不返回给前端)
@@ -245,6 +296,9 @@ func CreateDatabase(key, name string) error {
 		sql = "CREATE DATABASE `" + name + "` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
 	}
 	_, err := Query(key, "", sql)
+	if err == nil {
+		invalidateDBCount(key)
+	}
 	return err
 }
 
@@ -264,6 +318,9 @@ func DropDatabase(key, name string) error {
 		sql = "DROP DATABASE IF EXISTS `" + name + "`"
 	}
 	_, err := Query(key, "", sql)
+	if err == nil {
+		invalidateDBCount(key)
+	}
 	return err
 }
 

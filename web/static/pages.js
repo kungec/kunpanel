@@ -40,6 +40,8 @@ PAGES.dashboard = {
       if (days <= 30) expiring++;
     });
     var memPct = s.mem_percent || 0, cpuPct = s.cpu_percent || 0;
+    // 数据库 KPI = 各运行实例的业务库总数(与数据库页口径一致;databases 由后端统计)
+    var dbTotal = dbs.reduce(function(a, r) { return a + (r.running ? r.databases || 0 : 0); }, 0);
 
     function bar(label, pct, sub, color, liveId) {
       var pctCls = pct >= 90 ? "danger" : pct >= 75 ? "warn" : "";
@@ -53,7 +55,7 @@ PAGES.dashboard = {
 
     var html = '<div class="kpi-strip">' +
       kpi("globe", "#38bdf8", sites.length, "网站", "websites") +
-      kpi("database", "#60a5fa", dbs.length, "数据库", "databases") +
+      kpi("database", "#60a5fa", dbTotal, "数据库", "databases") +
       kpi("cube", "#0ea5e9", dk.running ? dk.runningCount + "/" + dk.containers : "-", "容器", "docker") +
       kpi("clock", "#fb923c", crons.length, "计划任务", "cron") +
       kpi("key", "#a78bfa", certs.length + (expiring ? '<i class="kpi-warn">' + expiring + " 项临期</i>" : ""), "SSL 证书", "websites") +

@@ -3,6 +3,18 @@
 所有重要变更都会记录在此文件中。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v2.74.1] - 2026-10-17
+
+### 优化:GC 调参兜底(极致优化轮收尾)
+
+量化基线(2 核 2GB 实测):面板进程 11.7MB RSS / 0.1% CPU / 全端点约 1ms /
+静态资源已带 gzip 传输(pages.js 405KB→100KB)/ Docker 轮询已自适应——
+面板本体已处平台期。本轮补齐最后一项:
+
+- systemd 单元注入 `GOGC=50`(小内存机降低 GC 峰值)与
+  `GOMEMLIMIT=256MiB`(内存软上限兜底,防极端场景尖刺);
+  新装自动生效,存量安装升级 install.sh 或手工补两行 Environment 即可
+
 ## [v2.74.0] - 2026-10-17
 
 ### 新功能:1Panel 面板一键迁移(双向互通)

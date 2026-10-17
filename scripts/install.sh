@@ -236,6 +236,8 @@ Environment=GIN_MODE=release
 NoNewPrivileges=true
 ProtectSystem=full
 ReadWritePaths=/etc/ssh -/etc/sysctl.d /etc/ufw /etc/systemd/system
+Environment="GOGC=50"
+Environment="GOMEMLIMIT=256MiB"
 PrivateTmp=true
 ProtectKernelTunables=true
 ProtectControlGroups=true

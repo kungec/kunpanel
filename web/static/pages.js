@@ -424,11 +424,11 @@ PAGES.websites = {
   btMigrateDialog(scan, el) {
     var self = this;
     var m = modal({
-      title: "面板互通迁移 · 宝塔 ⇄ 坤面板", width: 880,
+      title: "面板互通迁移 · 宝塔 / 1Panel ⇄ 坤面板", width: 880,
       body: '<div class="hub-tabs" style="margin-bottom:14px">' +
         '<div class="hub-tab active" data-dir="in">宝塔 → 坤面板(本机)</div>' +
         '<div class="hub-tab" data-dir="out">坤面板 → 宝塔</div>' +
-        '<div class="hub-tab" data-dir="remote">远程宝塔 → 本面板(输入 IP 密码)</div></div>' +
+        '<div class="hub-tab" data-dir="remote">远程宝塔 → 本面板(输入 IP 密码)</div><div class="hub-tab" data-dir="p1in">1Panel → 坤面板(本机)</div><div class="hub-tab" data-dir="p1out">坤面板 → 1Panel</div></div>' +
         '<div id="btmig-body"><div class="boot-loading" style="height:80px"><div class="spinner"></div></div></div>',
       footer: '<span class="help" style="margin-right:auto">随时可一键回滚;迁移不动宝塔原有站点与数据</span>' +
         '<button class="btn btn-plain" data-act="no">取 消</button>' +
@@ -643,11 +643,113 @@ PAGES.websites = {
     // 宝塔目录名(74)→ 显示版本(7.4)
     function phpDirDisp(d) { return d.length === 2 ? d[0] + "." + d[1] : d; }
 
+    /* ---------- 方向四:1Panel → 坤面板(本机) ---------- */
+    function drawP1In() {
+      goBtn.style.display = "none";
+      body.innerHTML = '<div class="boot-loading" style="height:80px"><div class="spinner"></div><p>读取 1Panel 信息...</p></div>';
+      api("/migration/p1/scan").then(function(res) {
+        if (!res.found) {
+          body.innerHTML = '<div class="alert alert-warning"><span class="alert-ico">' + I("warn") + '</span>未检测到本机 1Panel(需已安装在本服务器 /opt/1panel)。1Panel 与本面板不在同一台机器时暂不支持远程迁移。</div>';
+          return;
+        }
+        goBtn.textContent = "开始迁移";
+        goBtn.style.display = "";
+        var rows = (res.sites || []).map(function(s2) {
+          var typeTxt = s2.type === "php" ? "PHP" + (s2.fpm_unix ? "(unix socket)" : "") : s2.type === "proxy" ? "反向代理" : "静态";
+          var warn = s2.warnings ? '<div class="help" style="color:var(--warning)">' + esc(s2.warnings) + "</div>" : "";
+          return '<tr><td><label class="radio-line"><input type="checkbox" checked data-p1site="' + esc(s2.domain) + '"> <b>' + esc(s2.domain) + "</b>" + warn + "</label></td>" +
+            '<td><span class="tag tag-info">' + typeTxt + "</span>" + (s2.ssl ? '<span class="tag tag-success">SSL</span>' : "") + "</td>" +
+            '<td class="mono fm-ellipsis" style="max-width:200px" title="' + esc(s2.root || s2.proxy_to || "") + '">' + esc(s2.root || s2.proxy_to || "-") + "</td></tr>";
+        }).join("");
+        var dbChecks = (res.dbs || []).map(function(d0) {
+          return '<label class="radio-line" style="display:inline-flex;margin:2px 18px 2px 0"><input type="checkbox" data-p1db="' + esc(d0.name) + '"> <span class="mono">' + esc(d0.name) + "</span>" + (d0.host ? '<span class="help" style="margin:0 0 0 6px">' + esc(d0.host) + "</span>" : "") + "</label>";
+        }).join("");
+        body.innerHTML =
+          '<div class="alert alert-info page-fade"><span class="alert-ico">' + I("info") + "</span>" +
+          "迁移 1Panel 站点的<b>域名、目录/反代目标、SSL 证书</b>;静态站直接服务原目录,PHP 站按 fastcgi 上游迁移(unix socket 上游会明确提示),数据库从 1Panel MySQL 容器导出导入。" +
+          "迁移不动 1Panel 原站点与数据,可随时回退。</div>" +
+          '<div class="settings-section"><div class="settings-section-title">站点(' + (res.sites || []).length + ')<span class="help" style="margin:0">勾选要迁移的站点</span></div>' +
+          '<div class="table-wrap"><table class="table"><thead><tr><th>域名</th><th>类型</th><th>根目录/目标</th></tr></thead><tbody>' + (rows || '<tr><td colspan=3 class=help>未检测到站点</td></tr>') + "</tbody></table></div></div>" +
+          '<div class="settings-section"><div class="settings-section-title">数据库(' + (res.dbs || []).length + ')<span class="help" style="margin:0">默认不迁移;勾选则从 1Panel MySQL 容器导出并导入面板 MySQL,之后站点需改连接串</span></div>' +
+          (dbChecks || '<div class="help">1Panel 暂无 MySQL 数据库</div>') + "</div>" +
+          ((res.warnings || []).length ? '<div class="alert alert-warning"><span class="alert-ico">' + I("warn") + "</span>" + res.warnings.map(function(x) { return esc(x); }).join("<br>") + "</div>" : "");
+        goBtn.onclick = async function() {
+          var sites = [], dbs = [];
+          qsa("[data-p1site]", m.el).forEach(function(cb) { if (cb.checked) sites.push(cb.getAttribute("data-p1site")); });
+          qsa("[data-p1db]", m.el).forEach(function(cb) { if (cb.checked) dbs.push(cb.getAttribute("data-p1db")); });
+          if (!sites.length) { toast("请至少勾选一个站点", "error"); return; }
+          if (!(await confirmDlg("开始迁移所选 <b>" + sites.length + "</b> 个站点?" + (dbs.length ? "<br>同时迁移 " + dbs.length + " 个数据库到面板 MySQL。" : "") + "<br><span style='font-size:12px;color:var(--text-3)'>过程中 1Panel 站点继续运行,不影响现网。</span>"))) return;
+          m.close();
+          try {
+            var d = await api("/migration/p1/apply", { method: "POST", body: { sites: sites, import_certs: true, databases: dbs } });
+            taskModal(d.task_id, async function(st) {
+              if (st !== "success") return;
+              confirmDlg("迁移完成!<br><span style='font-size:12.5px'>现在将停止 1Panel OpenResty(并禁自启),由坤面板接管 80/443 流量。如遇问题可一键回滚到 1Panel。</span>", { danger: true }).then(async function(ok) {
+                if (!ok) { toast("未切换流量。1Panel 网关仍在服务,可稍后切换", "info", 8000); self.render(el); return; }
+                try {
+                  var d2 = await api("/migration/p1/switch", { method: "POST", body: {} });
+                  taskModal(d2.task_id, function(st2) {
+                    if (st2 === "success") { toast("流量已切换到坤面板", "success", 8000); self.render(el); }
+                  });
+                } catch (e2) { toast(e2.message, "error", 8000); self.render(el); }
+              });
+            });
+          } catch (e) { toast(e.message, "error", 8000); }
+        };
+      }).catch(function(e) {
+        body.innerHTML = emptyState("warn", "扫描失败", e.message);
+        goBtn.style.display = "none";
+      });
+    }
+
+    /* ---------- 方向五:坤面板 → 1Panel ---------- */
+    function drawP1Out() {
+      goBtn.style.display = "none";
+      body.innerHTML = '<div class="boot-loading" style="height:80px"><div class="spinner"></div><p>读取 1Panel 信息...</p></div>';
+      api("/migration/p1/reverse-plan").then(function(plan) {
+        if (!plan.p1_ready) {
+          body.innerHTML = '<div class="alert alert-warning"><span class="alert-ico">' + I("warn") + '</span>未检测到本机 1Panel(需已安装在本服务器 /opt/1panel)。</div>';
+          return;
+        }
+        goBtn.textContent = "导出到 1Panel";
+        goBtn.style.display = "";
+        var rows = (plan.sites || []).map(function(s2) {
+          var typeTxt = s2.type === "php" ? "PHP(容器)" : s2.type === "phpfpm" ? "PHP-FPM" : s2.type === "proxy" ? "反向代理" : "静态";
+          return '<tr><td><label class="radio-line"><input type="checkbox" data-pnsite1="' + esc(s2.id) + '"> <b>' + esc(s2.domain) + "</b></label></td>" +
+            '<td><span class="tag tag-info">' + typeTxt + "</span></td></tr>";
+        }).join("");
+        body.innerHTML =
+          '<div class="alert alert-info page-fade"><span class="alert-ico">' + I("info") + "</span>" +
+          "把坤面板站点导出为 1Panel OpenResty 可直接生效的形态(目录拷贝 + conf + 证书),并重载 1Panel OpenResty。<b>注意:这些站点不会出现在 1Panel 面板界面里</b>(由外部写入,功能不受影响;1Panel 重装 OpenResty 时会丢失)。</div>" +
+          '<div class="settings-section"><div class="settings-section-title">面板站点(' + (plan.sites || []).length + ')</div>' +
+          '<div class="table-wrap"><table class="table"><thead><tr><th>域名</th><th>类型</th></tr></thead><tbody>' + (rows || '<tr><td colspan=2 class=help>面板暂无站点</td></tr>') + "</tbody></table></div></div>" +
+          ((plan.warnings || []).length ? '<div class="alert alert-warning"><span class="alert-ico">' + I("warn") + "</span>" + plan.warnings.map(function(x) { return esc(x); }).join("<br>") + "</div>" : "");
+        goBtn.onclick = async function() {
+          var sites = [];
+          qsa("[data-pnsite1]", m.el).forEach(function(cb) { if (cb.checked) sites.push(cb.getAttribute("data-pnsite1")); });
+          if (!sites.length) { toast("请至少勾选一个站点", "error"); return; }
+          if (!(await confirmDlg("开始导出所选 <b>" + sites.length + "</b> 个站点到 1Panel?<br><span style='font-size:12px;color:var(--text-3)'>1Panel 现有站点不受影响。</span>"))) return;
+          m.close();
+          try {
+            var d = await api("/migration/p1/reverse-apply", { method: "POST", body: { sites: sites } });
+            taskModal(d.task_id, function(st) {
+              if (st === "success") { toast("已导出到 1Panel", "success", 8000); self.render(el); }
+            });
+          } catch (e) { toast(e.message, "error", 8000); }
+        };
+      }).catch(function(e) {
+        body.innerHTML = emptyState("warn", "预检失败", e.message);
+        goBtn.style.display = "none";
+      });
+    }
+
     function switchDir(dir) {
       curDir = dir;
       qsa(".hub-tab", m.el).forEach(function(x) { x.classList.toggle("active", x.getAttribute("data-dir") === dir); });
       if (dir === "in") { drawIn(); return; }
       if (dir === "remote") { goBtn.textContent = "开始迁移"; goBtn.style.display = "none"; drawRemote(); return; }
+      if (dir === "p1in") { drawP1In(); return; }
+      if (dir === "p1out") { drawP1Out(); return; }
       body.innerHTML = '<div class="boot-loading" style="height:80px"><div class="spinner"></div><p>读取面板与宝塔信息...</p></div>';
       goBtn.style.display = "none";
       api("/migration/bt/reverse-plan").then(function(plan) {

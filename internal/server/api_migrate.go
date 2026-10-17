@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"kunpanel/internal/btmigrate"
+	"kunpanel/internal/p1migrate"
 	"kunpanel/internal/taskx"
 )
 
@@ -160,4 +161,101 @@ func (s *Server) handleMigrateRollback(w http.ResponseWriter, r *http.Request) {
 // handleMigrateStatus 流量归属状态
 func (s *Server) handleMigrateStatus(w http.ResponseWriter, r *http.Request) {
 	OK(w, btmigrate.TrafficStatusFunc())
+}
+
+// ---------- 1Panel 迁移 ----------
+
+// handleP1Scan 1Panel 环境预检
+func (s *Server) handleP1Scan(w http.ResponseWriter, r *http.Request) {
+	res, err := p1migrate.P1Scan()
+	if err != nil {
+		Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	OK(w, res)
+}
+
+// handleP1Apply 1Panel → 坤面板 迁移(后台任务)
+func (s *Server) handleP1Apply(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Sites       []string `json:"sites"`
+		ImportCerts bool     `json:"import_certs"`
+		Databases   []string `json:"databases"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		Fail(w, http.StatusBadRequest, "参数错误")
+		return
+	}
+	t, err := taskx.M.Start("p1-migrate", func(w io.Writer) error {
+		return p1migrate.Apply(p1migrate.ApplyOptions{
+			Sites: req.Sites, ImportCerts: req.ImportCerts, Databases: req.Databases,
+		}, w, nil)
+	})
+	if err != nil {
+		Fail(w, http.StatusConflict, err.Error())
+		return
+	}
+	OK(w, map[string]string{"task_id": t.ID})
+}
+
+// handleP1ReversePlan 坤面板 → 1Panel 预检
+func (s *Server) handleP1ReversePlan(w http.ResponseWriter, r *http.Request) {
+	res, err := p1migrate.P1ReverseScan()
+	if err != nil {
+		Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	OK(w, res)
+}
+
+// handleP1ReverseApply 坤面板 → 1Panel 导出(后台任务)
+func (s *Server) handleP1ReverseApply(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Sites []string `json:"sites"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		Fail(w, http.StatusBadRequest, "参数错误")
+		return
+	}
+	if len(req.Sites) == 0 {
+		Fail(w, http.StatusBadRequest, "请选择要导出的站点")
+		return
+	}
+	t, err := taskx.M.Start("p1-reverse", func(w io.Writer) error {
+		return p1migrate.P1ReverseApply(p1migrate.P1ReverseOptions{Sites: req.Sites}, w)
+	})
+	if err != nil {
+		Fail(w, http.StatusConflict, err.Error())
+		return
+	}
+	OK(w, map[string]string{"task_id": t.ID})
+}
+
+// handleP1Switch 1Panel → 面板 流量切换(后台任务)
+func (s *Server) handleP1Switch(w http.ResponseWriter, r *http.Request) {
+	t, err := taskx.M.Start("p1-switch", func(w io.Writer) error {
+		return p1migrate.P1SwitchTraffic(w)
+	})
+	if err != nil {
+		Fail(w, http.StatusConflict, err.Error())
+		return
+	}
+	OK(w, map[string]string{"task_id": t.ID})
+}
+
+// handleP1Rollback 手动回滚到 1Panel(后台任务)
+func (s *Server) handleP1Rollback(w http.ResponseWriter, r *http.Request) {
+	t, err := taskx.M.Start("p1-rollback", func(w io.Writer) error {
+		return p1migrate.P1RollbackTraffic(w)
+	})
+	if err != nil {
+		Fail(w, http.StatusConflict, err.Error())
+		return
+	}
+	OK(w, map[string]string{"task_id": t.ID})
+}
+
+// handleP1Status 流量归属查询
+func (s *Server) handleP1Status(w http.ResponseWriter, r *http.Request) {
+	OK(w, p1migrate.P1TrafficStatus())
 }

@@ -1668,3 +1668,46 @@ func TrafficStatus() TrafficState {
 
 // TrafficStatusFunc 供外部包调用的状态查询
 func TrafficStatusFunc() TrafficState { return TrafficStatus() }
+
+// ---------- 供 1Panel 迁移复用的切换原语(p1migrate) ----------
+
+// RewriteComposePortsE 把 compose 里 80/443 的宿主端口改绑为 80/443,
+// 返回新内容与原端口;已是 80:80 的行跳过(幂等)
+func RewriteComposePortsE(content string) (string, int, int, bool) {
+	return rewriteComposePorts(content)
+}
+
+// RestoreComposePortsE 把 compose 里已绑定的 80/443 行还原为指定原端口(幂等)
+func RestoreComposePortsE(content string, o80, o443 int) string {
+	if o80 > 0 && o80 != 80 {
+		content = reComposeBind80.ReplaceAllString(content, "${1}"+itoa(o80)+"${3}")
+	}
+	if o443 > 0 && o443 != 443 {
+		content = reComposeBind443.ReplaceAllString(content, "${1}"+itoa(o443)+"${3}")
+	}
+	return content
+}
+
+// ContainerPublishedPortsE 读容器实际发布的宿主端口
+func ContainerPublishedPortsE(name string) (int, int, error) {
+	return containerPublishedPorts(name)
+}
+
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	neg := n < 0
+	if neg {
+		n = -n
+	}
+	var b []byte
+	for n > 0 {
+		b = append([]byte{byte('0' + n%10)}, b...)
+		n /= 10
+	}
+	if neg {
+		return "-" + string(b)
+	}
+	return string(b)
+}

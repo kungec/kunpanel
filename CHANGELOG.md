@@ -3,6 +3,37 @@
 所有重要变更都会记录在此文件中。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v2.74.0] - 2026-10-17
+
+### 新功能:1Panel 面板一键迁移(双向互通)
+
+以宝塔迁移为骨架新增 1Panel 迁移(网站→「面板互通迁移」新增两个页签):
+
+**1Panel → 坤面板(本机)**
+- 扫描 1Panel OpenResty 的 conf.d 站点(静态/反向代理/PHP fastcgi,
+  v1/v2 数据库与目录布局兼容),解析 server_name/root/proxy_pass/
+  fastcgi_pass/SSL 证书路径;数据库清单从 1Panel SQLite 读取(v1 表
+  databases / v2 表 database 自适应,仅列 MySQL)
+- 迁移:静态站拷贝文件到面板站点目录;反代站回环上游改写网桥并自动
+  建端口转发+防火墙放行(与宝塔版一致);PHP 站按 fastcgi 上游迁移,
+  unix socket 上游跨容器不可直连时明确告警;SSL 证书从 www/ssl 导入
+  并绑定;MySQL 数据库从 1Panel 容器 mysqldump(root 密码从容器的
+  环境变量读取)导入面板 MySQL
+- 逐站 nginx -t,失败撤销该站全部产物;迁移不动 1Panel 原站点与数据
+- 流量切换:停用 1Panel OpenResty(禁自启)→ 面板网关改绑 80/443 →
+  验证(端口归属+逐域名状态码)→ 失败自动回滚(还原端口、恢复
+  1Panel 网关与自启);支持手动回滚
+
+**坤面板 → 1Panel**
+- 站点导出为 1Panel OpenResty 可直接生效的形态:目录拷贝到
+  www/sites/<别名>/index、证书放入 www/ssl/<域名>/、生成 conf.d/
+  kunpanel-<别名>.conf 并重载 1Panel OpenResty
+- 注意:导出的站点不会出现在 1Panel 面板界面(由外部写入,功能不受影响)
+
+真机验证(fixture 仿真 1Panel:三类型站点 + SSL + SQLite + 独立 MySQL
+容器):扫描/迁移/逐站校验/端口转发/证书绑定/数据库导入/反向导出全部通过;
+流量切换对真实 1Panel 网关的联动需在装有 1Panel 的机器上复验。
+
 ## [v2.73.7] - 2026-10-17
 
 ### 修复:宝塔迁移三项复审问题

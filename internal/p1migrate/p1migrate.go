@@ -123,80 +123,75 @@ var (
 	reFpmPass    = regexp.MustCompile(`fastcgi_pass\s+([^;]+);`)
 )
 
-// P1Scan 扫描 1Panel 环境
+// P1Scan 扫描本机 1Panel 环境
 func P1Scan() (*P1ScanResult, error) {
-	res := &P1ScanResult{Sites: []P1Site{}, DBs: []P1DB{}, Warnings: []string{}, Scanned: time.Now()}
 	if !P1Installed() {
-		return res, nil
+		return &P1ScanResult{Sites: []P1Site{}, DBs: []P1DB{}, Warnings: []string{}, Scanned: time.Now()}, nil
 	}
-	res.Found = true
-	res.ConfDir = p1ConfDir()
+	return scanFrom(p1ConfDir(), p1DBFile())
+}
 
-	// 站点:解析 conf.d 下每个 <域名>.conf(1Panel 一个站点一个文件,
-	// 内含 80 与 443 两个 server 块,取并集)
-	entries, err := os.ReadDir(res.ConfDir)
+// buildDBListScript 生成读 1Panel 数据库清单的 python 脚本
+// (v1 表 databases / v2 表 database,列名随版本漂移,PRAGMA 探测后取交集)
+func buildDBListScript(dbFile string) string {
+	return "import sqlite3,json\n" +
+		"c=sqlite3.connect('" + dbFile + "')\n" +
+		"tabs={r[0] for r in c.execute(\"select name from sqlite_master where type='table'\")}\n" +
+		"tab='databases' if 'databases' in tabs else ('database' if 'database' in tabs else '')\n" +
+		"if not tab:\n" +
+		"    print(json.dumps([]))\n" +
+		"else:\n" +
+		"    cols={r[1] for r in c.execute('PRAGMA table_info('+tab+')')}\n" +
+		"    name='databasename' if 'databasename' in cols else ('name' if 'name' in cols else '')\n" +
+		"    user='username' if 'username' in cols else 'user'\n" +
+		"    host='host' if 'host' in cols else 'server'\n" +
+		"    if not name:\n" +
+		"        print(json.dumps([]))\n" +
+		"    else:\n" +
+		"        rows=[dict(name=r[0],user=r[1],host=r[2],type=r[3]) for r in c.execute('select '+name+','+user+','+host+',type from '+tab)]\n" +
+		"        print(json.dumps(rows))\n"
+}
+
+// scanFrom 解析 conf 目录与库文件(本机路径或远程拉取的元数据包)
+func scanFrom(confDir, dbFile string) (*P1ScanResult, error) {
+	res := &P1ScanResult{Found: true, ConfDir: confDir, Sites: []P1Site{}, DBs: []P1DB{}, Warnings: []string{}, Scanned: time.Now()}
+	entries, err := os.ReadDir(confDir)
 	if err == nil {
 		for _, e := range entries {
 			if e.IsDir() || !strings.HasSuffix(e.Name(), ".conf") || strings.HasPrefix(e.Name(), ".") {
 				continue
 			}
-			path := filepath.Join(res.ConfDir, e.Name())
-			site, w := parseP1SiteConf(path)
+			path := filepath.Join(confDir, e.Name())
+			site, warn := parseP1SiteConf(path)
 			if site == nil {
-				continue // 纯 include/碎片文件
+				continue
 			}
-			if w != "" {
-				res.Warnings = append(res.Warnings, "站点 "+site.Domain+": "+w)
+			if warn != "" {
+				res.Warnings = append(res.Warnings, "站点 "+site.Domain+": "+warn)
 			}
 			if site.Domain != "" {
 				res.Sites = append(res.Sites, *site)
 			}
 		}
 	}
-
-	// 数据库清单(1Panel v1 表 databases / v2 表 database,列名随版本漂移,
-	// PRAGMA 探测后取交集)
-	dbFile := p1DBFile()
-	if dbFile == "" {
-		res.Warnings = append(res.Warnings, "未找到 1Panel 数据库文件,数据库清单为空")
-	} else {
-		script := "import sqlite3,json\n" +
-			"c=sqlite3.connect('" + dbFile + "')\n" +
-			"tabs={r[0] for r in c.execute(\"select name from sqlite_master where type='table'\")}\n" +
-			"tab='databases' if 'databases' in tabs else ('database' if 'database' in tabs else '')\n" +
-			"if not tab:\n" +
-			"    print(json.dumps([]))\n" +
-			"else:\n" +
-			"    cols={r[1] for r in c.execute('PRAGMA table_info('+tab+')')}\n" +
-			"    name='databasename' if 'databasename' in cols else ('name' if 'name' in cols else '')\n" +
-			"    user='username' if 'username' in cols else 'user'\n" +
-			"    host='host' if 'host' in cols else 'server'\n" +
-			"    if not name:\n" +
-			"        print(json.dumps([]))\n" +
-			"    else:\n" +
-			"        rows=[dict(name=r[0],user=r[1],host=r[2],type=r[3]) for r in c.execute('select '+name+','+user+','+host+',type from '+tab)]\n" +
-			"        print(json.dumps(rows))\n"
-		out, err := pythonJSONLite(script)
-		if err != nil {
-			res.Warnings = append(res.Warnings, "读取 1Panel 数据库清单失败: "+err.Error())
-		} else {
-			var dbs []P1DB
-			if json.Unmarshal([]byte(out), &dbs) != nil {
-				res.Warnings = append(res.Warnings, "解析 1Panel 数据库清单失败")
+	if dbFile != "" {
+		if _, serr := os.Stat(dbFile); serr == nil {
+			out, derr := pythonJSONLite(buildDBListScript(dbFile))
+			if derr != nil {
+				res.Warnings = append(res.Warnings, "读取 1Panel 数据库清单失败: "+derr.Error())
 			} else {
-				for _, d := range dbs {
-					if strings.EqualFold(d.Type, "mysql") {
-						d.Type = "mysql"
-						res.DBs = append(res.DBs, d)
+				var dbs []P1DB
+				if json.Unmarshal([]byte(out), &dbs) == nil {
+					for _, d := range dbs {
+						if strings.EqualFold(d.Type, "mysql") {
+							d.Type = "mysql"
+							res.DBs = append(res.DBs, d)
+						}
 					}
-				}
-				if len(dbs) != len(res.DBs) {
-					res.Warnings = append(res.Warnings, "非 MySQL 数据库(PostgreSQL 等)暂不支持自动迁移,已从清单省略")
 				}
 			}
 		}
 	}
-
 	if len(res.Sites) == 0 && len(res.DBs) == 0 {
 		res.Warnings = append(res.Warnings, "未解析到任何站点/数据库:1Panel v2 结构若持续变化,请反馈扫描输出")
 	}

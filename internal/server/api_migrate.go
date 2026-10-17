@@ -259,3 +259,62 @@ func (s *Server) handleP1Rollback(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleP1Status(w http.ResponseWriter, r *http.Request) {
 	OK(w, p1migrate.P1TrafficStatus())
 }
+
+// handleP1RemoteScan 远程 1Panel 扫描(SSH 对接,TOFU 指纹回显)
+func (s *Server) handleP1RemoteScan(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Host        string `json:"host"`
+		Port        int    `json:"port"`
+		User        string `json:"user"`
+		Pass        string `json:"pass"`
+		Fingerprint string `json:"fingerprint"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		Fail(w, http.StatusBadRequest, "参数错误")
+		return
+	}
+	res, fp, err := p1migrate.P1RemoteScan(p1migrate.P1RemoteCred{
+		Host: req.Host, Port: req.Port, User: req.User, Pass: req.Pass, Fingerprint: req.Fingerprint,
+	})
+	if err != nil {
+		// 指纹回显也要带回(连接失败时前端展示失败原因即可)
+		Fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	res.Warnings = append(res.Warnings, "指纹: "+fp)
+	OK(w, res)
+}
+
+// handleP1RemoteApply 远程 1Panel 迁移(后台任务)
+func (s *Server) handleP1RemoteApply(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Host        string   `json:"host"`
+		Port        int      `json:"port"`
+		User        string   `json:"user"`
+		Pass        string   `json:"pass"`
+		Fingerprint string   `json:"fingerprint"`
+		Sites       []string `json:"sites"`
+		ImportCerts bool     `json:"import_certs"`
+		Databases   []string `json:"databases"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		Fail(w, http.StatusBadRequest, "参数错误")
+		return
+	}
+	if req.Host == "" || req.Pass == "" {
+		Fail(w, http.StatusBadRequest, "远程地址与密码不能为空")
+		return
+	}
+	t, err := taskx.M.Start("p1-remote-migrate", func(w io.Writer) error {
+		return p1migrate.P1RemoteApply(p1migrate.P1RemoteCred{
+			Host: req.Host, Port: req.Port, User: req.User, Pass: req.Pass, Fingerprint: req.Fingerprint,
+		}, p1migrate.ApplyOptions{
+			Sites: req.Sites, ImportCerts: req.ImportCerts, Databases: req.Databases,
+		}, w, nil)
+	})
+	if err != nil {
+		Fail(w, http.StatusConflict, err.Error())
+		return
+	}
+	OK(w, map[string]string{"task_id": t.ID})
+}

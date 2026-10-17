@@ -254,6 +254,8 @@ func (s *Server) registerAPI() {
 	m.Handle("GET /api/v1/migration/p1/reverse-plan", wrap(http.HandlerFunc(s.handleP1ReversePlan)))
 	m.Handle("POST /api/v1/migration/p1/reverse-apply", wrap(http.HandlerFunc(s.handleP1ReverseApply)))
 	m.Handle("POST /api/v1/migration/p1/switch", wrap(http.HandlerFunc(s.handleP1Switch)))
+	m.Handle("POST /api/v1/migration/p1/remote/scan", wrap(http.HandlerFunc(s.handleP1RemoteScan)))
+	m.Handle("POST /api/v1/migration/p1/remote/apply", wrap(http.HandlerFunc(s.handleP1RemoteApply)))
 	m.Handle("POST /api/v1/migration/p1/rollback", wrap(http.HandlerFunc(s.handleP1Rollback)))
 	m.Handle("GET /api/v1/migration/p1/status", wrap(http.HandlerFunc(s.handleP1Status)))
 	m.Handle("GET /api/v1/waf/apache", wrap(http.HandlerFunc(s.handleWafApacheGet)))

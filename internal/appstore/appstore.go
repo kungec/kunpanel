@@ -478,8 +478,37 @@ volumes:
                 return "http://<IP>:" + pval(p, "Port", "8082")
             },
         },
-		{
-			Key: "npm", Name: "Nginx Proxy Manager", Category: "Web服务器", Icon: "shuffle", Version: "latest",
+        {
+            Key: "kunpay", Name: "坤支付", Category: "建站", Icon: "store", Version: "latest",
+            Desc: "个人免签约码支付系统(Go 单二进制 + SQLite):易支付协议完全兼容,安卓APP扫码配对自动到账,多码轮询,审计级资金流水。首次登录 admin/admin123,系统强制改密",
+            Params: []Param{
+                {Key: "Port", Label: "监听端口", Default: "8090", Type: "port", Required: true},
+            },
+            ComposeFrom: func(p map[string]string) string {
+                port := pval(p, "Port", "8090")
+                // 镜像未发布 Docker Hub:compose 远程 Git 上下文构建(BuildKit 支持),
+                // kunpay 仓库自带多阶段 Dockerfile(CA/时区/非 root/healthcheck 齐备),
+                // 首次安装构建约 2-5 分钟,之后走镜像缓存
+                return `services:
+  kunpay:
+    build: https://github.com/kungec/kunpay.git
+    image: kunpay-local:latest
+    container_name: kun-kunpay
+    restart: unless-stopped
+    ports:
+      - "` + port + `:8080"
+    environment:
+      TZ: Asia/Shanghai
+    volumes:
+      - kunpay_data:/app/data
+volumes:
+  kunpay_data:
+`
+            },
+            WebURL: func(p map[string]string) string { return fmt.Sprintf("http://<IP>:%s", pval(p, "Port", "8090")) },
+        },
+        {
+            Key: "npm", Name: "Nginx Proxy Manager", Category: "Web服务器", Icon: "shuffle", Version: "latest",
 			Desc: "可视化反向代理管理,自动申请 SSL 证书",
 			Params: []Param{
 				{Key: "Port", Label: "管理端口", Default: "81", Type: "port", Required: true},

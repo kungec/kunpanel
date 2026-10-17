@@ -310,9 +310,12 @@ func computeInfo() map[string]any {
 	}
 	res["running"] = true
 	res["version"] = Version()
-	if out, err := util.RunWithTimeout(8*time.Second, "docker", "images", "-q"); err == nil {
-		res["images"] = len(nonEmptyLines(out))
-	}
+	// 镜像计数与镜像列表同源(imagesCache):此前单独跑 docker images -q,
+	// 与列表(json 解析跳过损坏行)口径不一致,统计卡数字永远对不上
+	dockerSnapMu.Lock()
+	imagesCount := len(imagesCache)
+	dockerSnapMu.Unlock()
+	res["images"] = imagesCount
 	// 一次 ps -a 同时取容器总数与运行数(原为两次调用)
 	if out, err := util.RunWithTimeout(8*time.Second, "docker", "ps", "-a", "--format", "{{.State}}"); err == nil {
 		lines := strings.Split(strings.TrimSpace(out), "\n")
@@ -510,24 +513,42 @@ func Images() ([]Image, error) {
 }
 
 func imagesReal() ([]Image, error) {
-	out, err := util.RunWithTimeout(15*time.Second, "docker", "images", "--format", "{{json .}}")
+	out, err := util.RunWithTimeout(15*time.Second, "docker", "images", "-a", "--format", "{{json .}}")
 	if err != nil {
 		return nil, fmt.Errorf("docker images 失败: %s", out)
 	}
+	return parseImagesJSON(out), nil
+}
+
+// parseImagesJSON 解析 docker images 的 json 输出。
+// Docker 29 的 json 含嵌套对象字段,必须用 map[string]any 解析(与 containersReal
+// 同因):map[string]string 会让含嵌套字段的行整体反序列化失败被跳过,镜像列表缺行,
+// 与统计卡口径不一致(统计=行数恒偏大)
+func parseImagesJSON(out string) []Image {
 	var list []Image
 	sc := bufio.NewScanner(strings.NewReader(out))
 	sc.Buffer(make([]byte, 1024*1024), 1024*1024)
 	for sc.Scan() {
-		var raw map[string]string
-		if err := json.Unmarshal(sc.Bytes(), &raw); err != nil {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
 			continue
 		}
+		var raw map[string]any
+		if err := json.Unmarshal([]byte(line), &raw); err != nil {
+			continue
+		}
+		get := func(k string) string {
+			if v, ok := raw[k].(string); ok {
+				return v
+			}
+			return ""
+		}
 		list = append(list, Image{
-			ID: cutID(raw["ID"]), Repo: raw["Repository"], Tag: raw["Tag"],
-			Size: raw["Size"], CreatedAt: raw["CreatedAt"],
+			ID: cutID(get("ID")), Repo: get("Repository"), Tag: get("Tag"),
+			Size: get("Size"), CreatedAt: get("CreatedAt"),
 		})
 	}
-	return list, nil
+	return list
 }
 
 func ImageRemove(id string) error {

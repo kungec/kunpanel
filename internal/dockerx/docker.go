@@ -95,11 +95,15 @@ var (
 	imagesCache          []Image
 	imagesCacheAt        time.Time
 	imagesRefreshing     bool
+	statsCache           []ContainerStat
+	statsCacheAt         time.Time
+	statsRefreshing      bool
 )
 
 const (
 	statesTTL = 3 * time.Second
 	listTTL   = 5 * time.Second
+	statsTTL  = 10 * time.Second
 )
 
 // StartCacheRefresher 后台主动刷新快照缓存:让用户点击容器页/镜像页时
@@ -145,11 +149,32 @@ func StartCacheRefresher(stop <-chan struct{}) {
 			// 后台仅 5 分钟兜底一次(外部 docker pull 最多延迟 5 分钟可见)
 			dockerSnapMu.Lock()
 			imagesStale := now.Sub(imagesCacheAt) > 5*time.Minute
+			// docker stats 是最贵命令,只在活跃窗口每两轮刷新一次(≈16s);
+			// 空闲不刷(容器页没人看时没有刷新意义)
+			statsStale := activeRecently() && now.Sub(statsCacheAt) > 2*interval
 			dockerSnapMu.Unlock()
 			if imagesStale {
 				if imgs, err := imagesReal(); err == nil {
 					dockerSnapMu.Lock()
 					imagesCache, imagesCacheAt = imgs, time.Now()
+					dockerSnapMu.Unlock()
+				}
+			}
+			if statsStale {
+				dockerSnapMu.Lock()
+				refreshing := statsRefreshing
+				if !refreshing {
+					statsRefreshing = true
+				}
+				dockerSnapMu.Unlock()
+				if !refreshing {
+					if res, err := statsReal(); err == nil {
+						dockerSnapMu.Lock()
+						statsCache, statsCacheAt = res, time.Now()
+						dockerSnapMu.Unlock()
+					}
+					dockerSnapMu.Lock()
+					statsRefreshing = false
 					dockerSnapMu.Unlock()
 				}
 			}
@@ -173,7 +198,64 @@ func InvalidateDockerCache() {
 	statesCacheAt = time.Time{}
 	containersCacheAt = time.Time{}
 	imagesCacheAt = time.Time{}
+	statsCacheAt = time.Time{}
 	dockerSnapMu.Unlock()
+}
+
+// forgetContainerCache 容器删除成功后同步移出缓存:SWR 有旧值时会立即返回旧
+// 列表,前端删除后重渲染仍看到该容器,像"没删掉";乐观移除让下一次渲染
+// 就是正确结果(后台刷新随后对账真实状态)
+func forgetContainerCache(id string) {
+	dockerSnapMu.Lock()
+	defer dockerSnapMu.Unlock()
+	var gone []string
+	if containersCache != nil {
+		out := make([]Container, 0, len(containersCache))
+		for _, c := range containersCache {
+			if c.ID == id || strings.HasPrefix(c.ID, id) || strings.HasPrefix(id, c.ID) {
+				gone = append(gone, c.Names)
+				continue
+			}
+			out = append(out, c)
+		}
+		containersCache = out
+	}
+	for _, n := range gone {
+		delete(statesCache, n)
+	}
+}
+
+// updateContainerStateCache 启停类操作成功后同步修正缓存中的状态
+// (docker action 返回即已生效,无需等下一轮 docker ps)
+func updateContainerStateCache(id, state, status string) {
+	dockerSnapMu.Lock()
+	defer dockerSnapMu.Unlock()
+	for i, c := range containersCache {
+		if c.ID == id || strings.HasPrefix(c.ID, id) || strings.HasPrefix(id, c.ID) {
+			containersCache[i].State = state
+			containersCache[i].Status = status
+			if statesCache != nil {
+				statesCache[c.Names] = state
+			}
+			return
+		}
+	}
+}
+
+// forgetImageCache 镜像删除成功后同步移出缓存(原理同 forgetContainerCache)
+func forgetImageCache(id string) {
+	dockerSnapMu.Lock()
+	defer dockerSnapMu.Unlock()
+	if imagesCache != nil {
+		out := make([]Image, 0, len(imagesCache))
+		for _, im := range imagesCache {
+			if im.ID == id || strings.HasPrefix(im.ID, id) || strings.HasPrefix(id, im.ID) {
+				continue
+			}
+			out = append(out, im)
+		}
+		imagesCache = out
+	}
 }
 
 // ContainerStates 一次 docker ps -a 返回全部容器状态(name → docker 状态字符串,
@@ -445,6 +527,12 @@ func ContainerAction(id, action string) error {
 	if err != nil {
 		return fmt.Errorf("%s 失败: %s", action, strings.TrimSpace(out))
 	}
+	// docker action 返回即已生效,同步修正缓存,前端重渲染立即是最新状态
+	st := map[string]string{"start": "running", "restart": "running", "unpause": "running",
+		"pause": "paused", "stop": "exited", "kill": "exited"}[action]
+	updateContainerStateCache(id, st, map[string]string{
+		"exited": "Exited", "paused": "Paused",
+	}[st])
 	return nil
 }
 
@@ -459,6 +547,7 @@ func ContainerRemove(id string, force bool) error {
 	if err != nil {
 		return fmt.Errorf("删除容器失败: %s", strings.TrimSpace(out))
 	}
+	forgetContainerCache(id)
 	return nil
 }
 
@@ -553,10 +642,12 @@ func parseImagesJSON(out string) []Image {
 }
 
 func ImageRemove(id string) error {
+	defer InvalidateDockerCache()
 	out, err := util.RunWithTimeout(30*time.Second, "docker", "rmi", "-f", id)
 	if err != nil {
 		return fmt.Errorf("删除镜像失败: %s", strings.TrimSpace(out))
 	}
+	forgetImageCache(id)
 	return nil
 }
 
@@ -692,8 +783,40 @@ type ContainerStat struct {
 	BlockIO  string `json:"block_io"`
 }
 
-// Stats 一次性采集全部运行中容器的资源占用
+// Stats 一次性采集全部运行中容器的资源占用。
+// docker stats --no-stream 是最贵的 docker 命令(对每容器采两轮 cgroup 指标,
+// 弱机/低内存 VPS 上一次 2~5 秒且把 dockerd 打满,拖慢一切操作),因此绝不
+// 同步等待:10s 内返回缓存;过期后台单飞刷新并立即返回旧值(冷启动返回空,
+// 前端资源列先显示 "-",数秒后自动补上)。周期刷新由 StartCacheRefresher 驱动
 func Stats() ([]ContainerStat, error) {
+	dockerSnapMu.Lock()
+	if statsCache != nil && time.Since(statsCacheAt) < statsTTL {
+		c := statsCache
+		dockerSnapMu.Unlock()
+		return c, nil
+	}
+	if !statsRefreshing {
+		statsRefreshing = true
+		dockerSnapMu.Unlock()
+		go func() {
+			res, err := statsReal()
+			dockerSnapMu.Lock()
+			if err == nil {
+				statsCache, statsCacheAt = res, time.Now()
+			}
+			statsRefreshing = false
+			dockerSnapMu.Unlock()
+		}()
+	} else {
+		dockerSnapMu.Unlock()
+	}
+	dockerSnapMu.Lock()
+	c := statsCache
+	dockerSnapMu.Unlock()
+	return c, nil
+}
+
+func statsReal() ([]ContainerStat, error) {
 	out, err := util.RunWithTimeout(25*time.Second, "docker", "stats", "--no-stream", "--format", "{{json .}}")
 	if err != nil {
 		return nil, fmt.Errorf("docker stats 失败: %s", tail(out, 300))
@@ -714,6 +837,11 @@ func Stats() ([]ContainerStat, error) {
 			NetIO:    raw["NetIO"],
 			BlockIO:  raw["BlockIO"],
 		})
+	}
+	// 无运行容器时 list 为 nil:归一为空切片,否则缓存永不过期命中,
+	// 每次读取都会再起一条 docker stats
+	if list == nil {
+		list = []ContainerStat{}
 	}
 	return list, nil
 }

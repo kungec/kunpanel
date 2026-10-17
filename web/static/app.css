@@ -1390,3 +1390,7 @@ tr.fm-selected { background: var(--primary-light); }
   animation: spin .6s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* 网站列表根目录路径:可点击直达文件管理器 */
+.root-link { color: var(--primary, #3b82f6); cursor: pointer; }
+.root-link:hover { text-decoration: underline; }

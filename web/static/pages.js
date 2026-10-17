@@ -217,7 +217,12 @@ PAGES.websites = {
           { title: "域名", render: (r) => '<span class="ellipsis" title="' + esc(r.domain) + '">' + esc(r.domain) + "</span>" },
           { title: "类型", width: "100px", render: (r) => (r.type === "proxy" ? '<span class="tag tag-primary">反向代理</span>' : r.type === "php" ? '<span class="tag tag-purple">PHP 站点</span>' : '<span class="tag tag-success">静态站点</span>') },
           { title: "端口", width: "70px", render: (r) => r.port },
-          { title: "目标", render: (r) => esc(r.proxy_to || r.root || "-") },
+          { title: "根目录 / 目标", width: "300px", render: (r) => {
+              // 反代站显示上游;静态/PHP 站显示根目录路径,点击直达文件管理器该目录
+              if (r.type === "proxy") return '<span class="mono ellipsis" title="' + esc(r.proxy_to || "") + '">' + esc(r.proxy_to || "-") + "</span>";
+              if (!r.root) return "-";
+              return '<span class="mono ellipsis root-link" data-root="' + esc(r.root) + '" title="点击打开文件管理">' + esc(r.root) + "</span>";
+            } },
           { title: "状态", width: "110px", render: (r) => '<span class="switch ' + (r.enabled ? "on" : "") + '" data-id="' + r.id + '"></span>' },
           { title: "HTTPS", width: "150px", render: (r) => {
               if (!r.ssl_cert_id) return '<span class="tag tag-info">未启用</span>';
@@ -287,6 +292,10 @@ PAGES.websites = {
     qsa("[data-files]", el).forEach((b) => (b.onclick = function() {
       var st = site(b.dataset.files);
       location.hash = "#/files?path=" + encodeURIComponent(st.root) + "&from=%23%2Fwebsites";
+    }));
+    // 列表里的根目录路径:点击直达文件管理器该目录(与「文件」按钮同效)
+    qsa("[data-root]", el).forEach((b) => (b.onclick = function() {
+      location.hash = "#/files?path=" + encodeURIComponent(b.getAttribute("data-root")) + "&from=%23%2Fwebsites";
     }));
     qsa("[data-ssl]", el).forEach((b) => (b.onclick = () => this.sslDialog(site(b.dataset.ssl), el)));
     qsa("[data-edit]", el).forEach((b) => (b.onclick = () => this.settingsDialog(site(b.dataset.edit), el)));

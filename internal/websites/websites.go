@@ -299,18 +299,40 @@ func Create(o CreateOpts) (*Site, error) {
 		}
 	}
 	id := fmt.Sprintf("site_%d", time.Now().UnixNano()/1000000)
+	// 站点目录以主域名命名(kun.bh.cx),比数字 ID 直观;重名追加序号,
+	// 非法字符转连字符,通配符剥掉 *. 前缀,极端情况回退站点 ID
+	dirBase := siteDirBase(domain)
+	if dirBase == "" {
+		dirBase = id
+	}
+	webroot := WebRoot()
+	usedRoots := map[string]bool{}
+	for _, s0 := range list {
+		if s0.Root != "" {
+			usedRoots[strings.ToLower(filepath.Clean(s0.Root))] = true
+		}
+	}
+	for i := 1; ; i++ {
+		candidate := dirBase
+		if i > 1 {
+			candidate = fmt.Sprintf("%s-%d", dirBase, i)
+		}
+		full := filepath.Join(webroot, candidate)
+		if !usedRoots[strings.ToLower(full)] && !dirExists(full) {
+			dirBase = candidate
+			break
+		}
+	}
 	s := &Site{
 		ID: id, Domain: domain, Alias: strings.Fields(domain)[0], Type: o.SiteType,
 		Port: o.Port, Enabled: true,
 		CreatedAt: time.Now().Format("2006-01-02 15:04:05"), Remark: o.Remark,
-		Root: filepath.Join(WebRoot(), id),
+		Root: filepath.Join(webroot, dirBase),
 	}
 	if o.SiteType == "php" {
-		// PHP 站点:全部请求转发到所选 PHP 运行时实例,容器内按站点目录区分
+		// PHP 站点:全部请求转发到所选 PHP 运行时实例,容器内按站点目录区分;
+		// 上游路径在根目录最终确定后赋值(见下方自定义根目录之后)
 		s.PhpKey = normalizePHPKey(o.PhpKey)
-		s.ProxyTo = PhpUpstreamFor(s.PhpKey, id)
-		// 根目录不在默认 roots 下时,把站点目录挂进 PHP 容器(否则容器 404)
-		ensureSitePHPMount(s, io.Discard)
 	}
 	if o.SiteType == "phpfpm" {
 		// PHP-FPM 直连站点:root 保持宿主机原路径,fastcgi 直连宝塔 php-fpm
@@ -328,6 +350,10 @@ func Create(o CreateOpts) (*Site, error) {
 		}
 		s.Root = filepath.Clean(rd)
 	}
+	if o.SiteType == "php" {
+		// 根目录已最终确定:上游路径=容器内站点子目录(目录名)
+		s.ProxyTo = PhpUpstreamFor(s.PhpKey, filepath.Base(s.Root))
+	}
 	if o.SiteType != "proxy" {
 		if err := os.MkdirAll(s.Root, 0o755); err != nil {
 			return nil, err
@@ -338,6 +364,11 @@ func Create(o CreateOpts) (*Site, error) {
 			if err := appstore.EnsureWebrootMount(strings.TrimPrefix(mode.Target, "kun-"), s.Root, io.Discard); err != nil {
 				return nil, fmt.Errorf("网关容器挂载站点目录失败: %v", err)
 			}
+		}
+		// PHP 容器同理:站点文件由它提供(DocumentRoot=/var/www/html),
+		// 根目录不在默认 roots 下时必须挂进 /var/www/html/<目录名>,否则 404
+		if o.SiteType == "php" {
+			ensureSitePHPMount(s, io.Discard)
 		}
 		index := filepath.Join(s.Root, "index.html")
 		if !fileExists(index) {
@@ -672,7 +703,7 @@ func SetSiteType(id, newType, target, phpKey, proxyHost string) error {
 		site.ProxyTo = target
 	case "php":
 		site.PhpKey = normalizePHPKey(phpKey)
-		site.ProxyTo = PhpUpstreamFor(site.PhpKey, site.ID)
+		site.ProxyTo = PhpUpstreamFor(site.PhpKey, filepath.Base(site.Root))
 	}
 	site.Type = newType
 	site.ProxyHost = SanitizeProxyHost(proxyHost)
@@ -692,6 +723,32 @@ func SetSiteType(id, newType, target, phpKey, proxyHost string) error {
 	return Reload()
 }
 
+// siteDirBase 主域名转站点目录名:小写、剥通配符前缀、非法字符转连字符;
+// 结果为空时由调用方回退站点 ID
+func siteDirBase(domain string) string {
+	tokens := strings.Fields(domain)
+	primary := ""
+	if len(tokens) > 0 {
+		primary = tokens[0]
+	}
+	primary = strings.TrimPrefix(primary, "*.")
+	primary = strings.ToLower(primary)
+	var b strings.Builder
+	for _, r := range primary {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '.' || r == '-' || r == '_' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	return strings.Trim(b.String(), "-.")
+}
+
+func dirExists(p string) bool {
+	st, err := os.Stat(p)
+	return err == nil && st.IsDir()
+}
+
 // ensureSitePHPMount PHP 站点根目录不在默认 roots 下时(自定义默认目录/建站
 // 自定义根目录),把根目录挂进 PHP 运行时容器的 /var/www/html/<siteID>
 // (php:apache 的 DocumentRoot),否则容器看不到站点文件、反代过去全是 404。
@@ -707,7 +764,7 @@ func ensureSitePHPMount(s *Site, w io.Writer) {
 	if key == "" {
 		key = "php"
 	}
-	if err := appstore.EnsureComposeMount(key, s.Root, "/var/www/html/"+s.ID, w); err != nil {
+	if err := appstore.EnsureComposeMount(key, s.Root, "/var/www/html/"+filepath.Base(s.Root), w); err != nil {
 		if w != nil {
 			fmt.Fprintf(w, ">> 警告: 挂载站点目录到 PHP 容器失败: %v\n", err)
 		}
@@ -795,7 +852,7 @@ func writeConf(s *Site) error {
 	if mode.Mode == "container" && s.Type != "phpfpm" && underRootsDir(s.Root) {
 		// 默认站点目录在网关容器内挂载为 /var/www;自定义根目录走同路径
 		// 挂载(见 Create 的 EnsureWebrootMount),容器内外路径保持一致
-		root = "/var/www/" + s.ID
+		root = "/var/www/" + filepath.Base(s.Root)
 		challengeRoot = root
 	}
 	// 站点额外配置(保真迁移):自定义 location / include 等,原样注入 server 块;
@@ -964,7 +1021,7 @@ func writeConf(s *Site) error {
 	if len(s.Subs) > 0 {
 		subRoot := s.Root
 		if mode.Mode == "container" && s.Type != "phpfpm" && underRootsDir(s.Root) {
-			subRoot = "/var/www/" + s.ID
+			subRoot = "/var/www/" + filepath.Base(s.Root)
 		}
 		for _, sub := range s.Subs {
 			dir := subRoot
@@ -1345,7 +1402,7 @@ func UpdateSitePhp(id, phpKey string) error {
 		return nil // 无变化
 	}
 	site.PhpKey = phpKey
-	site.ProxyTo = PhpUpstreamFor(phpKey, id)
+	site.ProxyTo = PhpUpstreamFor(phpKey, filepath.Base(site.Root))
 	if err := save(); err != nil {
 		mu.Unlock()
 		return err

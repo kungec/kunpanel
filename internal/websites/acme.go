@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -38,25 +39,29 @@ const (
 	acmeDirStaging = "https://acme-staging-v02.api.letsencrypt.org/directory"
 )
 
-// ACMEProvider CA 服务商预设(ZeroSSL/Google/BuyPass 需要 EAB 凭据)
+// ACMEProvider CA 服务商预设
 type ACMEProvider struct {
 	Name    string `json:"name"`
 	Dir     string `json:"dir"`
-	NeedEAB bool   `json:"need_eab"`
+	NeedEAB bool   `json:"need_eab"` // 前端是否显示 EAB 输入行
 	Staging bool   `json:"staging,omitempty"`
+	Hint    string `json:"hint,omitempty"` // 下拉选中时的说明文案
 }
 
+// buypass 已于 2025-10 停发全部 TLS/SSL 证书(含 ACME 免费 Go SSL),
+// 从服务商下拉下架;map 条目保留:存量 buypass 账户续期仍指向正确目录,
+// 由 Buypass 侧返回明确错误引导用户切换 CA,而不是静默落到 Let's Encrypt
 var acmeProviders = map[string]ACMEProvider{
 	"letsencrypt":      {Name: "Let's Encrypt", Dir: acmeDirProd},
-	"zerossl":          {Name: "ZeroSSL", Dir: "https://acme.zerossl.com/v2/DV90", NeedEAB: true},
-	"google":           {Name: "Google Trust Services", Dir: "https://dv.acme-v02.api.pki.goog/directory", NeedEAB: true},
-	"buypass":          {Name: "BuyPass Go SSL", Dir: "https://api.buypass.com/acme/directory", NeedEAB: true},
+	"zerossl":          {Name: "ZeroSSL", Dir: "https://acme.zerossl.com/v2/DV90", Hint: "填申请邮箱即可,面板自动获取 EAB 并注册,无需手动申请"},
+	"google":           {Name: "Google Trust Services", Dir: "https://dv.acme-v02.api.pki.goog/directory", NeedEAB: true, Hint: "需在 Google Cloud 控制台(Public CA)获取 EAB 凭据后填写"},
+	"buypass":          {Name: "BuyPass Go SSL", Dir: "https://api.buypass.com/acme/directory", NeedEAB: true, Hint: "BuyPass 已于 2025-10 停发证书,仅供存量账户续期,建议切换其他 CA"},
 	"letsencrypt_test": {Name: "Let's Encrypt 测试", Dir: acmeDirStaging, Staging: true},
 }
 
-// ListACMEProviders 供前端下拉渲染
+// ListACMEProviders 供前端下拉渲染(buypass 已停发,不再提供选择)
 func ListACMEProviders() []ACMEProvider {
-	order := []string{"letsencrypt", "zerossl", "google", "buypass", "letsencrypt_test"}
+	order := []string{"letsencrypt", "zerossl", "google", "letsencrypt_test"}
 	out := make([]ACMEProvider, 0, len(order))
 	for _, k := range order {
 		p := acmeProviders[k]
@@ -155,6 +160,41 @@ func SetACMEConfig(email string, staging bool) error {
 	return SetACMEConfigEx(email, p, "", "")
 }
 
+// fetchZeroSSLEAB 通过 ZeroSSL 公开接口用邮箱自动获取 EAB 凭据(acme.sh 同款
+// 机制):POST https://api.zerossl.com/acme/eab-credentials-email,
+// 表单字段 email,免鉴权,返回 eab_kid 与 eab_hmac_key,
+// 实现"只填邮箱"的 ZeroSSL 自动注册
+func fetchZeroSSLEAB(email string, timeout time.Duration) (string, string, error) {
+	req, err := http.NewRequest("POST", "https://api.zerossl.com/acme/eab-credentials-email",
+		strings.NewReader(url.Values{"email": {email}}.Encode()))
+	if err != nil {
+		return "", "", err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	client := &http.Client{Timeout: timeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", "", err
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	clip := string(b)
+	if len(clip) > 200 {
+		clip = clip[:200]
+	}
+	var out struct {
+		EABKid  string `json:"eab_kid"`
+		EABHMAC string `json:"eab_hmac_key"`
+	}
+	if err := json.Unmarshal(b, &out); err != nil {
+		return "", "", fmt.Errorf("响应解析失败: %s", clip)
+	}
+	if out.EABKid == "" || out.EABHMAC == "" {
+		return "", "", fmt.Errorf("响应缺少凭据: %s", clip)
+	}
+	return out.EABKid, out.EABHMAC, nil
+}
+
 // SetACMEConfigEx 设置邮箱、CA 服务商与 EAB;切换后旧注册作废(自动重注册)
 func SetACMEConfigEx(email, provider, eabKeyID, eabHMAC string) error {
 	email = strings.TrimSpace(email)
@@ -168,16 +208,40 @@ func SetACMEConfigEx(email, provider, eabKeyID, eabHMAC string) error {
 	if !ok {
 		return fmt.Errorf("不支持的证书服务商: %s", provider)
 	}
+	a0 := loadACMEAccount()
+	// ZeroSSL:填邮箱即可自动注册——EAB 由 ZeroSSL 公开接口按邮箱自动获取
+	// (acme.sh 同款)。注意签发接口会带「KeyID + 空 HMAC」调用本函数(HMAC
+	// 掩码不回传),必须先用已存凭据补齐,否则会把 HMAC 覆盖成空、注册变成
+	// 无 EAB 请求被拒
+	if provider == "zerossl" {
+		eabKeyID, eabHMAC = strings.TrimSpace(eabKeyID), strings.TrimSpace(eabHMAC)
+		if eabHMAC == "" && a0.Provider == "zerossl" && a0.EABKeyID != "" && a0.EABHMAC != "" &&
+			(eabKeyID == "" || eabKeyID == a0.EABKeyID) {
+			eabKeyID, eabHMAC = a0.EABKeyID, a0.EABHMAC // 沿用已存(同 KeyID 或未指定)
+		}
+		if eabHMAC == "" {
+			if eabKeyID != "" {
+				return fmt.Errorf("ZeroSSL 的 EAB HMAC 缺失,请重新保存服务商设置")
+			}
+			if email == "" {
+				return fmt.Errorf("ZeroSSL 自动注册需要填写申请邮箱")
+			}
+			kid, mac, err := fetchZeroSSLEAB(email, 20*time.Second)
+			if err != nil {
+				return fmt.Errorf("ZeroSSL EAB 自动获取失败(请检查服务器到 api.zerossl.com 的连通性): %v", err)
+			}
+			eabKeyID, eabHMAC = kid, mac
+		}
+	}
 	if p.NeedEAB && (strings.TrimSpace(eabKeyID) == "" || strings.TrimSpace(eabHMAC) == "") {
 		// 调用方未带 EAB 时沿用已保存的凭据(此前签发请求切 CA 会因 HMAC 为空被拒)
-		a0 := loadACMEAccount()
 		if a0.Provider == provider && a0.EABKeyID != "" && a0.EABHMAC != "" {
 			eabKeyID, eabHMAC = a0.EABKeyID, a0.EABHMAC
 		} else {
 			return fmt.Errorf("%s 需要填写 EAB 凭据(KeyID 与 HMAC)", p.Name)
 		}
 	}
-	a := loadACMEAccount()
+	a := a0
 	a.Email = email
 	a.Provider = provider
 	// 先比较再赋值:此处判断必须基于旧 Directory,否则永远相等、旧注册永不作废
@@ -192,7 +256,8 @@ func SetACMEConfigEx(email, provider, eabKeyID, eabHMAC string) error {
 		a.EABKeyID = strings.TrimSpace(eabKeyID)
 		a.EABHMAC = eabHMAC
 	}
-	if !p.NeedEAB {
+	// 无 EAB 的 CA 清掉存量凭据;ZeroSSL 保留(自动获取的凭据供续期复用)
+	if !p.NeedEAB && provider != "zerossl" {
 		a.EABKeyID, a.EABHMAC = "", ""
 	}
 	if dirChanged || keyIDChanged {
@@ -518,7 +583,7 @@ func IssueCertForSite(siteID string, opts AcmeIssueOpts, w io.Writer) (string, e
 	}
 	expire, days := parseCertPEM(res.Certificate)
 	info := CertInfo{
-		ID: certID, Name: domains[0] + "(LE)", Domains: strings.Join(domains, " "),
+		ID: certID, Name: domains[0] + "(" + providerName(prov) + ")", Domains: strings.Join(domains, " "),
 		Expire: expire, Days: days, SelfSigned: false,
 		Acme: true, SiteID: siteID, Staging: staging,
 		VMethod: method, VAlias: alias, Profile: profile,

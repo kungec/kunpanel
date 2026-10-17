@@ -3,6 +3,27 @@
 所有重要变更都会记录在此文件中。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v2.76.3] - 2026-10-18
+
+### 改进:ACME 服务商更新——ZeroSSL 填邮箱自动注册,BuyPass 下架(用户反馈)
+
+- **ZeroSSL 免手动 EAB**:选择 ZeroSSL 只需填写申请邮箱,面板通过 ZeroSSL
+  公开接口(acme.sh 同款机制:`POST /acme/eab-credentials-email`)按邮箱自动
+  获取 EAB 凭据并注册,不再要求去官网手动生成;EAB 行对该服务商自动隐藏,
+  凭据自动留存供续期复用
+- **BuyPass 下架**:BuyPass 已于 2025-10-15 停发全部 TLS/SSL 证书(含 ACME
+  免费 Go SSL),从服务商下拉移除;存量 buypass 账户的目录映射保留(续期会
+  得到 Buypass 侧的明确错误,引导切换 CA),不再静默落到其他 CA
+- Google Trust Services 保持需手动获取 EAB(Google Cloud 控制台 Public CA)
+- 服务商下拉新增动态说明文案(选中即显示该 CA 的凭据要求)
+- 修复:签发接口带「KeyID + 空 HMAC」调用配置时会把已存 HMAC 覆盖为空,
+  导致 ZeroSSL 注册报 externalAccountRequired——现在先用已存凭据补齐
+- 证书名称后缀按实际 CA 显示(此前 ZeroSSL 签的也标 "(LE)")
+
+真机验证:ZeroSSL 邮箱自动获取 EAB → 账户注册 → 真实签发 90 天证书
+(issuer ZeroSSL ECC DV)→ 对外 HTTPS 校验通过;服务商列表与文案正确;
+测试站点/证书已清理。
+
 ## [v2.76.2] - 2026-10-18
 
 ### 修复:PHP 站点使用自定义根目录时整站 404(用户报障)

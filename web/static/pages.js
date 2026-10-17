@@ -1617,7 +1617,7 @@ PAGES.websites = {
           <div class="help" id="ssl-cert-count">已有 ${certs.length} 张证书;LE 证书剩余不足 30 天自动续期(IP 短期证书不足 3 天自动续期)</div></div>
 
         <div class="waf-set-sec" style="padding:14px 16px 12px"><div class="waf-sec-head">${I("bolt")}免费证书(ACME)<span class="tag tag-success" style="margin-left:2px">推荐</span></div>
-          <div class="settings-hint" style="margin:0 0 10px">自动申请、自动续期;Let's Encrypt 适合绝大多数网站,ZeroSSL / Google / BuyPass 适合有偏好的用户(需在其官网获取 EAB 凭据)</div>
+          <div class="settings-hint" style="margin:0 0 10px">自动申请、自动续期;Let's Encrypt 适合绝大多数网站;ZeroSSL 填申请邮箱即可自动注册(自动获取 EAB);Google Trust Services 需在其控制台手动获取 EAB 凭据</div>
           ${/^\d{1,3}(\.\d{1,3}){3}$/.test(mainDomain) ? '<div class="help" style="margin:-4px 0 10px;color:var(--warn,#f59e0b)">当前站点绑定的是 IP 地址:将自动申请 Let\'s Encrypt IP 证书(shortlived 档案,有效期约 6 天,到期前 3 天自动续期;需该 IP 的 80 端口对外开放)</div>' : ""}
           <div class="form-item"><label>证书服务商(CA)</label>
             <select class="select" id="acme-provider" style="max-width:320px"></select>
@@ -1696,7 +1696,7 @@ PAGES.websites = {
         var sync = function() {
           var key = sel.value;
           var meta = providerMeta[key] || {};
-          qs("#acme-provider-hint", m.el).textContent = meta.need_eab ? "该服务商需要在官网获取 EAB 凭据后填写到下方" : "无需额外凭据,填邮箱即可申请";
+          qs("#acme-provider-hint", m.el).textContent = meta.hint || (meta.need_eab ? "该服务商需要在官网获取 EAB 凭据后填写到下方" : "无需额外凭据,填邮箱即可申请");
           qs("#acme-eab-row", m.el).style.display = meta.need_eab ? "" : "none";
         };
         sel.onchange = sync;

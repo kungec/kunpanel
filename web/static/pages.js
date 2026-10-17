@@ -37,7 +37,8 @@ PAGES.dashboard = {
     certs.forEach(function(c) {
       if (!c.expire) return;
       var days = Math.round((new Date(c.expire) - new Date()) / 86400000);
-      if (days <= 30) expiring++;
+      // shortlived 短期证书(IP 证书)约 6 天且自动续期,按半衰期判定临期
+      if (days <= (c.profile === "shortlived" ? 3 : 30)) expiring++;
     });
     var memPct = s.mem_percent || 0, cpuPct = s.cpu_percent || 0;
     // 数据库 KPI = 各运行实例的业务库总数(与数据库页口径一致;databases 由后端统计)
@@ -327,20 +328,22 @@ PAGES.websites = {
       sites.forEach(function(s) { if (s.ssl_cert_id) bound[s.ssl_cert_id] = s.domain; });
       var rows = certs.map(function(c) {
         var days = c.expire ? Math.round((new Date(c.expire) - new Date()) / 86400000) : null;
+        var due = c.profile === "shortlived" ? 3 : 30;
         var expTag = days === null ? "" : days < 0 ? '<span class="tag tag-danger">已过期</span>'
-          : days <= 30 ? '<span class="tag tag-warning">剩 ' + days + " 天</span>"
+          : days <= due ? '<span class="tag tag-warning">剩 ' + days + " 天</span>"
           : '<span class="tag tag-success">剩 ' + days + " 天</span>";
-        return "<tr><td><b>" + esc(c.name) + "</b></td><td class=\"mono\">" + esc(c.domains) + "</td>" +
+        return "<tr><td><b>" + esc(c.name) + "</b>" + (c.profile === "shortlived" ? '<span class="tag tag-info" style="margin-left:6px" title="Let\'s Encrypt IP 证书,6 天有效期,自动续期">短期</span>' : "") + "</td><td class=\"mono\">" + esc(c.domains) + "</td>" +
           "<td>" + esc(c.expire || "-") + "</td><td>" + expTag + "</td>" +
           "<td>" + (bound[c.id] ? esc(bound[c.id]) : '<span class="help" style="margin:0">未绑定</span>') + "</td>" +
           '<td><div class="ops"><button class="btn btn-xs btn-danger-plain" data-delcert="' + esc(c.id) + '" data-name="' + esc(c.name) + '">删除</button></div></td></tr>';
       }).join("");
       var certRows = certs.map(function(c) {
         var days = c.expire ? Math.round((new Date(c.expire) - new Date()) / 86400000) : null;
+        var due = c.profile === "shortlived" ? 3 : 30;
         var expTag = days === null ? '<span class="tag tag-info">-</span>' : days < 0 ? '<span class="tag tag-danger">已过期</span>'
-          : days <= 30 ? '<span class="tag tag-warning">剩 ' + days + " 天</span>"
+          : days <= due ? '<span class="tag tag-warning">剩 ' + days + " 天</span>"
           : '<span class="tag tag-success">剩 ' + days + " 天</span>";
-        return '<tr><td><input type="checkbox" class="cert-sel" data-id="' + esc(c.id) + '"></td><td><b>' + esc(c.name) + '</b><span class="tag tag-purple" style="margin-left:6px">SSL</span></td>' +
+        return '<tr><td><input type="checkbox" class="cert-sel" data-id="' + esc(c.id) + '"></td><td><b>' + esc(c.name) + '</b>' + (c.profile === "shortlived" ? '<span class="tag tag-info" style="margin-left:6px" title="Let\'s Encrypt IP 证书,6 天有效期,自动续期">短期</span>' : "") + '<span class="tag tag-purple" style="margin-left:6px">SSL</span></td>' +
           '<td class="mono">' + esc(c.domains) + "</td><td>" + esc(c.expire || "-") + "</td><td>" + expTag + "</td>" +
           "<td>" + (bound[c.id] ? '<span class="mono">' + esc(bound[c.id]) + "</span>" : '<span class="help" style="margin:0">未绑定</span>') + "</td>" +
           '<td><button class="btn btn-xs btn-danger-plain" data-delcert="' + esc(c.id) + '" data-name="' + esc(c.name) + '">删除</button></td></tr>';
@@ -1600,12 +1603,13 @@ PAGES.websites = {
           <div>${site.ssl_cert_id ? '<span class="tag tag-success">已启用 HTTPS</span>' : '<span class="tag tag-info">未启用</span>'}</div></div>
         <div class="form-item"><label>当前使用的证书</label>
           <select class="select" id="ssl-cert"><option value="">不启用 HTTPS</option>
-            ${certs.map((c) => '<option value="' + esc(c.id) + '"' + (c.id === site.ssl_cert_id ? " selected" : "") + ">" + esc(c.name) + (c.expire ? "(到期 " + esc(c.expire) + (c.acme ? " · LE" : "") + ")" : "") + "</option>").join("")}
+            ${certs.map((c) => '<option value="' + esc(c.id) + '"' + (c.id === site.ssl_cert_id ? " selected" : "") + ">" + esc(c.name) + (c.expire ? "(到期 " + esc(c.expire) + (c.acme ? " · LE" : "") + (c.profile === "shortlived" ? " · 短期" : "") + ")" : "") + "</option>").join("")}
           </select>
-          <div class="help" id="ssl-cert-count">已有 ${certs.length} 张证书;LE 证书剩余不足 30 天时自动续期</div></div>
+          <div class="help" id="ssl-cert-count">已有 ${certs.length} 张证书;LE 证书剩余不足 30 天自动续期(IP 短期证书不足 3 天自动续期)</div></div>
 
         <div class="waf-set-sec" style="padding:14px 16px 12px"><div class="waf-sec-head">${I("bolt")}免费证书(ACME)<span class="tag tag-success" style="margin-left:2px">推荐</span></div>
           <div class="settings-hint" style="margin:0 0 10px">自动申请、自动续期;Let's Encrypt 适合绝大多数网站,ZeroSSL / Google / BuyPass 适合有偏好的用户(需在其官网获取 EAB 凭据)</div>
+          ${/^\d{1,3}(\.\d{1,3}){3}$/.test(mainDomain) ? '<div class="help" style="margin:-4px 0 10px;color:var(--warn,#f59e0b)">当前站点绑定的是 IP 地址:将自动申请 Let\'s Encrypt IP 证书(shortlived 档案,有效期约 6 天,到期前 3 天自动续期;需该 IP 的 80 端口对外开放)</div>' : ""}
           <div class="form-item"><label>证书服务商(CA)</label>
             <select class="select" id="acme-provider" style="max-width:320px"></select>
             <div class="help" id="acme-provider-hint"></div></div>
@@ -4096,6 +4100,8 @@ PAGES.settings = {
         '<input class="input" id="s-entrance" style="flex:1" value="' + (s.entrance && s.entrance !== "-" ? esc(s.entrance) : "") + '" placeholder="' + (s.entrance === "-" ? "已关闭" : "") + '">' +
         '<button class="btn btn-plain btn-sm" id="s-entrance-rand">随机</button></div>' +
         '<div class="settings-hint">当前后台: http://IP:' + s.port + '/' + (s.entrance && s.entrance !== "-" ? esc(s.entrance) : "(未设置)") + ' · 清空=关闭</div></div>' +
+        '<div class="settings-row"><label>网站默认根目录</label><input class="input" id="s-webroot" style="max-width:520px" value="' + esc(s.web_root || "") + '" placeholder="默认: /opt/kunpanel/data/websites/roots">' +
+        '<div class="settings-hint">新建站点的根目录所在位置(留空 = 面板默认);已有站点不受影响,站点创建时网关容器会自动挂载该目录</div></div>' +
         '</div>' +
         '<div class="settings-section"><div class="settings-section-title">外观</div>' +
         '<div class="settings-row"><label>主题</label><div class="set-theme-cards">' +
@@ -4129,7 +4135,8 @@ PAGES.settings = {
             panel_name: body.querySelector("#s-name").value.trim(),
             port: parseInt(body.querySelector("#s-port").value) || 0,
             username: body.querySelector("#s-user").value.trim(),
-            entrance: body.querySelector("#s-entrance").value.trim()
+            entrance: body.querySelector("#s-entrance").value.trim(),
+            web_root: body.querySelector("#s-webroot").value.trim()
           }});
           toast(r.message || "保存成功");
         } catch (e) { toast(e.message, "error"); }

@@ -28,7 +28,17 @@ type CertInfo struct {
 	SiteID  string `json:"site_id,omitempty"` // 签发来源站点(续期时定位挑战目录)
 	VMethod string `json:"v_method,omitempty"` // ACME 验证方式:http / dns
 	VAlias  string `json:"v_alias,omitempty"`  // DNS 别名域名(CNAME 委托目标)
+	Profile string `json:"profile,omitempty"`  // ACME 证书档案:shortlived = LE 短期证书(约 6 天;IP 证书仅此档案)
 	Created string `json:"created"`
+}
+
+// renewDueDays 续期/临期判定阈值:普通证书 30 天;shortlived 短期证书按半衰期
+// 约 3 天(6 天有效期,巡检 6h 一次足够及时,且远低于 LE 重复证书限速)
+func (c CertInfo) renewDueDays() int {
+	if c.Profile == "shortlived" {
+		return 3
+	}
+	return 30
 }
 
 func sslDir() string { return filepath.Join(config.DataDir(), "ssl") }
@@ -36,6 +46,7 @@ func sslDir() string { return filepath.Join(config.DataDir(), "ssl") }
 func certMetaPath(id string) string  { return filepath.Join(sslDir(), id+".json") }
 func certCrtPath(id string) string   { return filepath.Join(sslDir(), id+".crt") }
 func certKeyPath(id string) string   { return filepath.Join(sslDir(), id+".key") }
+func certCsrPath(id string) string   { return filepath.Join(sslDir(), id+".csr") }
 
 // ListCerts 全部证书(按创建时间倒序)
 func ListCerts() []CertInfo {

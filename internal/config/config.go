@@ -30,6 +30,7 @@ type Config struct {
 	SSL          bool   `json:"ssl"`
 	Language     string `json:"language"`
 	CreatedAt    string `json:"created_at"`
+	WebRoot      string `json:"web_root,omitempty"` // 新建站点默认根目录(空 = 面板数据目录下 roots)
 }
 
 type Manager struct {

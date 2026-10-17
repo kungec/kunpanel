@@ -18,6 +18,7 @@ import (
 	"kunpanel/internal/config"
 	"kunpanel/internal/dockerx"
 	"kunpanel/internal/logsx"
+	"kunpanel/internal/websites"
 	"kunpanel/internal/panelupdate"
 	"kunpanel/internal/system"
 	"kunpanel/internal/taskx"
@@ -67,6 +68,7 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	cfg := config.M.Get()
 	resp := map[string]any{
 		"panel_name":   cfg.PanelName,
+		"web_root":     cfg.WebRoot,
 		"port":         cfg.Port,
 		"username":     cfg.Username,
 		"entrance":     cfg.Entrance,
@@ -92,6 +94,7 @@ type settingsReq struct {
 	Username  string `json:"username"`
 	Entrance  string `json:"entrance"`
 	Language  string `json:"language"`
+	WebRoot   string `json:"web_root"` // 新建站点默认根目录(空 = 默认)
 }
 
 // 合法入口:4-32 位小写字母/数字/中划线;"-" 或空 表示关闭
@@ -120,6 +123,15 @@ func (s *Server) handleSaveSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	restartNeeded := false
+	// 网站默认根目录:空 = 恢复默认;有值须为合法建站目录(与站点自定义根目录同规则)
+	webRoot := strings.TrimSpace(req.WebRoot)
+	if webRoot != "" {
+		if err := websites.ValidateWebRootPublic(webRoot); err != nil {
+			Fail(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		webRoot = filepath.Clean(webRoot)
+	}
 	err = config.M.Update(func(c *config.Config) {
 		if req.PanelName != "" {
 			c.PanelName = req.PanelName
@@ -137,6 +149,7 @@ func (s *Server) handleSaveSettings(w http.ResponseWriter, r *http.Request) {
 		if req.Language != "" {
 			c.Language = req.Language
 		}
+		c.WebRoot = webRoot
 	})
 	if err != nil {
 		Fail(w, http.StatusInternalServerError, err.Error())

@@ -1345,6 +1345,72 @@ h1{font-size:22px;color:#303133}p{color:#909399;font-size:14px}</style></head>
 	_ = os.WriteFile(filepath.Join(confDir(), "default.conf"), []byte(def), 0o644)
 }
 
+// EnsureWebrootMount 站点根目录不在默认 roots 下(自定义默认目录/站点自定义
+// 根目录)时,把该目录以同路径挂载进网关容器:容器内外路径一致,站点 conf 的
+// root 与 ACME 挑战目录无需换算。幂等:compose 已含该挂载时不重建容器
+func EnsureWebrootMount(key string, hostPath string, w io.Writer) error {
+	if key != "openresty" && key != "nginx" {
+		return nil
+	}
+	clean := filepath.Clean(hostPath)
+	dir := InstanceDir(key)
+	composeFile := filepath.Join(dir, "docker-compose.yml")
+	b, err := os.ReadFile(composeFile)
+	if err != nil {
+		return nil // 未安装,忽略
+	}
+	content := string(b)
+	if strings.Contains(content, "- "+clean+":") {
+		return nil
+	}
+	// 祖先目录已同路径挂载时不再加行(如 1Panel/宝塔迁移网关已挂 /www/wwwroot,
+	// 其下站点天然可见),避免每个站点累积一条挂载
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "- ") {
+			continue
+		}
+		parts := strings.SplitN(strings.TrimPrefix(line, "- "), ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		h, ctn := filepath.Clean(parts[0]), filepath.Clean(parts[1])
+		if h != ctn {
+			continue
+		}
+		if h == clean || strings.HasPrefix(clean, h+string(filepath.Separator)) {
+			return nil
+		}
+	}
+	idx := strings.Index(content, "volumes:")
+	if idx < 0 {
+		return fmt.Errorf("%s compose 缺少 volumes 段,请卸载后重新安装", key)
+	}
+	lineEnd := strings.Index(content[idx:], "\n")
+	insert := "\n      - " + clean + ":" + clean
+	content = content[:idx+lineEnd] + insert + content[idx+lineEnd:]
+	if err := util.AtomicWriteString(composeFile, content, 0o644); err != nil {
+		return err
+	}
+	if w != nil {
+		fmt.Fprintln(w, "  挂载站点目录到网关容器,重建容器(数秒中断)...")
+	}
+	out, err := dockerx.Compose(dir, "up", "-d")
+	if w != nil {
+		fmt.Fprintln(w, out)
+	}
+	if err != nil {
+		return fmt.Errorf("重建容器失败: %s", tailStr(out))
+	}
+	for i := 0; i < 15; i++ {
+		if dockerx.ContainerRunning("kun-" + key) {
+			return nil
+		}
+		time.Sleep(time.Second)
+	}
+	return nil
+}
+
 // EnsureNginxMounts 确保面板管理的 nginx/openresty 容器挂载了 WAF 与 SSL 目录,
 // 缺失时(旧版本安装的实例)自动补挂载并重建容器。供 WAF 插件与网站 SSL 模块调用。
 func EnsureNginxMounts(key string, w io.Writer) error {

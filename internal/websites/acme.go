@@ -367,9 +367,11 @@ type AcmeIssueOpts struct {
 	Alias   string // DNS 别名域名(CNAME 委托目标,可选)
 }
 
-// orderDomains 校验并归一域名(通配符仅 DNS 验证支持)
-func orderDomains(raw []string, method string) ([]string, error) {
+// orderDomains 校验并归一域名(通配符仅 DNS 验证支持)。
+// 返回值 isIP:订单中含 IP 标识符(LE 的 IP 证书仅 shortlived 档案,6 天有效期)
+func orderDomains(raw []string, method string) ([]string, bool, error) {
 	var out []string
+	isIP := false
 	for _, d := range raw {
 		d = strings.TrimSpace(d)
 		// HTTP 验证剥掉 *. 前缀(且下方直接拒绝);DNS 验证必须保留通配符 SAN,
@@ -380,19 +382,22 @@ func orderDomains(raw []string, method string) ([]string, error) {
 		if d == "" {
 			continue
 		}
+		if net.ParseIP(d) != nil {
+			isIP = true
+		}
 		out = append(out, d)
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("站点没有域名")
+		return nil, false, fmt.Errorf("站点没有域名")
 	}
 	if method == "http" {
 		for _, d := range raw {
 			if strings.Contains(d, "*") {
-				return nil, fmt.Errorf("HTTP 验证不支持通配符域名,请改用 DNS 验证")
+				return nil, isIP, fmt.Errorf("HTTP 验证不支持通配符域名,请改用 DNS 验证")
 			}
 		}
 	}
-	return out, nil
+	return out, isIP, nil
 }
 
 // IssueCertForSite 签发证书并自动绑定(异步任务体)
@@ -405,9 +410,18 @@ func IssueCertForSite(siteID string, opts AcmeIssueOpts, w io.Writer) (string, e
 	if method != "dns" {
 		method = "http"
 	}
-	domains, err := orderDomains(strings.Fields(site.Domain), method)
+	domains, isIP, err := orderDomains(strings.Fields(site.Domain), method)
 	if err != nil {
 		return "", err
+	}
+	// IP 证书:LE 仅提供 shortlived 档案(约 6 天),仅 HTTP 验证(DNS 验证对 IP 无意义)
+	profile := ""
+	if isIP {
+		profile = "shortlived"
+		if method == "dns" {
+			method = "http"
+			fmt.Fprintln(w, ">> 检测到 IP 标识:改用 HTTP 文件验证,并使用 shortlived 档案(约 6 天有效期,自动续期)")
+		}
 	}
 	prov := loadACMEAccount().Provider
 	staging := opts.Staging || providerStaging(prov)
@@ -432,13 +446,58 @@ func IssueCertForSite(siteID string, opts AcmeIssueOpts, w io.Writer) (string, e
 	}
 
 	fmt.Fprintf(w, ">> 创建订单并验证域名...\n")
-	res, err := client.Certificate.Obtain(certificate.ObtainRequest{
-		Domains: domains,
-		Bundle:  true,
-	})
+	var issuedCSR []byte
+	var res *certificate.Resource
+	if isIP {
+		// LE 拒绝 CN 含 IP 的 CSR(badCSR),而 lego 默认把首个域放进 CN——
+		// IP 证书改走自建 CSR:CN 留空,IP 进 SAN(IPAddress),域名进 DNS SAN。
+		// CSR 存档后续期走同一 CSR 路径(RenewWithOptions 检测到 CSR 即
+		// ObtainForCSR,天然绕开 CN 问题)
+		var ips []net.IP
+		var dnsNames []string
+		for _, d := range domains {
+			if ip := net.ParseIP(d); ip != nil {
+				ips = append(ips, ip)
+			} else {
+				dnsNames = append(dnsNames, d)
+			}
+		}
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			return "", err
+		}
+		csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
+			IPAddresses: ips,
+			DNSNames:    dnsNames,
+		}, key)
+		if err != nil {
+			return "", err
+		}
+		csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
+		issuedCSR = csrPEM
+		csrObj, err := x509.ParseCertificateRequest(csrDER)
+		if err != nil {
+			return "", err
+		}
+		res, err = client.Certificate.ObtainForCSR(certificate.ObtainForCSRRequest{
+			CSR:        csrObj,
+			PrivateKey: key,
+			Bundle:     true,
+			Profile:    profile,
+		})
+	} else {
+		res, err = client.Certificate.Obtain(certificate.ObtainRequest{
+			Domains: domains,
+			Bundle:  true,
+			Profile: profile,
+		})
+	}
 	if err != nil {
 		if method == "dns" {
 			return "", fmt.Errorf("DNS 验证失败: %v(请检查 TXT 记录是否按要求添加并已生效)", err)
+		}
+		if isIP {
+			return "", fmt.Errorf("签发失败: %v(请确认该 IP 的 80 端口对外开放且站点监听 80)", err)
 		}
 		return "", fmt.Errorf("签发失败: %v(请确认域名已解析到本服务器 IP,且 80 端口对外开放)", err)
 	}
@@ -451,13 +510,22 @@ func IssueCertForSite(siteID string, opts AcmeIssueOpts, w io.Writer) (string, e
 	if err := util.AtomicWrite(certKeyPath(certID), res.PrivateKey, 0o600); err != nil {
 		return "", err
 	}
+	if len(issuedCSR) > 0 {
+		// IP 证书:存档 CSR,续期走同一 CSR 路径
+		if err := util.AtomicWrite(certCsrPath(certID), issuedCSR, 0o600); err != nil {
+			return "", err
+		}
+	}
 	expire, days := parseCertPEM(res.Certificate)
 	info := CertInfo{
 		ID: certID, Name: domains[0] + "(LE)", Domains: strings.Join(domains, " "),
 		Expire: expire, Days: days, SelfSigned: false,
 		Acme: true, SiteID: siteID, Staging: staging,
-		VMethod: method, VAlias: alias,
+		VMethod: method, VAlias: alias, Profile: profile,
 		Created: time.Now().Format("2006-01-02 15:04:05"),
+	}
+	if profile != "" {
+		fmt.Fprintf(w, ">> shortlived 档案:有效期约 %d 天,到期前 3 天自动续期\n", days)
 	}
 	if err := saveCertMeta(info); err != nil {
 		return "", err
@@ -511,17 +579,27 @@ func renewCertInPlace(id string, w io.Writer) error {
 		}
 		client.Challenge.SetHTTP01Provider(&httpFileProvider{site: &site})
 	}
-	// lego Renew:从现有证书/私钥文件构造 Resource 并重签
+	// lego Renew:从现有证书/私钥文件构造 Resource 并重签。存有 CSR 的证书
+	// (IP 证书)走 CSR 路径——ObtainForCSR 校验的正是这份 CSR,可绕开
+	// lego 默认 CN=首域导致的 badCSR;档案沿用签发时的 shortlived
 	certRes := certificate.Resource{
 		Certificate: certCrtBytes(id),
 		PrivateKey:  certKeyBytes(id),
+		CSR:         certCSRBytes(id),
 	}
-	res, err := client.Certificate.Renew(certRes, true, false, "")
+	res, err := client.Certificate.RenewWithOptions(certRes, &certificate.RenewOptions{
+		Bundle:  true,
+		Profile: info.Profile,
+	})
 	if err != nil {
 		if method == "dns" {
 			return fmt.Errorf("DNS 续期失败: %v", err)
 		}
 		return fmt.Errorf("续期失败: %v", err)
+	}
+	// CSR 路径续期时 lego 不回传私钥(沿用 CSR 对应的旧私钥),别把密钥文件写空
+	if len(res.PrivateKey) == 0 {
+		res.PrivateKey = certRes.PrivateKey
 	}
 	if err := util.AtomicWrite(certCrtPath(id), res.Certificate, 0o644); err != nil {
 		return err
@@ -550,7 +628,7 @@ func StartACMERenew(stop <-chan struct{}, notify func(msg string)) {
 		run := func() {
 			today := time.Now().Format("2006-01-02")
 			for _, c := range ListCerts() {
-				if !c.Acme || c.Expire == "" || c.Days > 30 {
+				if !c.Acme || c.Expire == "" || c.Days > c.renewDueDays() {
 					continue
 				}
 				if lastTry[c.ID] == today {
@@ -600,6 +678,11 @@ func certCrtBytes(id string) []byte {
 
 func certKeyBytes(id string) []byte {
 	b, _ := os.ReadFile(certKeyPath(id))
+	return b
+}
+
+func certCSRBytes(id string) []byte {
+	b, _ := os.ReadFile(certCsrPath(id))
 	return b
 }
 

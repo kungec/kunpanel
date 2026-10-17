@@ -28,6 +28,11 @@ func ValidateDomainsPublic(domain string) error {
 	return validateDomains(domain)
 }
 
+// ValidateWebRootPublic 供设置页校验建站根目录的公开入口
+func ValidateWebRootPublic(dir string) error {
+	return validateWebRoot(dir)
+}
+
 // validateDomains 校验空格分隔的多域名
 func validateDomains(domain string) error {
 	tokens := strings.Fields(domain)
@@ -107,6 +112,32 @@ var (
 func baseDir() string  { return filepath.Join(config.DataDir(), "websites") }
 func confDir() string  { return filepath.Join(baseDir(), "conf.d") }
 func rootsDir() string { return filepath.Join(baseDir(), "roots") }
+
+// WebRoot 新建站点的默认根目录:面板设置可自定义(config.WebRoot,绝对路径),
+// 空 = 面板数据目录下 roots。仅影响新建站点,已有站点不受影响
+func WebRoot() string {
+	if config.M != nil {
+		if w := strings.TrimSpace(config.M.Get().WebRoot); w != "" && filepath.IsAbs(w) {
+			return filepath.Clean(w)
+		}
+	}
+	return rootsDir()
+}
+
+// validateWebRoot 校验自定义根目录(建站目录设置与站点自定义根目录共用):
+// 绝对路径、无 ..、不落系统目录
+func validateWebRoot(rd string) error {
+	c := filepath.Clean(strings.TrimSpace(rd))
+	if !filepath.IsAbs(c) || c == "/" || strings.Contains(rd, "..") {
+		return fmt.Errorf("根目录格式不正确(需为绝对路径)")
+	}
+	for _, sys := range []string{"/etc", "/usr", "/boot", "/proc", "/sys", "/dev"} {
+		if c == sys || strings.HasPrefix(c, sys+string(filepath.Separator)) {
+			return fmt.Errorf("根目录不允许使用系统目录")
+		}
+	}
+	return nil
+}
 func storeFile() string {
 	return filepath.Join(baseDir(), "sites.json")
 }
@@ -272,7 +303,7 @@ func Create(o CreateOpts) (*Site, error) {
 		ID: id, Domain: domain, Alias: strings.Fields(domain)[0], Type: o.SiteType,
 		Port: o.Port, Enabled: true,
 		CreatedAt: time.Now().Format("2006-01-02 15:04:05"), Remark: o.Remark,
-		Root: filepath.Join(rootsDir(), id),
+		Root: filepath.Join(WebRoot(), id),
 	}
 	if o.SiteType == "php" {
 		// PHP 站点:全部请求转发到所选 PHP 运行时实例,容器内按站点目录区分
@@ -290,19 +321,21 @@ func Create(o CreateOpts) (*Site, error) {
 	}
 	// 自定义根目录(仅 static/php;需绝对路径且不与系统目录冲突)
 	if rd := strings.TrimSpace(o.RootDir); rd != "" && o.SiteType != "proxy" {
-		if !filepath.IsAbs(rd) || rd == "/" || strings.Contains(rd, "..") {
-			return nil, fmt.Errorf("根目录格式不正确")
-		}
-		if strings.HasPrefix(filepath.Clean(rd), "/etc") || strings.HasPrefix(filepath.Clean(rd), "/usr") ||
-			strings.HasPrefix(filepath.Clean(rd), "/boot") || strings.HasPrefix(filepath.Clean(rd), "/proc") ||
-			strings.HasPrefix(filepath.Clean(rd), "/sys") {
-			return nil, fmt.Errorf("根目录不允许使用系统目录")
+		if err := validateWebRoot(rd); err != nil {
+			return nil, err
 		}
 		s.Root = filepath.Clean(rd)
 	}
 	if o.SiteType != "proxy" {
 		if err := os.MkdirAll(s.Root, 0o755); err != nil {
 			return nil, err
+		}
+		// 容器网关:站点根目录不在默认 roots 下(自定义默认目录/自定义根目录)时,
+		// 以同路径挂载进容器,conf 的 root 与 ACME 挑战目录无需换算;幂等,已挂载不重建
+		if mode := DetectNginx(); mode.Mode == "container" && !underRootsDir(s.Root) {
+			if err := appstore.EnsureWebrootMount(strings.TrimPrefix(mode.Target, "kun-"), s.Root, io.Discard); err != nil {
+				return nil, fmt.Errorf("网关容器挂载站点目录失败: %v", err)
+			}
 		}
 		index := filepath.Join(s.Root, "index.html")
 		if !fileExists(index) {
@@ -312,6 +345,20 @@ func Create(o CreateOpts) (*Site, error) {
 <h1>%s 部署成功 — 由坤面板驱动</h1>
 </body></html>
 `, domain, domain)), 0o644)
+		}
+		// PHP 站点默认文件加 index.php(php:apache 容器 DirectoryIndex 默认
+		// index.php 优先,phpfpm 的 index 指令也以 index.php 打头,见 writeConf)
+		if o.SiteType == "php" || o.SiteType == "phpfpm" {
+			phpIdx := filepath.Join(s.Root, "index.php")
+			if !fileExists(phpIdx) {
+				_ = util.AtomicWrite(phpIdx, []byte(fmt.Sprintf(`<?php
+// 由坤面板生成,可自行替换
+echo '<!DOCTYPE html><html><head><meta charset="utf-8"><title>%s</title></head>';
+echo '<body style="font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:90vh">';
+echo '<h1>%s 部署成功 — PHP ' . PHP_VERSION . '</h1>';
+echo '</body></html>';
+`, domain, domain)), 0o644)
+			}
 		}
 	}
 	list = append(list, *s)
@@ -639,6 +686,44 @@ func SetSiteType(id, newType, target, phpKey, proxyHost string) error {
 	return Reload()
 }
 
+// underRootsDir 目录是否在面板默认站点目录(roots)下:容器模式仅默认目录
+// 映射为 /var/www/<id>,其余走同路径挂载
+func underRootsDir(p string) bool {
+	return strings.HasPrefix(filepath.Clean(p), rootsDir()+string(filepath.Separator))
+}
+
+// firstDomainIsIP 站点首个域名是否为 IP 地址(IP 证书与 default_server 判定用)
+func firstDomainIsIP(domain string) bool {
+	tokens := strings.Fields(domain)
+	if len(tokens) == 0 {
+		return false
+	}
+	return net.ParseIP(tokens[0]) != nil
+}
+
+// otherConfHasDefault443 其他站点 conf 是否已声明 443 default_server
+// (nginx 每端口只允许一个;防恶意解析的 80 default_server 不冲突,
+// IP 站点仅在 443 无人占位时接管)
+func otherConfHasDefault443(selfID string) bool {
+	matches, _ := filepath.Glob(filepath.Join(confDir(), "*.conf"))
+	for _, f := range matches {
+		if strings.EqualFold(strings.TrimSuffix(filepath.Base(f), ".conf"), selfID) {
+			continue
+		}
+		b, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(b), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.Contains(line, "default_server") && strings.Contains(line, "443") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // writeConf 生成站点 nginx 配置
 func writeConf(s *Site) error {
 	var b strings.Builder
@@ -667,9 +752,9 @@ func writeConf(s *Site) error {
 	mode := DetectNginx()
 	root := s.Root
 	challengeRoot := s.Root
-	if mode.Mode == "container" && s.Type != "phpfpm" {
-		// 容器内挂载路径:roots 目录 -> /var/www
-		// phpfpm 站点除外:root 为宿主机原路径(宝塔迁移),容器已挂载同路径
+	if mode.Mode == "container" && s.Type != "phpfpm" && underRootsDir(s.Root) {
+		// 默认站点目录在网关容器内挂载为 /var/www;自定义根目录走同路径
+		// 挂载(见 Create 的 EnsureWebrootMount),容器内外路径保持一致
 		root = "/var/www/" + s.ID
 		challengeRoot = root
 	}
@@ -699,13 +784,22 @@ func writeConf(s *Site) error {
 	if s.HTTP2 {
 		h2 = " http2"
 	}
+	// IP 站点:浏览器对 IP 地址不发 SNI(RFC 6066),nginx 会落到 443 的
+	// default_server 块——IP 站点必须自己当 default_server,否则出的证书和
+	// 内容都是别的站点。全局面板 conf 已有 default_server 时不重复添加
+	// (nginx -t 会报重复)
+	ipSite := firstDomainIsIP(s.Domain)
+	extraListen := ""
+	if ipSite && s.SslCertID != "" && !otherConfHasDefault443(s.ID) {
+		extraListen = " default_server"
+	}
 	b.WriteString("server {\n")
 	if redirectActive && s.Port == 80 {
-		b.WriteString("    listen 443 ssl" + h2 + ";\n")
+		b.WriteString("    listen 443 ssl" + h2 + extraListen + ";\n")
 	} else {
 		b.WriteString(fmt.Sprintf("    listen %d;\n", s.Port))
 		if s.SslCertID != "" {
-			b.WriteString("    listen 443 ssl" + h2 + ";\n")
+			b.WriteString("    listen 443 ssl" + h2 + extraListen + ";\n")
 		}
 	}
 	b.WriteString(fmt.Sprintf("    server_name %s;\n", s.Domain))
@@ -829,7 +923,7 @@ func writeConf(s *Site) error {
 	// 子域名绑定:每个绑定生成独立 server 块(共享主站 root 与安全特性)
 	if len(s.Subs) > 0 {
 		subRoot := s.Root
-		if mode.Mode == "container" && s.Type != "phpfpm" {
+		if mode.Mode == "container" && s.Type != "phpfpm" && underRootsDir(s.Root) {
 			subRoot = "/var/www/" + s.ID
 		}
 		for _, sub := range s.Subs {
@@ -851,7 +945,8 @@ func writeConf(s *Site) error {
 			fmt.Fprintf(&b, "    access_log /var/log/nginx/%s.access.log;\n", safeName+"."+strings.Split(sub.SubDomain, ".")[0])
 			idx := strings.TrimSpace(s.IndexFiles)
 			if idx == "" {
-				idx = "index.html index.htm"
+				// phpfpm 站点的子域名块同样以 index.php 打头(与主块一致)
+				idx = "index.php index.html index.htm"
 			}
 			b.WriteString(fmt.Sprintf("    root %s;\n    index %s;\n\n", dir, idx))
 			switch s.Type {

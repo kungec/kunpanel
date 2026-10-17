@@ -103,10 +103,15 @@ func (s *Server) handlePanelCheckup(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		days := int(time.Until(t).Hours() / 24)
+		// shortlived 短期证书(IP 证书)有效期约 6 天且自动续期,按半衰期判定
+		dueDays := 30
+		if c.Profile == "shortlived" {
+			dueDays = 3
+		}
 		if days < 0 {
 			expired++
 			names = append(names, c.Name+" 已过期")
-		} else if days <= 30 {
+		} else if days <= dueDays {
 			expSoon++
 			names = append(names, fmt.Sprintf("%s 剩余 %d 天", c.Name, days))
 		}

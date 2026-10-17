@@ -6,7 +6,7 @@
 
 **轻量级服务器运维管理面板 —— Go 单二进制,开箱即用**
 
-[![](https://img.shields.io/badge/版本-v2.75.4-3b82f6?style=flat-square)](https://github.com/kungec/kunpanel/releases)
+[![](https://img.shields.io/badge/版本-v2.75.5-3b82f6?style=flat-square)](https://github.com/kungec/kunpanel/releases)
 [![](https://img.shields.io/badge/Go-1.23+-00ADD8?style=flat-square)](https://golang.org)
 [![](https://img.shields.io/badge/平台-Linux%20%7C%20Windows-lightgrey?style=flat-square)](./README.md)
 [![](https://img.shields.io/badge/License-MIT-green?style=flat-square)](./LICENSE)
@@ -67,7 +67,7 @@ bash install.sh --port 20000 --username admin --password yourpwd   # 自定义�
 bash install.sh --with-docker            # 同时安装 Docker 引擎(自动配国内镜像源)
 bash install.sh --mirror aliyun          # Docker 使用阿里云镜像源
 bash install.sh --proxy https://gh-proxy.com/   # GitHub 下载加速
-bash install.sh --version v2.75.4        # 安装指定版本
+bash install.sh --version v2.75.5        # 安装指定版本
 bash install.sh --offline ./kunpanel_linux_amd64.tar.gz   # 离线安装(含 SHA-256 校验)
 bash install.sh --uninstall              # 卸载
 ```
@@ -147,7 +147,7 @@ docker run -d --name kunpanel -p 20000:20000 \
 | 注入 | 域名白名单、compose 参数转义、解压 ZipSlip 防护、SQL 标识符白名单、反代 Host 头注入防护 |
 | 传输 | CSP 脚本哈希白名单(无 unsafe-inline)、HSTS 可选、面板 HTTPS;远程迁移 SSH 指纹 TOFU 校验 |
 | 供应链 | 升级包 SHA-256 校验和验证(直连 GitHub 优先,国内回退加速代理并明确标注信任来源) |
-| 沙箱 | systemd NoNewPrivileges / ProtectSystem / ReadWritePaths 白名单 / 私网自动封禁排除 |
+| 沙箱 | systemd NoNewPrivileges / PrivateTmp / ProtectKernelTunables / ProtectControlGroups(v2.75.5 移除 ProtectSystem:其 /usr、/etc 只读会阻断包管理与 Docker 安装)/ 私网自动封禁排除 |
 | 审计 | 登录与变更操作全留痕、真实状态码、安全回归测试锁定 |
 
 > ⚠️ 注意:Docker 发布的端口**不经过** ufw / firewalld( iptables DOCKER 链直通),
@@ -157,7 +157,7 @@ docker run -d --name kunpanel -p 20000:20000 \
 
 ```bash
 git clone https://github.com/kungec/kunpanel.git && cd kunpanel
-bash build.sh v2.75.4     # 产出 linux(amd64/arm64/arm) + windows 全平台安装包
+bash build.sh v2.75.5     # 产出 linux(amd64/arm64/arm) + windows 全平台安装包
 ```
 
 Go 1.23+,前端为原生 JS(`go:embed` 内嵌),无 Node 构建步骤。

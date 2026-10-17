@@ -3,6 +3,36 @@
 所有重要变更都会记录在此文件中。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v2.75.5] - 2026-10-17
+
+### 修复:Docker 一键安装在全新服务器失败(curl 23 / dpkg Broken pipe)——移除 systemd 文件系统沙箱(用户报障,Vultr Debian 12)
+
+**根因**:v1.7.0 引入的面板 systemd 单元 `ProtectSystem=full` 把 `/usr`、`/etc`
+对面板**及其全部子进程**挂为只读(`ReadWritePaths` 仅白名单 ssh/sysctl.d/ufw/
+systemd 四个路径)。Docker 一键安装的 apt/dpkg 子进程因此:curl 写
+`/etc/apt/keyrings` 失败(`curl: (23) Failure writing output to destination`,
+磁盘明明有 17G 空闲)、dpkg 解包写 `/usr/bin` 失败导致 tar 退出、dpkg-deb 收到
+**Broken pipe** 而报 `subprocess was killed by signal (Broken pipe)`——runc/
+containerd/tini/docker.io 四包全部安装失败。
+
+这是 v2.71.7「/etc/ufw 白名单」同类问题的第三次发作:包管理是面板核心能力
+(apt/dpkg 天然要写 /usr 与 /etc),逐个扩白名单是打地鼠——环境安装、
+daemon.json 编辑、任何后续需要装软件的功能都会踩中。
+
+- **install.sh 单元模板移除 `ProtectSystem` / `ReadWritePaths` /
+  `RestrictSUIDSGID`**(dpkg 合法解包 setuid 二进制也会被后者拒绝),
+  保留不碍事的 `NoNewPrivileges` / `PrivateTmp` / `ProtectKernelTunables` /
+  `ProtectControlGroups`(sysctl 已有 systemd-run 逃逸通道,v2.75.5 起
+  /etc 直接可写;/proc/sys 仍只读)
+- **启动自愈(internal/app/unitheal.go)**:存量安装升级新版面板后,启动时
+  自动检测旧单元文件并移除废弃选项 + `systemctl daemon-reload`;若当前进程
+  仍受旧沙箱限制(/etc 探测写失败),经 `systemd-run` 瞬态单元 5 秒后自动
+  重启面板一次使修复立即生效(单元改写本身是一次性开关,不会循环重启),
+  消息中心同步通知
+- pmInstall 失败时检测 /etc 只读,错误信息明确提示重启面板服务,不再只有
+  难以诊断的 exit code
+- 单元测试锁定改写逻辑(只删废弃行,用户自定义与其余加固项原样保留)
+
 ## [v2.75.2] - 2026-10-17
 
 ### 新功能:应用商店上线「坤支付」(同作者生态,一键安装)

@@ -267,8 +267,9 @@ func PingStatus() bool {
 }
 
 // SetPing 开/关 ping(sysctl 应用 + /etc/sysctl.d 持久化)。
-// 面板 systemd 单元带 ProtectKernelTunables(禁写 /proc/sys)与 ProtectSystem=full
-// (禁写 /etc),因此实际执行通过 systemd-run 瞬态单元逃逸沙箱;无 systemd 时回退直连。
+// 面板 systemd 单元带 ProtectKernelTunables(禁写 /proc/sys),实际执行通过
+// systemd-run 瞬态单元逃逸;无 systemd 时回退直连。
+// (v2.75.5 起单元不再带 ProtectSystem,/etc 直接可写;/proc/sys 仍只读)
 func SetPing(on bool) error {
 	val := "0"
 	if !on {

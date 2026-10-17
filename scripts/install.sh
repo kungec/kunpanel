@@ -233,15 +233,15 @@ Environment=KP_DATA_DIR=$KP_DIR/data
 Environment=HOME=/root
 Environment=GIN_MODE=release
 # 安全加固
+# 注意:不使用 ProtectSystem/ReadWritePaths/RestrictSUIDSGID——面板需代表用户执行
+# 包管理(apt/dpkg 要写 /usr、/etc)与系统配置,文件系统沙箱会让这类操作全部失败
+# (curl 23 / dpkg Broken pipe 等隐性错误,v2.71.x 曾三次踩坑);保留以下不碍事的项
 NoNewPrivileges=true
-ProtectSystem=full
-ReadWritePaths=/etc/ssh -/etc/sysctl.d /etc/ufw /etc/systemd/system
 Environment="GOGC=50"
 Environment="GOMEMLIMIT=256MiB"
 PrivateTmp=true
 ProtectKernelTunables=true
 ProtectControlGroups=true
-RestrictSUIDSGID=true
 
 [Install]
 WantedBy=multi-user.target

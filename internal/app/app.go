@@ -61,6 +61,9 @@ func Run(o Options) error {
 		return fmt.Errorf("加载配置失败: %w", err)
 	}
 
+	// 旧版 systemd 单元自愈:移除存量安装的文件系统沙箱(曾致包管理/Docker 安装失败)
+	HealSystemdUnit()
+
 	// 计划任务调度器
 	stop := make(chan struct{})
 	defer close(stop)

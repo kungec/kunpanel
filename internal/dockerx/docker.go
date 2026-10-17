@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -1058,9 +1059,29 @@ func pmInstall(pm string, pkgs ...string) error {
 	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("%v: %s", err, tail(string(out), 400))
+		msg := fmt.Sprintf("%v: %s", err, tail(string(out), 400))
+		// v2.75.4 及以前的 systemd 单元带 ProtectSystem=full,把 /usr、/etc 对
+		// 面板及其子进程设为只读,apt/dpkg 会全部失败;新版已移除,但需重启
+		// 面板服务(或完成自动自愈重启)后生效
+		if !dirWritable("/etc") {
+			msg += "\n>> 提示: 检测到 /etc 对面板进程只读(旧版服务单元沙箱限制),请重启面板服务(systemctl restart kunpanel)后重试"
+		}
+		return fmt.Errorf("%s", msg)
 	}
 	return nil
+}
+
+// dirWritable 目录可写探测(写后即删),用于识别旧版单元沙箱导致的隐性写失败
+func dirWritable(dir string) bool {
+	if runtime.GOOS != "linux" {
+		return true
+	}
+	probe := filepath.Join(dir, ".kunpanel-write-probe")
+	if err := os.WriteFile(probe, []byte("ok"), 0o644); err != nil {
+		return false
+	}
+	_ = os.Remove(probe)
+	return true
 }
 
 func ensureEngineRunning(w io.Writer) error {

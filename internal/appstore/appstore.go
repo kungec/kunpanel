@@ -542,7 +542,8 @@ volumes:
       TZ: Asia/Shanghai
     volumes:
       - kunying_db:/var/lib/mysql
-    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_general_ci
+    # 小内存机调优:关闭 performance_schema、缩小缓冲池(省约 60MB)
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_general_ci --performance_schema=OFF --innodb_buffer_pool_size=64M
 volumes:
   kunying_data:
   kunying_upload:

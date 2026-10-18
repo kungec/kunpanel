@@ -3289,7 +3289,7 @@ PAGES.databases = {
           var us = (byDB[db] || []).concat(globals);
           if (!us.length) return;
           var div = document.createElement("div");
-          div.style.cssText = "font-size:11px;color:var(--text-3);margin-top:4px;line-height:1.5;word-break:break-all";
+          div.className = "db-c-ausers";
           div.innerHTML = "授权用户: " + us.map(function(x) { return esc(x); }).join("、");
           card.appendChild(div);
         });

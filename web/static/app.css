@@ -1024,9 +1024,14 @@ tr.fm-selected { background: var(--primary-light); }
 }
 .db-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
 .db-card {
-  display: flex; align-items: center; gap: 11px; padding: 13px 15px;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 11px; padding: 13px 15px;
   border: 1px solid var(--border-light); border-radius: 10px; background: var(--card);
   cursor: pointer; transition: all .13s; min-width: 0;
+}
+/* 卡片内的授权用户行:独占一整行,避免被 flex 挤成细条 */
+.db-c-ausers {
+  flex: 1 1 100%; margin: 0; padding: 6px 2px 0; border-top: 1px dashed var(--border-light);
+  font-size: 11px; color: var(--text-3); line-height: 1.6; word-break: break-all;
 }
 .db-card:hover { border-color: var(--primary); }
 .db-card.active { border-color: var(--primary); background: var(--primary-light); box-shadow: 0 0 0 1px var(--primary); }

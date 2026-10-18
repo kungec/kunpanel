@@ -2180,6 +2180,11 @@ PAGES.apps = {
             /^php[0-9]*$/.test(r.key);
           html += '<td><div style="display:flex;gap:4px;flex-wrap:wrap">';
           if (canManage) html += '<button class="btn btn-sm btn-primary" data-app-mgr="' + r.key + '">管理</button>';
+          else if (r.key === "phpmyadmin" && r.status === "running") {
+            // 纯 Web 应用没有运行时管理对话框,「管理」= 打开其 Web 界面
+            var pmaURL = "http://" + location.hostname + ":" + ((r.params && r.params.Port) || "8082") + "/";
+            html += '<a class="btn btn-sm btn-primary" href="' + esc(pmaURL) + '" target="_blank" rel="noopener">管理</a>';
+          }
           html += '<button class="btn btn-sm btn-plain" data-app-cfg="' + r.key + '" data-app-name="' + esc(r.name) + '">配置</button>';
           var running = r.status === "running";
           var missing = r.status === "missing";

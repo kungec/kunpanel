@@ -757,6 +757,12 @@ func StartACMERenew(stop <-chan struct{}, notify func(msg string)) {
 		lastTry := map[string]string{}
 		run := func() {
 			today := time.Now().Format("2006-01-02")
+			// 面板自身 LE 证书(DNS API 管理)自动续期
+			RenewPanelLE(func(msg string) {
+				if notify != nil {
+					notify(msg)
+				}
+			})
 			for _, c := range ListCerts() {
 				if !c.Acme || c.Expire == "" || c.Days > c.renewDueDays() {
 					continue

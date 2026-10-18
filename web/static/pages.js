@@ -4276,6 +4276,7 @@ PAGES.settings = {
         '</div>' +
         '<div class="settings-section"><div class="settings-section-title">面板 HTTPS(面板 SSL)</div>' +
         '<div id="ps-ssl-status" class="help" style="margin:0 0 10px">读取证书信息 ...</div>' +
+        '<div style="margin:-4px 0 10px"><button class="btn btn-primary btn-sm" id="ps-ssl-le">' + I("bolt") + ' 申请 Let\'s Encrypt 证书(自动部署与续期)</button></div>' +
         '<div class="form-item"><label style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">' +
         '<input type="checkbox" id="ps-ssl-on" ' + (!sslState.hasCert || sslState.enabled ? "checked" : "") + '> 启用面板 HTTPS 访问</label></div>' +
         '<div class="form-item"><label>上传证书(PEM)</label>' +
@@ -4366,6 +4367,75 @@ PAGES.settings = {
           box.textContent = "证书信息读取失败: " + e.message;
         }
       })();
+      qs("#ps-ssl-le", body).onclick = async function() {
+        window.__dnsMeta = window.__dnsMeta || {};
+        let acc = {};
+        try { acc = await api("/ssl/acme/config").then(function(x) { return x.data || x; }) || {}; } catch (e) {}
+        window.__acmeProvider = acc.provider || "letsencrypt";
+        const m = modal({
+          title: "面板申请 Let's Encrypt 证书", width: 520,
+          body: '<div class="form-item"><label>面板访问域名</label>' +
+            '<input class="input mono" id="ple-domain" placeholder="如 panel.example.com(需解析到本服务器)"></div>' +
+            '<div class="form-item"><label>申请邮箱</label>' +
+            '<input class="input" id="ple-email" value="' + esc(acc.email || "") + '" placeholder="用于到期提醒,如 me@example.com"></div>' +
+            '<div class="form-item"><label>验证方式</label>' +
+            '<div class="help" style="margin:0">DNS API 自动验证(自动添加 TXT 记录;无需网关/建站/开放 80 端口)。需在下方配置 DNS 服务商 API 凭据,保存后网站通配符证书也可使用</div></div>' +
+            '<div id="ple-dnsapi"><div class="help">DNS 服务商凭据加载中 ...</div></div>',
+          footer: '<button class="btn btn-plain" data-act="no">取 消</button><button class="btn btn-primary" data-act="yes">申请并部署 HTTPS</button>',
+        });
+        qs('[data-act="no"]', m.el).onclick = m.close;
+        // 加载 DNS 服务商与凭据(复用站点弹窗的同一套存储)
+        api("/ssl/dnsapi").then(function(d) {
+          const prov = qs("#acme-dnsapi-provider", m.el);
+          if (!prov) return;
+          (d.providers || []).forEach(function(p2) { window.__dnsMeta[p2.key] = p2; });
+          prov.innerHTML = (d.providers || []).map(function(p2) {
+            return '<option value="' + esc(p2.key) + '">' + esc(p2.name) + "</option>";
+          }).join("");
+          if (d.provider) prov.value = d.provider;
+          const sync = function() {
+            const def = window.__dnsMeta[prov.value];
+            const box = qs("#acme-dnsapi-fields", m.el);
+            if (!def) { box.innerHTML = ""; return; }
+            box.innerHTML = def.fields.map(function(f) {
+              const v = d.provider === prov.value && d.creds && d.creds[f.key] ? esc(d.creds[f.key]) : "";
+              return '<div class="form-item"><label>' + esc(f.name) + (f.required ? ' <span style="color:var(--danger)">*</span>' : "") + '</label>' +
+                '<input class="input mono" data-cred="' + esc(f.key) + '" value="' + v + '"' + (f.secret ? ' type="password"' : "") + ' style="max-width:320px"></div>';
+            }).join("");
+          };
+          prov.onchange = sync;
+          sync();
+        }).catch(function(e) {
+          const box = qs("#ple-dnsapi", m.el);
+          if (box) box.innerHTML = '<div class="help">加载失败: ' + esc(e.message) + "</div>";
+        });
+        qs('[data-act="yes"]', m.el).onclick = async function() {
+          const domain = qs("#ple-domain", m.el).value.trim().toLowerCase();
+          const email = qs("#ple-email", m.el).value.trim();
+          const dp = qs("#acme-dnsapi-provider", m.el).value;
+          const creds = {};
+          qsa("#acme-dnsapi-fields [data-cred]", m.el).forEach(function(inp) { creds[inp.getAttribute("data-cred")] = inp.value.trim(); });
+          if (!domain || domain.indexOf(".") < 0) { toast("请填写面板访问域名", "error"); return; }
+          if (!dp) { toast("请选择 DNS 服务商", "error"); return; }
+          try { await api("/ssl/acme/config", { method: "POST", body: { email: email || acc.email || "", provider: window.__acmeProvider || "letsencrypt" } }); }
+          catch (e) { toast(e.message, "error", 6000); return; }
+          try { await api("/ssl/dnsapi", { method: "POST", body: { provider: dp, creds: creds } }); }
+          catch (e) { toast(e.message, "error", 6000); return; }
+          try {
+            const r = await api("/panel/ssl/le", { method: "POST", body: { domain: domain } });
+            m.close();
+            taskModal(r.task_id, function(status) {
+              if (status === "success") {
+                toast("证书已签发并部署,正在以 HTTPS 重启...", "success", 6000);
+                setTimeout(function() {
+                  location.href = "https://" + domain + ":" + location.port;
+                  location.reload();
+                }, 2500);
+              }
+            });
+          } catch (e) { toast(e.message, "error", 8000); }
+        };
+      };
       qs("#ps-selfsign", body).onclick = async function() {
         this.disabled = true; this.textContent = "生成中...";
         try {

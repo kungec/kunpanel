@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,7 +15,9 @@ import (
 	"time"
 
 	"kunpanel/internal/config"
+	"kunpanel/internal/taskx"
 	"kunpanel/internal/util"
+	"kunpanel/internal/websites"
 )
 
 func panelSSLCert() string { return filepath.Join(config.DataDir(), "panelssl", "cert.pem") }
@@ -28,6 +31,9 @@ func (s *Server) handlePanelSSLGet(w http.ResponseWriter, r *http.Request) {
 		"enabled":  cfg.SSL,
 		"has_cert": false,
 		"port":     cfg.Port,
+	}
+	if meta := websites.GetPanelLEMeta(); meta.Domain != "" {
+		info["managed_domain"] = meta.Domain
 	}
 	if b, err := os.ReadFile(panelSSLCert()); err == nil {
 		if blk, _ := pem.Decode(b); blk != nil {
@@ -94,6 +100,7 @@ func (s *Server) handlePanelSSLSave(w http.ResponseWriter, r *http.Request) {
 			Fail(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		websites.ClearPanelLEMeta() // 手动上传的证书不再由自动续期管理
 	}
 	if req.Enabled {
 		if _, err := os.Stat(panelSSLCert()); err != nil {
@@ -133,6 +140,35 @@ func (s *Server) handlePanelSSLSelfSign(w http.ResponseWriter, r *http.Request) 
 	}
 	_ = os.Chmod(panelSSLKey(), 0o600)
 	OK(w, "自签证书已生成(浏览器会提示不受信任,属正常现象)")
+}
+
+// handlePanelSSLIssueLE 为面板申请 Let's Encrypt 证书(DNS API 验证)
+// 并自动部署启用:签发成功后面板以 HTTPS 模式重启
+func (s *Server) handlePanelSSLIssueLE(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Domain string `json:"domain"`
+	}
+	if err := readJSON(r, &req); err != nil || strings.TrimSpace(req.Domain) == "" {
+		Fail(w, http.StatusBadRequest, "请填写面板访问域名")
+		return
+	}
+	t, err := taskx.M.Start("panel-le", func(w io.Writer) error {
+		if err := websites.IssuePanelLE(req.Domain, w); err != nil {
+			return err
+		}
+		// 部署生效:启用面板 SSL 并重启加载
+		_ = config.M.Update(func(c *config.Config) { c.SSL = true })
+		go func() {
+			time.Sleep(1500 * time.Millisecond)
+			_, _ = util.RunWithTimeout(30*time.Second, "systemctl", "restart", "kunpanel")
+		}()
+		return nil
+	})
+	if err != nil {
+		Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	OK(w, map[string]string{"task_id": t.ID})
 }
 
 func isPEM(s string) bool {

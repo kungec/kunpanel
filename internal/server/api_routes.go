@@ -215,6 +215,7 @@ func (s *Server) registerAPI() {
 	m.Handle("GET /api/v1/panel/ssl", wrap(http.HandlerFunc(s.handlePanelSSLGet)))
 	m.Handle("POST /api/v1/panel/ssl", wrap(http.HandlerFunc(s.handlePanelSSLSave)))
 	m.Handle("POST /api/v1/panel/ssl/selfsign", wrap(http.HandlerFunc(s.handlePanelSSLSelfSign)))
+	m.Handle("POST /api/v1/panel/ssl/le", wrap(http.HandlerFunc(s.handlePanelSSLIssueLE)))
 	m.Handle("GET /api/v1/panel/checkup", wrap(http.HandlerFunc(s.handlePanelCheckup)))
 	m.Handle("POST /api/v1/notifications/clear", wrap(http.HandlerFunc(s.handleNotifyClear)))
 	m.Handle("POST /api/v1/websites/{id}/hotlink", wrap(http.HandlerFunc(s.handleSiteHotlink)))

@@ -1807,15 +1807,21 @@ PAGES.websites = {
     domainListEl.innerHTML = siteDomains.map(function(d) {
       return '<label class="radio-line" style="margin:0"><input type="checkbox" class="acme-dom" value="' + esc(d) + '" checked> <span class="mono">' + esc(d) + "</span></label>";
     }).join("") || '<div class="help">站点没有绑定域名</div>';
+    // 行可见性统一切换(程序赋值不会触发 onchange,必须显式调用)
+    var applyMethodUI = function(v) {
+      qs("#acme-alias-row", m.el).style.display = v === "dns" ? "" : "none";
+      qs("#acme-dnsapi-row", m.el).style.display = v === "dnsapi" ? "" : "none";
+      if (v === "dnsapi") loadDNSAPIPanel();
+    };
     var syncDomainPlan = function() {
       var wc = qs("#acme-wildcard", m.el);
       // 泛域名仅 DNS/DNS API 验证可签:HTTP 模式下勾选时自动切换验证方式
       // (不禁用复选框——禁用会让用户以为功能不可用)
       if (wc.checked && methodSel.value === "http") {
         methodSel.value = "dnsapi";
-        loadDNSAPIPanel();
         toast("泛域名仅 DNS/DNS API 验证支持,已自动切换验证方式", "info", 4000);
       }
+      applyMethodUI(methodSel.value);
       var checked = qsa(".acme-dom:checked", m.el).map(function(x) { return x.value; });
       var plan = planDomains(checked, wc.checked);
       qs("#acme-domain-plan", m.el).textContent = plan.length ? "实际申请: " + plan.join(" ") : "";
@@ -1823,9 +1829,7 @@ PAGES.websites = {
     qsa(".acme-dom", m.el).forEach(function(x) { x.onchange = syncDomainPlan; });
     qs("#acme-wildcard", m.el).onchange = syncDomainPlan;
     methodSel.onchange = function() {
-      qs("#acme-alias-row", m.el).style.display = this.value === "dns" ? "" : "none";
-      qs("#acme-dnsapi-row", m.el).style.display = this.value === "dnsapi" ? "" : "none";
-      if (this.value === "dnsapi") loadDNSAPIPanel();
+      applyMethodUI(this.value);
       syncDomainPlan();
     };
     syncDomainPlan();

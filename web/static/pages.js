@@ -4206,6 +4206,7 @@ PAGES.settings = {
         '<div class="settings-hint" style="margin-top:10px">启用后登录需要 密码 + 验证器动态码(Google Authenticator 等兼容)</div>' +
         '</div>' +
         '<div class="settings-section"><div class="settings-section-title">面板 HTTPS(面板 SSL)</div>' +
+        '<div id="ps-ssl-status" class="help" style="margin:0 0 10px">读取证书信息 ...</div>' +
         '<div class="form-item"><label style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">' +
         '<input type="checkbox" id="ps-ssl-on" ' + (!sslState.hasCert || sslState.enabled ? "checked" : "") + '> 启用面板 HTTPS 访问</label></div>' +
         '<div class="form-item"><label>上传证书(PEM)</label>' +
@@ -4255,6 +4256,27 @@ PAGES.settings = {
       };
       // 面板 HTTPS
       var st = window.__psSSL || {};
+      // 当前证书状态卡:类别/域名/有效期(自签、上传、LE 申请的都显示)
+      (async function() {
+        var box = body.querySelector("#ps-ssl-status");
+        if (!box) return;
+        try {
+          var d = await api("/panel/ssl");
+          if (!d.has_cert) {
+            box.innerHTML = "尚未配置证书:可上传 PEM 或一键生成自签;也可以先在「网站」页为站点申请 Let's Encrypt 证书(下载后在此上传启用)";
+            return;
+          }
+          var due = d.days < 0 ? '<span class="tag tag-danger">已过期</span>'
+            : d.days <= 15 ? '<span class="tag tag-warning">剩 ' + d.days + " 天</span>"
+            : '<span class="tag tag-success">剩 ' + d.days + " 天</span>";
+          var doms = (d.domains || []).slice(0, 3).map(esc).join(" / ");
+          box.innerHTML = '当前证书:<span class="tag tag-info">' + esc(d.category || "证书") + "</span> " +
+            '<span class="mono">' + doms + "</span> · 到期 " + esc(d.expire || "-") + " " + due +
+            (d.enabled ? ' · <b>使用中</b>' : ' · <span class="help" style="margin:0">已保存未启用</span>');
+        } catch (e) {
+          box.textContent = "证书信息读取失败: " + e.message;
+        }
+      })();
       qs("#ps-selfsign", body).onclick = async function() {
         this.disabled = true; this.textContent = "生成中...";
         try {

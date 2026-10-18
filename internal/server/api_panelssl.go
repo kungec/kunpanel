@@ -2,7 +2,11 @@ package server
 
 // api_panelssl.go —— 面板自身 HTTPS(面板 SSL)
 import (
+	"bytes"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -16,15 +20,48 @@ import (
 func panelSSLCert() string { return filepath.Join(config.DataDir(), "panelssl", "cert.pem") }
 func panelSSLKey() string  { return filepath.Join(config.DataDir(), "panelssl", "key.pem") }
 
-// handlePanelSSLGet 当前状态
+// handlePanelSSLGet 当前状态(含已存证书的类别/域名/有效期,
+// 供面板 HTTPS 设置区显示"当前使用什么证书")
 func (s *Server) handlePanelSSLGet(w http.ResponseWriter, r *http.Request) {
 	cfg := config.M.Get()
-	_, certErr := os.Stat(panelSSLCert())
-	OK(w, map[string]any{
+	info := map[string]any{
 		"enabled":  cfg.SSL,
-		"has_cert": certErr == nil,
+		"has_cert": false,
 		"port":     cfg.Port,
-	})
+	}
+	if b, err := os.ReadFile(panelSSLCert()); err == nil {
+		if blk, _ := pem.Decode(b); blk != nil {
+			if crt, err := x509.ParseCertificate(blk.Bytes); err == nil {
+				selfSigned := bytes.Equal(crt.RawIssuer, crt.RawSubject)
+				issuer := crt.Issuer.CommonName + " " + strings.Join(crt.Issuer.Organization, " ")
+				category := "上传证书"
+				switch {
+				case selfSigned:
+					category = "自签证书"
+				case strings.Contains(issuer, "Let's Encrypt"):
+					category = "Let's Encrypt 证书"
+				case strings.Contains(issuer, "ZeroSSL"):
+					category = "ZeroSSL 证书"
+				case strings.Contains(issuer, "Google Trust Services"), strings.Contains(issuer, "GTS"):
+					category = "Google Trust Services 证书"
+				}
+				domains := append([]string{}, crt.DNSNames...)
+				for _, ip := range crt.IPAddresses {
+					domains = append(domains, ip.String())
+				}
+				info["has_cert"] = true
+				info["category"] = category
+				info["issuer"] = crt.Issuer.CommonName
+				info["domains"] = domains
+				info["expire"] = crt.NotAfter.Format("2006-01-02")
+				info["days"] = int(time.Until(crt.NotAfter).Hours() / 24)
+				info["self_signed"] = selfSigned
+			} else {
+				info["parse_error"] = fmt.Sprintf("证书解析失败: %v", err)
+			}
+		}
+	}
+	OK(w, info)
 }
 
 // handlePanelSSLSave 保存证书/开关;变更后需重启面板生效

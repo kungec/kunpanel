@@ -369,7 +369,7 @@ func (s *Server) handleAppRuntimeAction(w http.ResponseWriter, r *http.Request) 
 		t, err := taskx.M.Start("php-ext-"+ext, func(w io.Writer) error {
 			// 同容器扩展安装串行化:两个 docker-php-ext-install 并发会在共享的
 			// /usr/src/php 上互相拆台(tar 解压覆盖头文件、Makefile 互踩)
-			unlockPHPExt := lockPHPExtBuild(container)
+			unlockPHPExt := lockPHPExtBuild(container, w)
 			defer unlockPHPExt()
 			// 清掉上次安装可能留下的残缺源码树与过期 Makefile(任务超时中断、
 			// 并发互踩都会污染 /usr/src/php;delete 后 install 会重新完整解压,

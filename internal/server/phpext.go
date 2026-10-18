@@ -1,15 +1,24 @@
 package server
 
-import "sync"
+import (
+	"fmt"
+	"io"
+	"sync"
+)
 
 // phpExtBuildMu 同容器的 PHP 扩展编译串行锁(键=容器名):
 // docker-php-ext-install 共享容器内 /usr/src/php 源码树,并发安装会互踩
 var phpExtBuildMu sync.Map // container name -> *sync.Mutex
 
-func lockPHPExtBuild(container string) func() {
+func lockPHPExtBuild(container string, w io.Writer) func() {
 	v, _ := phpExtBuildMu.LoadOrStore(container, &sync.Mutex{})
 	mu := v.(*sync.Mutex)
-	mu.Lock()
+	if !mu.TryLock() {
+		// 任务日志可见的排队提示:否则连续点装多个扩展时,等待中的任务
+		// 没有任何输出,看起来像卡死
+		fmt.Fprintln(w, ">> 同容器已有扩展在安装,排队等待 ...")
+		mu.Lock()
+	}
 	return mu.Unlock
 }
 

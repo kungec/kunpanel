@@ -239,7 +239,42 @@ function emptyState(icon, text, sub) {
 }
 
 /* ---------- Toast ---------- */
+// 危险操作按钮的全局即时反馈:删除/卸载等按钮点击后立即转圈(实际执行常
+// 有 1~3 秒 API 延迟,此前完全无反馈像没点上);完成或失败都会 toast,
+// toast 出现时统一清场,15 秒兜底防泄漏
+function clearBusyBtns() {
+  document.querySelectorAll(".btn-busy").forEach((b) => {
+    b.classList.remove("btn-busy");
+    b.style.pointerEvents = "";
+    const s = b.querySelector(".spin-sm");
+    if (s) s.remove();
+    delete b.dataset.busy;
+  });
+}
+document.addEventListener(
+  "click",
+  (e) => {
+    const b = e.target.closest(".btn");
+    if (!b) return;
+    const t = (b.textContent || "").trim();
+    if (!/删除|卸载|清空|恢复|解绑|回滚|停用/.test(t)) return;
+    if (b.dataset.busy) {
+      // 已在执行中:拦截重复点击,防双发请求
+      e.stopPropagation();
+      e.preventDefault();
+      return;
+    }
+    b.dataset.busy = "1";
+    b.classList.add("btn-busy");
+    b.style.pointerEvents = "none";
+    b.insertAdjacentHTML("beforeend", ' <span class="spin-sm"></span>');
+    setTimeout(clearBusyBtns, 15000);
+  },
+  true
+);
+
 function toast(msg, type = "success", ms = 2600, onclick) {
+  clearBusyBtns();
   const wrap = qs("#toast-wrap");
   const el = document.createElement("div");
   el.className = "toast " + type;
@@ -268,6 +303,7 @@ function toast(msg, type = "success", ms = 2600, onclick) {
 /* ---------- Modal ---------- */
 let _modalStack = [];
 function modal({ title, body, footer, width = 540, onClose }) {
+  clearBusyBtns(); // 弹窗打开本身就是反馈,清掉触发按钮上的转圈
   const mask = qs("#modal-mask");
   const box = qs("#modal-box");
   box.style.width = Math.min(width, window.innerWidth - 24) + "px";

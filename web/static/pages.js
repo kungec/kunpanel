@@ -1690,8 +1690,9 @@ PAGES.websites = {
         var list = await api("/ssl/acme/providers");
         var sel = qs("#acme-provider", m.el);
         sel.innerHTML = list.map(function(p2) {
-          providerMeta[p2.name] = p2;
-          return '<option value="' + esc(p2.name) + '"' + ((acmeCfg.provider || "letsencrypt") === p2.name ? " selected" : "") + ">" + esc(p2.name) + (p2.staging ? "(测试)" : "") + "</option>";
+          var k = p2.key || p2.name; // value 必须是小写键;旧版后端无 key 字段时回退 name
+          providerMeta[k] = p2;
+          return '<option value="' + esc(k) + '"' + ((acmeCfg.provider || "letsencrypt") === k ? " selected" : "") + ">" + esc(p2.name) + (p2.staging ? "(测试)" : "") + "</option>";
         }).join("");
         var sync = function() {
           var key = sel.value;

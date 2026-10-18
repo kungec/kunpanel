@@ -41,6 +41,7 @@ const (
 
 // ACMEProvider CA 服务商预设
 type ACMEProvider struct {
+	Key     string `json:"key"` // 小写键(前端下拉 value / 配置存储用)
 	Name    string `json:"name"`
 	Dir     string `json:"dir"`
 	NeedEAB bool   `json:"need_eab"` // 前端是否显示 EAB 输入行
@@ -52,11 +53,11 @@ type ACMEProvider struct {
 // 从服务商下拉下架;map 条目保留:存量 buypass 账户续期仍指向正确目录,
 // 由 Buypass 侧返回明确错误引导用户切换 CA,而不是静默落到 Let's Encrypt
 var acmeProviders = map[string]ACMEProvider{
-	"letsencrypt":      {Name: "Let's Encrypt", Dir: acmeDirProd},
-	"zerossl":          {Name: "ZeroSSL", Dir: "https://acme.zerossl.com/v2/DV90", Hint: "填申请邮箱即可,面板自动获取 EAB 并注册,无需手动申请"},
-	"google":           {Name: "Google Trust Services", Dir: "https://dv.acme-v02.api.pki.goog/directory", NeedEAB: true, Hint: "需在 Google Cloud 控制台(Public CA)获取 EAB 凭据后填写"},
-	"buypass":          {Name: "BuyPass Go SSL", Dir: "https://api.buypass.com/acme/directory", NeedEAB: true, Hint: "BuyPass 已于 2025-10 停发证书,仅供存量账户续期,建议切换其他 CA"},
-	"letsencrypt_test": {Name: "Let's Encrypt 测试", Dir: acmeDirStaging, Staging: true},
+	"letsencrypt":      {Key: "letsencrypt", Name: "Let's Encrypt", Dir: acmeDirProd},
+	"zerossl":          {Key: "zerossl", Name: "ZeroSSL", Dir: "https://acme.zerossl.com/v2/DV90", Hint: "填申请邮箱即可,面板自动获取 EAB 并注册,无需手动申请"},
+	"google":           {Key: "google", Name: "Google Trust Services", Dir: "https://dv.acme-v02.api.pki.goog/directory", NeedEAB: true, Hint: "需在 Google Cloud 控制台(Public CA)获取 EAB 凭据后填写"},
+	"buypass":          {Key: "buypass", Name: "BuyPass Go SSL", Dir: "https://api.buypass.com/acme/directory", NeedEAB: true, Hint: "BuyPass 已于 2025-10 停发证书,仅供存量账户续期,建议切换其他 CA"},
+	"letsencrypt_test": {Key: "letsencrypt_test", Name: "Let's Encrypt 测试", Dir: acmeDirStaging, Staging: true},
 }
 
 // ListACMEProviders 供前端下拉渲染(buypass 已停发,不再提供选择)
@@ -204,7 +205,17 @@ func SetACMEConfigEx(email, provider, eabKeyID, eabHMAC string) error {
 	if provider == "" {
 		provider = "letsencrypt"
 	}
+	provider = strings.ToLower(strings.TrimSpace(provider))
 	p, ok := acmeProviders[provider]
+	if !ok {
+		// 兼容旧版前端/缓存页面把显示名(如 "Let's Encrypt")当 key 传来的情况
+		for k, p2 := range acmeProviders {
+			if strings.EqualFold(p2.Name, provider) {
+				provider, ok = k, true
+				break
+			}
+		}
+	}
 	if !ok {
 		return fmt.Errorf("不支持的证书服务商: %s", provider)
 	}

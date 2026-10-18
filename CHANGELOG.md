@@ -3,6 +3,17 @@
 所有重要变更都会记录在此文件中。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v2.88.2] - 2026-10-19
+
+### 修复:ZeroSSL 签发偶发"nonce 拉取失败/空响应"——自动重试(用户反馈)
+
+ZeroSSL 的 ACME 接口偶发不稳定:newNonce 返回空响应导致
+"failed to get nonce from HTTP HEAD ... unexpected end of JSON input",
+或注册阶段报错。现在签发与续期对这类**瞬时故障自动重试**(最多 3 次、
+递增退避;nonce/空响应/5xx/超时等特征),重试期间任务日志全程可见;
+仍失败时 ZeroSSL 场景追加排障提示(稍后重试 / 改用 Let's Encrypt /
+配置 EAB 凭据)。
+
 ## [v2.88.1] - 2026-10-19
 
 ### 修复:库卡片「授权用户」行布局(用户反馈)

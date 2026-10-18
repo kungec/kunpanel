@@ -520,35 +520,91 @@ func Toggle(id string, enabled bool) error {
 }
 
 // Delete 删除站点(可选保留根目录数据)
-func Delete(id string) error {
+// guardSiteDirRemoval 删除站点根目录前的安全护栏:路径至少三级(/a/b/c)、
+// 不得是面板站点根/默认根/数据目录本身、不得包含其他站点的根目录
+func guardSiteDirRemoval(root string, remaining []Site) error {
+	clean := filepath.Clean(root)
+	if !filepath.IsAbs(clean) {
+		return fmt.Errorf("根目录不是绝对路径")
+	}
+	if strings.Count(strings.Trim(clean, string(filepath.Separator)), string(filepath.Separator)) < 2 {
+		return fmt.Errorf("目录层级过浅(如 /www 或 /www/wwwroot),为安全起见不予删除,请手动清理")
+	}
+	for _, r := range []string{baseDir(), rootsDir(), WebRoot()} {
+		if clean == filepath.Clean(r) {
+			return fmt.Errorf("目录 %s 是面板站点根目录,不予删除", clean)
+		}
+	}
+	for _, s := range remaining {
+		if s.Root != "" && strings.HasPrefix(filepath.Clean(s.Root), clean+string(filepath.Separator)) {
+			return fmt.Errorf("其他站点(%s)的根目录位于该目录下,为安全起见不予删除", s.Domain)
+		}
+	}
+	return nil
+}
+
+// cleanupSiteMounts 站点目录删除后,清掉各应用 compose 里引用该目录的挂载行
+// (网关/PHP 容器),有变更的容器自动重建;尽力而为,失败不影响删除流程
+func cleanupSiteMounts(root string) {
+	insts, err := appstore.List()
+	if err != nil {
+		return
+	}
+	for _, inst := range insts {
+		if changed, err := appstore.RemoveComposeMountLine(inst.Key, root); err == nil && changed {
+			_ = appstore.Apply(inst.Key, "up -d", nil)
+		}
+	}
+}
+
+func Delete(id string, removeFiles bool) error {
 	mu.Lock()
-	defer mu.Unlock()
 	load()
 	var kept []Site
+	var target *Site
 	found := false
-	for _, s := range list {
-		if s.ID == id {
+	for i := range list {
+		if list[i].ID == id {
 			found = true
+			target = &list[i]
 			continue
 		}
-		kept = append(kept, s)
+		kept = append(kept, list[i])
 	}
 	if !found {
+		mu.Unlock()
 		return fmt.Errorf("站点不存在")
 	}
 	list = kept
 	if err := save(); err != nil {
+		mu.Unlock()
 		return err
 	}
+	cp := *target
+	mu.Unlock()
 	_ = os.Remove(filepath.Join(confDir(), id+".conf"))
 	_ = os.Remove(RewritePath(id))
 	_ = os.Remove(ExtraPath(id)) // 保真迁移的自定义配置一并清理,避免孤儿文件
-	return Reload()
+	var dirErr error
+	if removeFiles && strings.TrimSpace(cp.Root) != "" {
+		// 同步删除根目录(用户勾选):带安全护栏,失败不影响站点删除本身
+		if err := guardSiteDirRemoval(cp.Root, kept); err != nil {
+			dirErr = fmt.Errorf("站点已删除,但根目录未删除: %v", err)
+		} else if err := os.RemoveAll(cp.Root); err != nil {
+			dirErr = fmt.Errorf("站点已删除,但根目录删除失败: %v", err)
+		} else {
+			cleanupSiteMounts(cp.Root)
+		}
+	}
+	if err := Reload(); err != nil {
+		return err
+	}
+	return dirErr
 }
 
 // DeleteMany 批量删除站点:一次保存、逐个清理产物、最后只重载一次
 // (逐个调 Delete 会做 N 次完整 reload,批量时既慢又闪断)
-func DeleteMany(ids []string) (int, error) {
+func DeleteMany(ids []string, removeFiles bool) (int, error) {
 	if len(ids) == 0 {
 		return 0, fmt.Errorf("未选择站点")
 	}
@@ -583,8 +639,32 @@ func DeleteMany(ids []string) (int, error) {
 		_ = os.Remove(ExtraPath(s.ID))
 	}
 	mu.Unlock()
+	var dirErrs []string
+	if removeFiles {
+		// 同步删除根目录(用户勾选):逐站安全护栏,失败逐项记录不影响其他
+		for _, s := range removed {
+			if strings.TrimSpace(s.Root) == "" {
+				continue
+			}
+			if err := guardSiteDirRemoval(s.Root, kept); err != nil {
+				dirErrs = append(dirErrs, s.Domain+": "+err.Error())
+				continue
+			}
+			if err := os.RemoveAll(s.Root); err != nil {
+				dirErrs = append(dirErrs, s.Domain+": "+err.Error())
+				continue
+			}
+			cleanupSiteMounts(s.Root)
+		}
+	}
 	// 配置文件已清理;重载失败如实上报(站点列表已不含被删站点)
-	return len(removed), Reload()
+	if err := Reload(); err != nil {
+		return len(removed), err
+	}
+	if len(dirErrs) > 0 {
+		return len(removed), fmt.Errorf("站点已删除,部分根目录未删除: %s", strings.Join(dirErrs, "; "))
+	}
+	return len(removed), nil
 }
 
 // UpdateSite 编辑站点(代理目标 / 端口 / 备注 / 发送域名)

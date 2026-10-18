@@ -158,8 +158,18 @@ func (s *Server) handleSiteDelete(w http.ResponseWriter, r *http.Request) {
 		Fail(w, http.StatusBadRequest, "非法站点 ID")
 		return
 	}
-	if err := websites.Delete(id); err != nil {
-		Fail(w, http.StatusInternalServerError, err.Error())
+	// 可选 body:{remove_files:true} 同步删除站点根目录(默认保留)
+	removeFiles := false
+	if r.ContentLength != 0 && r.Body != nil {
+		var req struct {
+			RemoveFiles bool `json:"remove_files"`
+		}
+		if err := readJSON(r, &req); err == nil {
+			removeFiles = req.RemoveFiles
+		}
+	}
+	if err := websites.Delete(id, removeFiles); err != nil {
+		Fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	OK(w, nil)
@@ -168,13 +178,14 @@ func (s *Server) handleSiteDelete(w http.ResponseWriter, r *http.Request) {
 // handleSiteBatchDelete 批量删除站点
 func (s *Server) handleSiteBatchDelete(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		IDs []string `json:"ids"`
+		IDs         []string `json:"ids"`
+		RemoveFiles bool     `json:"remove_files"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		Fail(w, http.StatusBadRequest, "参数错误")
 		return
 	}
-	n, err := websites.DeleteMany(req.IDs)
+	n, err := websites.DeleteMany(req.IDs, req.RemoveFiles)
 	if err != nil && n == 0 {
 		Fail(w, http.StatusBadRequest, err.Error())
 		return

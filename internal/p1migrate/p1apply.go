@@ -236,7 +236,7 @@ func importP1Cert(name, crtPath, keyPath string) (string, error) {
 
 // undoP1Site 撤销单站迁移产物(不动 1Panel 原文件)
 func undoP1Site(siteID string, w io.Writer) {
-	if err := websites.Delete(siteID); err != nil {
+	if err := websites.Delete(siteID, false); err != nil { // 迁移回滚:保留已拷贝的站点文件
 		if _, gerr := websites.GetSite(siteID); gerr != nil {
 			fmt.Fprintf(w, "   站点 %s 产物已清理(重载被其他站点配置问题阻塞)\n", siteID)
 			return

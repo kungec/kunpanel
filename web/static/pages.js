@@ -276,18 +276,44 @@ PAGES.websites = {
       const ids = qsa(".site-sel", el).filter((c) => c.checked).map((c) => c.getAttribute("data-id"));
       if (!ids.length) return;
       const domains = ids.map((id) => { const s = site(id); return s ? s.domain.split(" ")[0] : id; });
-      if (!(await confirmDlg("确定删除选中的 <b>" + ids.length + "</b> 个网站吗?<br><span style='font-size:12px;color:var(--text-3)'>" + esc(domains.join("、")) + "<br>网站根目录数据将保留。</span>", { danger: true }))) return;
-      try {
-        const r = await api("/websites/batch-delete", { method: "POST", body: { ids: ids } });
-        toast("已删除 " + (r.deleted || 0) + " 个网站" + (r.warning ? "(" + r.warning + ")" : ""), r.warning ? "info" : "success", 6000);
-        this.render(el);
-      } catch (e) { toast(e.message, "error"); }
+      const m = modal({
+        title: "批量删除网站(" + ids.length + ")", width: 480,
+        body: '<div style="line-height:1.7">确定删除选中的 <b>' + ids.length + "</b> 个网站吗?</div>" +
+          '<div class="help" style="margin:4px 0 2px">' + esc(domains.join("、")) + "</div>" +
+          '<label class="radio-line" style="color:var(--danger);margin-top:8px"><input type="checkbox" id="ws-del-files"> 同时删除各站点根目录(<b>不可恢复</b>)</label>' +
+          '<div class="help" style="margin-top:6px">不勾选时根目录数据保留;位于其他站点目录下的根目录会自动跳过并提示</div>',
+        footer: '<button class="btn btn-plain" data-act="no">取 消</button><button class="btn btn-danger-plain" data-act="yes">确认删除</button>',
+      });
+      qs('[data-act="no"]', m.el).onclick = m.close;
+      qs('[data-act="yes"]', m.el).onclick = async () => {
+        const removeFiles = qs("#ws-del-files", m.el).checked;
+        try {
+          const r = await api("/websites/batch-delete", { method: "POST", body: { ids: ids, remove_files: removeFiles } });
+          toast("已删除 " + (r.deleted || 0) + " 个网站" + (r.warning ? "(" + r.warning + ")" : ""), r.warning ? "info" : "success", 6000);
+          m.close();
+          this.render(el);
+        } catch (e) { toast(e.message, "error", 6000); }
+      };
     };
-    qsa("[data-del]", el).forEach((b) => (b.onclick = async () => {
-      if (await confirmDlg("确定删除网站 <b>" + esc(site(b.dataset.del).domain) + "</b> 吗?<br>网站根目录数据将保留。")) {
-        try { await api("/websites/" + b.dataset.del, { method: "DELETE" }); toast("已删除"); this.render(el); }
-        catch (e) { toast(e.message, "error"); }
-      }
+    qsa("[data-del]", el).forEach((b) => (b.onclick = () => {
+      const st = site(b.dataset.del);
+      const m = modal({
+        title: "删除网站 · " + (st.domain || "").split(" ")[0], width: 480,
+        body: '<div style="line-height:1.7">确定删除网站 <b>' + esc(st.domain) + "</b> 吗?</div>" +
+          '<label class="radio-line" style="color:var(--danger);margin-top:10px"><input type="checkbox" id="ws-del-files"> 同时删除网站根目录(<span class="mono">' + esc(st.root || "-") + '</span>,<b>不可恢复</b>)</label>' +
+          '<div class="help" style="margin-top:6px">不勾选时根目录数据保留,可稍后在文件管理中手动清理</div>',
+        footer: '<button class="btn btn-plain" data-act="no">取 消</button><button class="btn btn-danger-plain" data-act="yes">确认删除</button>',
+      });
+      qs('[data-act="no"]', m.el).onclick = m.close;
+      qs('[data-act="yes"]', m.el).onclick = async () => {
+        const removeFiles = qs("#ws-del-files", m.el).checked;
+        try {
+          await api("/websites/" + st.id, { method: "DELETE", body: { remove_files: removeFiles } });
+          toast(removeFiles ? "已删除(含根目录)" : "已删除(根目录数据保留)");
+          m.close();
+          this.render(el);
+        } catch (e) { toast(e.message, "error", 6000); }
+      };
     }));
     qsa("[data-files]", el).forEach((b) => (b.onclick = function() {
       var st = site(b.dataset.files);

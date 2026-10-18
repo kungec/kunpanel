@@ -1391,6 +1391,42 @@ func EnsureComposeMount(key, hostPath, containerPath string, w io.Writer) error 
 	return nil
 }
 
+// RemoveComposeMountLine 删除应用 compose 中引用指定宿主机目录的同路径挂载行
+// (站点删除后清掉网关/PHP 容器里的遗留挂载,避免下次重建时 docker 自动
+// 创建空目录)。容器未运行时只改文件(下次 up 自动生效)
+func RemoveComposeMountLine(key, hostPath string) (bool, error) {
+	clean := filepath.Clean(hostPath)
+	dir := InstanceDir(key)
+	composeFile := filepath.Join(dir, "docker-compose.yml")
+	b, err := os.ReadFile(composeFile)
+	if err != nil {
+		return false, nil // 未安装,忽略
+	}
+	prefix := "- " + clean + ":"
+	var kept []string
+	changed := false
+	for _, line := range strings.Split(string(b), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), prefix) {
+			changed = true
+			continue
+		}
+		kept = append(kept, line)
+	}
+	if !changed {
+		return false, nil
+	}
+	if err := util.AtomicWriteString(composeFile, strings.Join(kept, "\n"), 0o644); err != nil {
+		return false, err
+	}
+	if !dockerx.ContainerRunning("kun-" + key) {
+		return true, nil
+	}
+	if out, err := dockerx.Compose(dir, "up", "-d"); err != nil {
+		return true, fmt.Errorf("重建容器失败: %s", tailStr(out))
+	}
+	return true, nil
+}
+
 // EnsureWebrootMount 站点根目录不在默认 roots 下(自定义默认目录/站点自定义
 // 根目录)时,把该目录以同路径挂载进网关容器:容器内外路径一致,站点 conf 的
 // root 与 ACME 挑战目录无需换算。幂等:compose 已含该挂载时不重建容器

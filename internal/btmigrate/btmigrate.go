@@ -767,7 +767,7 @@ func migrateOneSite(s BtSite, fpms []BtFPM, opts ApplyOptions, pools map[string]
 // 注意:Delete 在清完产物后才 Reload;重载被"另一个站点的坏配置"(正是本
 // 流程要修的场景)阻塞时,产物其实已经清理干净——查实后按成功处理。
 func undoSiteProducts(siteID string, w io.Writer) {
-	err := websites.Delete(siteID)
+	err := websites.Delete(siteID, false) // 宝塔迁移:绝不触碰宝塔原文件
 	if err != nil {
 		if _, gerr := websites.GetSite(siteID); gerr != nil {
 			fmt.Fprintf(w, "   站点 %s 产物已清理(重载被其他站点配置问题阻塞,最终校验会暴露)\n", siteID)

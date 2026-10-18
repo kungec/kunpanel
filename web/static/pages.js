@@ -1685,7 +1685,7 @@ PAGES.websites = {
             </select></div>
           <div class="form-item"><label>申请域名(站点绑定的域名,勾选要签入证书的)</label>
             <div id="acme-domain-list" style="display:flex;flex-direction:column;gap:2px"></div>
-            <label class="radio-line" style="margin-top:6px"><input type="checkbox" id="acme-wildcard"> 自动组合泛域名(*.主域:一张证书覆盖主域和所有子域名,只需一条 CNAME/TXT;仅 DNS/DNS API 验证支持)</label>
+            <label class="radio-line" style="margin-top:6px"><input type="checkbox" id="acme-wildcard"> 自动组合泛域名(*.主域:一张证书覆盖主域和所有子域名,只需一条 CNAME/TXT;HTTP 验证下勾选会自动切换到 DNS API)</label>
             <div class="help" id="acme-domain-plan"></div></div>
           <div id="acme-dnsapi-row" style="display:none">
             <div class="form-item"><label>DNS 服务商</label>
@@ -1809,9 +1809,13 @@ PAGES.websites = {
     }).join("") || '<div class="help">站点没有绑定域名</div>';
     var syncDomainPlan = function() {
       var wc = qs("#acme-wildcard", m.el);
-      var isHttp = methodSel.value === "http";
-      if (isHttp) wc.checked = false;
-      wc.disabled = isHttp;
+      // 泛域名仅 DNS/DNS API 验证可签:HTTP 模式下勾选时自动切换验证方式
+      // (不禁用复选框——禁用会让用户以为功能不可用)
+      if (wc.checked && methodSel.value === "http") {
+        methodSel.value = "dnsapi";
+        loadDNSAPIPanel();
+        toast("泛域名仅 DNS/DNS API 验证支持,已自动切换验证方式", "info", 4000);
+      }
       var checked = qsa(".acme-dom:checked", m.el).map(function(x) { return x.value; });
       var plan = planDomains(checked, wc.checked);
       qs("#acme-domain-plan", m.el).textContent = plan.length ? "实际申请: " + plan.join(" ") : "";
@@ -1866,7 +1870,8 @@ PAGES.websites = {
       const dnsAlias = qs("#acme-dnsapi-alias", m.el).value.trim();
       const certDomains = qsa(".acme-dom:checked", m.el).map((x) => x.value);
       if (!certDomains.length) { toast("请至少勾选一个要申请的域名", "error"); return; }
-      const wildcard = qs("#acme-wildcard", m.el).checked && method !== "http";
+      const wildcard = qs("#acme-wildcard", m.el).checked;
+      if (wildcard && method === "http") { toast("泛域名仅 DNS/DNS API 验证支持,请切换验证方式", "error"); return; }
       if (!email) { toast("请填写申请邮箱", "error"); return; }
       const body = { email, staging, provider, eab_key_id: qs("#acme-eab-kid", m.el).value.trim(), eab_hmac: qs("#acme-eab-hmac", m.el).value.trim() };
       try { await api("/ssl/acme/config", { method: "POST", body }); }

@@ -1192,9 +1192,9 @@ PAGES.websites = {
           '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">' +
           '<input class="input" id="sub-domain" placeholder="子域名,如 m.example.com" style="max-width:280px">' +
           '<span style="color:var(--text-3)">→</span>' +
-          '<input class="input mono" id="sub-dir" placeholder="子目录,如 m(留空=站点根目录)" style="max-width:280px">' +
+          '<input class="input mono" id="sub-dir" placeholder="默认同名,可自定义;填 / = 站点根目录" style="max-width:280px">' +
           '<button class="btn btn-sm btn-primary" id="sub-add">' + I("plus") + " 添加</button></div>" +
-          '<div class="help">子域名会生成独立的 server 块(共享主站证书与 WAF);目录为站点根目录下的相对路径,不存在时自动创建并生成默认页面</div></div>';
+          '<div class="help">子域名会生成独立的 server 块(共享主站证书与 WAF);目录默认与子域名同名(如 m.example.com → m)并自动创建,也可自定义站点根目录下的其他相对路径,填 / 则绑定站点根目录</div></div>';
         var box = document.getElementById("ws-subs") || document.getElementById("ws-body");
         box.innerHTML = html;
         var renderList = function() {
@@ -1220,16 +1220,37 @@ PAGES.websites = {
           }).catch(function(e) { toast(e.message, "error", 6000); });
         };
         renderList();
+        var subDom = document.getElementById("sub-domain");
+        var subDir = document.getElementById("sub-dir");
+        // 目录默认与子域名同名(a.kun.bh.cx → a):跟随子域名自动填,手动改过
+        // 之后不再覆盖;清空目录则回退"站点根目录"语义
+        var dirAuto = true;
+        if (subDom && subDir) {
+          subDom.addEventListener("input", function() {
+            var label = (subDom.value || "").trim().toLowerCase().split(".")[0].replace(/[^a-z0-9_-]/g, "");
+            if (dirAuto && label) subDir.value = label;
+          });
+          subDir.addEventListener("input", function() {
+            dirAuto = subDir.value.trim() === "";
+          });
+        }
         var addBtn = document.getElementById("sub-add");
         if (addBtn) addBtn.onclick = function() {
-          var dom = (document.getElementById("sub-domain") || {}).value || "";
-          var dir = (document.getElementById("sub-dir") || {}).value || "";
-          dom = dom.trim().toLowerCase(); dir = dir.trim().replace(/^\/+|\/+$/g, "");
+          var dom = (subDom || {}).value || "";
+          var raw = (subDir || {}).value || "";
+          dom = dom.trim().toLowerCase();
+          var rootBind = raw.trim() === "/"; // 输入 / = 显式绑定站点根目录
+          var dir = raw.trim().replace(/^\/+|\/+$/g, "");
           if (!dom || dom.indexOf(".") < 0) { toast("请输入合法子域名", "error"); return; }
+          if (!dir && !rootBind) {
+            // 目录留空默认同名子目录
+            dir = dom.split(".")[0].replace(/[^a-z0-9_-]/g, "") || dir;
+          }
           var dup = list.some(function(x) { return x.sub_domain === dom; });
           if (dup) { toast("该子域名已存在", "error"); return; }
           list.push({ sub_domain: dom, dir: dir });
           save(list);
+          subDom.value = ""; subDir.value = ""; dirAuto = true;
         };
       }).catch(function(e) {
         var box = document.getElementById("ws-subs");

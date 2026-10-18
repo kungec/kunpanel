@@ -1661,6 +1661,8 @@ PAGES.websites = {
           <select class="select" id="ssl-cert"><option value="">不启用 HTTPS</option>
             ${certs.map((c) => '<option value="' + esc(c.id) + '"' + (c.id === site.ssl_cert_id ? " selected" : "") + ">" + esc(c.name) + (c.expire ? "(到期 " + esc(c.expire) + (c.acme ? " · LE" : "") + (c.profile === "shortlived" ? " · 短期" : "") + ")" : "") + "</option>").join("")}
           </select>
+          <div style="margin-top:6px"><button class="btn btn-xs btn-danger-plain" id="ssl-cert-del">删除选中的证书</button>
+          <span class="help" style="margin:0 0 0 8px">在上方列表选中要删除的证书再点删除;文件一并移除,不可恢复</span></div>
           <div class="help" id="ssl-cert-count">已有 ${certs.length} 张证书;LE 证书剩余不足 30 天自动续期(IP 短期证书不足 3 天自动续期)</div></div>
 
         <div class="waf-set-sec" style="padding:14px 16px 12px"><div class="waf-sec-head">${I("bolt")}免费证书(ACME)<span class="tag tag-success" style="margin-left:2px">推荐</span></div>
@@ -1735,6 +1737,23 @@ PAGES.websites = {
         m.close();
         this.render(el);
       } catch (e) { toast(e.message, "error", 5000); }
+    };
+    // ⓪ 删除选中的证书(本站在用则先解绑)
+    qs("#ssl-cert-del", m.el).onclick = async () => {
+      const cid = qs("#ssl-cert", m.el).value;
+      if (!cid) { toast("请先在上方列表选中要删除的证书", "error"); return; }
+      const meta = (certs.find((c) => c.id === cid)) || {};
+      const isBound = site.ssl_cert_id === cid;
+      if (!(await confirmDlg("确定删除证书 <b>" + esc(meta.name || cid) + "</b> 吗?" +
+        (isBound ? "<br>该证书正被本站使用,将同时解除 HTTPS 绑定" : "") +
+        "<br><span style=\"font-size:12px;color:var(--danger)\">证书文件将一并删除,不可恢复</span>", { danger: true }))) return;
+      try {
+        if (isBound) await api("/websites/" + site.id + "/ssl", { method: "POST", body: { cert_id: "", redirect: false } });
+        await api("/ssl/certs/" + cid, { method: "DELETE" });
+        toast("证书已删除");
+        m.close();
+        this.sslDialog(site, el);
+      } catch (e) { toast(e.message, "error", 6000); }
     };
     // ① CA 下拉与联动
     var providerMeta = {};

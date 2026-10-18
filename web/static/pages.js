@@ -1194,7 +1194,7 @@ PAGES.websites = {
           '<span style="color:var(--text-3)">→</span>' +
           '<input class="input mono" id="sub-dir" placeholder="子目录,如 m(留空=站点根目录)" style="max-width:280px">' +
           '<button class="btn btn-sm btn-primary" id="sub-add">' + I("plus") + " 添加</button></div>" +
-          '<div class="help">子域名会生成独立的 server 块(共享主站证书与 WAF);目录为站点根目录下的相对路径</div></div>';
+          '<div class="help">子域名会生成独立的 server 块(共享主站证书与 WAF);目录为站点根目录下的相对路径,不存在时自动创建并生成默认页面</div></div>';
         var box = document.getElementById("ws-subs") || document.getElementById("ws-body");
         box.innerHTML = html;
         var renderList = function() {

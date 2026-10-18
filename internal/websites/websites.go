@@ -1566,6 +1566,40 @@ func SetSiteSubs(id string, subs []SiteSub) error {
 	}
 	cp := *site
 	mu.Unlock()
+	// 默认创建子目录与欢迎页:目录不存在时绑定的子域名打开就是 404
+	// (站点根目录对网关/PHP 容器均可见,宿主机建目录即可)
+	if cp.Type != "proxy" && strings.TrimSpace(cp.Root) != "" {
+		for _, sub := range clean {
+			if sub.Dir == "" {
+				continue
+			}
+			dir := filepath.Join(cp.Root, sub.Dir)
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				return fmt.Errorf("创建子目录失败: %v", err)
+			}
+			idx := filepath.Join(dir, "index.html")
+			if !fileExists(idx) {
+				_ = util.AtomicWrite(idx, []byte(fmt.Sprintf(`<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>%s</title></head>
+<body style="font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:90vh">
+<h1>%s 部署成功 — 由坤面板驱动</h1>
+</body></html>
+`, sub.SubDomain, sub.SubDomain)), 0o644)
+			}
+			if cp.Type == "php" || cp.Type == "phpfpm" {
+				phpIdx := filepath.Join(dir, "index.php")
+				if !fileExists(phpIdx) {
+					_ = util.AtomicWrite(phpIdx, []byte(fmt.Sprintf(`<?php
+// 由坤面板生成,可自行替换
+echo '<!DOCTYPE html><html><head><meta charset="utf-8"><title>%s</title></head>';
+echo '<body style="font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:90vh">';
+echo '<h1>%s 部署成功 — PHP ' . PHP_VERSION . '</h1>';
+echo '</body></html>';
+`, sub.SubDomain, sub.SubDomain)), 0o644)
+				}
+			}
+		}
+	}
 	if err := writeConf(&cp); err != nil {
 		return err
 	}

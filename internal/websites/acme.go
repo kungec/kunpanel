@@ -164,8 +164,20 @@ func SetACMEConfig(email string, staging bool) error {
 // fetchZeroSSLEAB 通过 ZeroSSL 公开接口用邮箱自动获取 EAB 凭据(acme.sh 同款
 // 机制):POST https://api.zerossl.com/acme/eab-credentials-email,
 // 表单字段 email,免鉴权,返回 eab_kid 与 eab_hmac_key,
-// 实现"只填邮箱"的 ZeroSSL 自动注册
+// 实现"只填邮箱"的 ZeroSSL 自动注册。ZeroSSL 接口偶发不稳定,内置一次重试
 func fetchZeroSSLEAB(email string, timeout time.Duration) (string, string, error) {
+	kid, mac, err := fetchZeroSSLEABOnce(email, timeout)
+	if err != nil {
+		time.Sleep(3 * time.Second)
+		kid, mac, err = fetchZeroSSLEABOnce(email, timeout)
+		if err != nil {
+			return "", "", fmt.Errorf("%v(已重试仍失败)", err)
+		}
+	}
+	return kid, mac, nil
+}
+
+func fetchZeroSSLEABOnce(email string, timeout time.Duration) (string, string, error) {
 	req, err := http.NewRequest("POST", "https://api.zerossl.com/acme/eab-credentials-email",
 		strings.NewReader(url.Values{"email": {email}}.Encode()))
 	if err != nil {
@@ -327,9 +339,13 @@ func acmeClientForStaged(provider string, stagingOverride bool, w io.Writer) (*l
 	cfg := lego.NewConfig(u)
 	cfg.CADirURL = dir
 	cfg.Certificate.KeyType = certcrypto.EC256
-	client, err := lego.NewClient(cfg)
-	if err != nil {
-		return nil, nil, fmt.Errorf("初始化 ACME 客户端失败: %v", err)
+	var client *lego.Client
+	if err := caRetry(w, func() error {
+		var e error
+		client, e = lego.NewClient(cfg)
+		return e
+	}); err != nil {
+		return nil, nil, fmt.Errorf("初始化 ACME 客户端失败: %v%s", err, caHint(provider, err))
 	}
 	// 注册信息一致性:registration URI 必须属于当前 CA(存量脏数据自动作废重注册)
 	regOK := a.Registration != nil && a.Registration.URI != "" && !stagingOverride
@@ -351,19 +367,27 @@ func acmeClientForStaged(provider string, stagingOverride bool, w io.Writer) (*l
 				return nil, nil, fmt.Errorf("EAB HMAC 格式不正确(应为 base64): %v", err)
 			}
 			a.EABHMAC = base64.RawURLEncoding.EncodeToString(hmacKey)
-			reg, err := client.Registration.RegisterWithExternalAccountBinding(registration.RegisterEABOptions{
-				TermsOfServiceAgreed: true,
-				Kid:                  a.EABKeyID,
-				HmacEncoded:          a.EABHMAC,
-			})
-			if err != nil {
-				return nil, nil, fmt.Errorf("EAB 注册失败: %v", err)
+			var reg *registration.Resource
+			if err := caRetry(w, func() error {
+				var e error
+				reg, e = client.Registration.RegisterWithExternalAccountBinding(registration.RegisterEABOptions{
+					TermsOfServiceAgreed: true,
+					Kid:                  a.EABKeyID,
+					HmacEncoded:          a.EABHMAC,
+				})
+				return e
+			}); err != nil {
+				return nil, nil, fmt.Errorf("EAB 注册失败: %v%s", err, caHint(provider, err))
 			}
 			u.Registration = reg
 		} else {
-			reg, err := client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
-			if err != nil {
-				return nil, nil, fmt.Errorf("ACME 注册失败: %v", err)
+			var reg *registration.Resource
+			if err := caRetry(w, func() error {
+				var e error
+				reg, e = client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
+				return e
+			}); err != nil {
+				return nil, nil, fmt.Errorf("ACME 注册失败: %v%s", err, caHint(provider, err))
 			}
 			u.Registration = reg
 		}

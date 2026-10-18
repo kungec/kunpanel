@@ -3,6 +3,20 @@
 所有重要变更都会记录在此文件中。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v2.88.4] - 2026-10-19
+
+### 修复:ZeroSSL"初始化 ACME 客户端失败(504)"也自动重试(用户反馈)
+
+上一轮的重试覆盖了签发/续期阶段,但用户这次失败在**更早的客户端初始化
+阶段**:`get directory ... 504 Gateway Time-out`(ZeroSSL 返回了 nginx 504
+页面)。现在:
+
+- **客户端初始化(get directory)与账户注册(含 EAB 注册)同样纳入自动
+  重试**,504/空响应等瞬时故障最多重试 3 次
+- EAB 自动获取(按邮箱)失败后自动重试一次
+- 失败信息按 CA 追加排障提示(ZeroSSL:稍后重试/改用 Let's Encrypt/配
+  置 EAB)
+
 ## [v2.88.3] - 2026-10-19
 
 ### 修复:勾选泛域名自动切到 DNS API 后,服务商/凭据/别名区块不显示(用户反馈)

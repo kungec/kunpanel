@@ -124,6 +124,8 @@ func (s *Server) registerAPI() {
 	m.Handle("POST /api/v1/ssl/acme/config", wrap(http.HandlerFunc(s.handleAcmeSet)))
 	m.Handle("POST /api/v1/ssl/acme/issue", wrap(http.HandlerFunc(s.handleAcmeIssue)))
 	m.Handle("POST /api/v1/ssl/acme/renew", wrap(http.HandlerFunc(s.handleAcmeRenew)))
+	m.Handle("GET /api/v1/ssl/dnsapi", wrap(http.HandlerFunc(s.handleDNSAPIInfo)))
+	m.Handle("POST /api/v1/ssl/dnsapi", wrap(http.HandlerFunc(s.handleDNSAPISet)))
 
 	// 站点编辑
 	m.Handle("PUT /api/v1/websites/{id}", wrap(http.HandlerFunc(s.handleSiteUpdate)))

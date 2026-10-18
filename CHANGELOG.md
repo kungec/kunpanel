@@ -3,6 +3,25 @@
 所有重要变更都会记录在此文件中。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v2.78.0] - 2026-10-18
+
+### 新功能:DNS API 自动验证——TXT 记录全自动,通配符证书解锁(用户建议)
+
+HTTPS 弹窗验证方式新增「**DNS API 自动验证**」:配置一次 DNS 服务商 API 凭据,
+TXT 记录由面板自动添加/清理,彻底告别手动加记录;**通配符证书**(`*.域名`)
+从此一选一填即可签发。
+
+- **内置 7 家国内外常用服务商**(实现来自内置 ACME 客户端库):阿里云 DNS、
+  腾讯云 DNSPod、Cloudflare、华为云 DNS、百度智能云 DNS、GoDaddy、NameSilo
+- 凭据保存后自动复用:签发、**自动续期**均走 API(手动 DNS 证书仍为提醒式
+  续期不变);回显打码,重存沿用,支持清空停用
+- 选 DNS API 时选 DNS 服务商 + 填凭据即可;华为云 Region 必填(如
+  cn-north-4),凭据错误在签发前即明确报错(如阿里云 InvalidAccessKeyId)
+- 兼容性:IP 证书仍走 HTTP 验证(DNS 验证不适用 IP);手动 DNS 与别名模式
+  保持不变
+- 单测覆盖 7 家服务商构造;真机接线验证:通配符订单创建成功、假凭据被
+  阿里云 API 明确拒绝(InvalidAccessKeyId,换真 Key 即可签发)
+
 ## [v2.77.5] - 2026-10-18
 
 ### 改进:子域名绑定的目录默认同名自动填充(用户建议)

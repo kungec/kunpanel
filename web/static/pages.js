@@ -1678,8 +1678,14 @@ PAGES.websites = {
           <div class="form-item"><label>验证方式</label>
             <select class="select" id="acme-method" style="max-width:320px">
               <option value="http">HTTP 文件验证(推荐,需域名解析到本服务器且 80 端口可达)</option>
-              <option value="dns">DNS 手动验证(支持通配符/无法开放 80 端口的场景,签发时需添加 TXT 记录)</option>
+              <option value="dnsapi">DNS API 自动验证(支持通配符,TXT 记录自动添加,推荐批量/通配符场景)</option>
+              <option value="dns">DNS 手动验证(支持通配符/无法开放 80 端口的场景,签发时需手动添加 TXT 记录)</option>
             </select></div>
+          <div id="acme-dnsapi-row" style="display:none">
+            <div class="form-item"><label>DNS 服务商</label>
+              <select class="select" id="acme-dnsapi-provider" style="max-width:320px"></select>
+              <div class="help">凭据保存后面板自动添加/清理 TXT 记录,并支持通配符证书;API 凭据在服务商控制台创建(如阿里云 AccessKey、Cloudflare API Token)</div></div>
+            <div id="acme-dnsapi-fields"></div></div>
           <div id="acme-alias-row" style="display:none">
             <div class="form-item"><label>DNS 别名域名(可选)</label>
               <input class="input" id="acme-alias" placeholder="如 acme.your-domain.com(可选)" style="max-width:320px">
@@ -1752,8 +1758,42 @@ PAGES.websites = {
       } catch (e) { /* 下拉失败时保底 letsencrypt */ }
     })();
     var methodSel = qs("#acme-method", m.el);
+    var dnsapiLoaded = false;
     methodSel.onchange = function() {
       qs("#acme-alias-row", m.el).style.display = this.value === "dns" ? "" : "none";
+      qs("#acme-dnsapi-row", m.el).style.display = this.value === "dnsapi" ? "" : "none";
+      if (this.value === "dnsapi") loadDNSAPIPanel();
+    };
+    // DNS API 服务商列表与凭据表单(懒加载一次)
+    var dnsapiMeta = {};
+    var renderDNSAPIFields = function(key, creds) {
+      var box = qs("#acme-dnsapi-fields", m.el);
+      if (!box) return;
+      var def = dnsapiMeta[key];
+      if (!def) { box.innerHTML = ""; return; }
+      box.innerHTML = def.fields.map(function(f) {
+        var v = creds && creds[f.key] ? esc(creds[f.key]) : "";
+        return '<div class="form-item"><label>' + esc(f.name) + (f.required ? ' <span style="color:var(--danger)">*</span>' : "") + '</label>' +
+          '<input class="input mono" data-cred="' + esc(f.key) + '" value="' + v + '"' + (f.secret ? ' type="password"' : "") + ' style="max-width:320px"></div>';
+      }).join("");
+    };
+    var loadDNSAPIPanel = function() {
+      if (dnsapiLoaded) return;
+      dnsapiLoaded = true;
+      api("/ssl/dnsapi").then(function(d) {
+        var sel = qs("#acme-dnsapi-provider", m.el);
+        (d.providers || []).forEach(function(p2) { dnsapiMeta[p2.key] = p2; });
+        sel.innerHTML = (d.providers || []).map(function(p2) {
+          return '<option value="' + esc(p2.key) + '">' + esc(p2.name) + "</option>";
+        }).join("");
+        if (d.provider) sel.value = d.provider;
+        var sync2 = function() { renderDNSAPIFields(sel.value, d.provider === sel.value ? d.creds : null); };
+        sel.onchange = sync2;
+        sync2();
+      }).catch(function(e) {
+        var box = qs("#acme-dnsapi-fields", m.el);
+        if (box) box.innerHTML = '<div class="help">服务商列表加载失败: ' + esc(e.message) + "</div>";
+      });
     };
     // ② 一键申请
     qs("#ssl-acme-issue", m.el).onclick = async () => {
@@ -1766,9 +1806,17 @@ PAGES.websites = {
       const body = { email, staging, provider, eab_key_id: qs("#acme-eab-kid", m.el).value.trim(), eab_hmac: qs("#acme-eab-hmac", m.el).value.trim() };
       try { await api("/ssl/acme/config", { method: "POST", body }); }
       catch (e) { toast(e.message, "error", 6000); return; }
+      if (method === "dnsapi") {
+        // DNS API:先保存凭据,再发起自动验证
+        const dp = qs("#acme-dnsapi-provider", m.el).value;
+        const creds = {};
+        qsa("#acme-dnsapi-fields [data-cred]", m.el).forEach(function(inp) { creds[inp.getAttribute("data-cred")] = inp.value.trim(); });
+        try { await api("/ssl/dnsapi", { method: "POST", body: { provider: dp, creds: creds } }); }
+        catch (e) { toast(e.message, "error", 6000); return; }
+      }
       toast(method === "dns" ? "正在创建订单,请在任务日志中查看需要添加的 TXT 记录..." : "正在发起申请...", "info", 6000);
       try {
-        const d = await api("/ssl/acme/issue", { method: "POST", body: { site_id: site.id, staging, provider, method, alias } });
+        const d = await api("/ssl/acme/issue", { method: "POST", body: { site_id: site.id, staging, provider, method, alias, dns_api: method === "dnsapi" } });
         m.close();
         taskModal(d.task_id, (status) => {
           if (status === "success") {

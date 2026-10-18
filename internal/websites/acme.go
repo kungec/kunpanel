@@ -469,8 +469,9 @@ func (p *manualDNSProvider) CleanUp(domain, token, keyAuth string) error { retur
 // acmeIssueOpts 签发参数
 type AcmeIssueOpts struct {
 	Staging bool
-	Method  string // http / dns
-	Alias   string // DNS 别名域名(CNAME 委托目标,可选)
+	Method  string // http / dns / dnsapi
+	Alias   string // DNS 别名域名(CNAME 委托目标,可选;仅手动 DNS)
+	DNSApi  bool   // DNS API 自动验证(凭据来自已保存的 DNS 服务商配置)
 }
 
 // orderDomains 校验并归一域名(通配符仅 DNS 验证支持)。
@@ -480,9 +481,9 @@ func orderDomains(raw []string, method string) ([]string, bool, error) {
 	isIP := false
 	for _, d := range raw {
 		d = strings.TrimSpace(d)
-		// HTTP 验证剥掉 *. 前缀(且下方直接拒绝);DNS 验证必须保留通配符 SAN,
-		// 否则签出的证书不含 *.example.com(此前静默降级为裸域证书)
-		if method != "dns" {
+		// HTTP 验证剥掉 *. 前缀(且下方直接拒绝);DNS/DNS API 验证必须保留
+		// 通配符 SAN,否则签出的证书不含 *.example.com(此前静默降级为裸域证书)
+		if method == "http" {
 			d = strings.TrimPrefix(d, "*.")
 		}
 		if d == "" {
@@ -513,7 +514,9 @@ func IssueCertForSite(siteID string, opts AcmeIssueOpts, w io.Writer) (string, e
 		return "", err
 	}
 	method := opts.Method
-	if method != "dns" {
+	if opts.DNSApi {
+		method = "dnsapi"
+	} else if method != "dns" {
 		method = "http"
 	}
 	domains, isIP, err := orderDomains(strings.Fields(site.Domain), method)
@@ -524,7 +527,7 @@ func IssueCertForSite(siteID string, opts AcmeIssueOpts, w io.Writer) (string, e
 	profile := ""
 	if isIP {
 		profile = "shortlived"
-		if method == "dns" {
+		if method != "http" {
 			method = "http"
 			fmt.Fprintln(w, ">> 检测到 IP 标识:改用 HTTP 文件验证,并使用 shortlived 档案(约 6 天有效期,自动续期)")
 		}
@@ -533,7 +536,7 @@ func IssueCertForSite(siteID string, opts AcmeIssueOpts, w io.Writer) (string, e
 	staging := opts.Staging || providerStaging(prov)
 	// staging 覆盖:账户目录仍是生产时,本次签发强制走 staging 目录
 	stagingOverride := staging && !providerStaging(prov)
-	fmt.Fprintf(w, ">> 为 %s 申请 %s 证书(%s / %s 验证)...\n", site.Domain, providerName(prov), stageName(staging), map[string]string{"http": "HTTP 文件", "dns": "DNS"}[method])
+	fmt.Fprintf(w, ">> 为 %s 申请 %s 证书(%s / %s 验证)...\n", site.Domain, providerName(prov), stageName(staging), map[string]string{"http": "HTTP 文件", "dns": "DNS", "dnsapi": "DNS API"}[method])
 	alias := strings.TrimSpace(opts.Alias)
 	if alias != "" && method == "dns" {
 		alias = strings.TrimSuffix(strings.TrimPrefix(alias, "_acme-challenge."), ".")
@@ -546,6 +549,14 @@ func IssueCertForSite(siteID string, opts AcmeIssueOpts, w io.Writer) (string, e
 
 	if method == "dns" {
 		client.Challenge.SetDNS01Provider(&manualDNSProvider{w: w, alias: alias},
+			dns01.AddRecursiveNameservers([]string{"8.8.8.8:53", "1.1.1.1:53"}))
+	} else if method == "dnsapi" {
+		prov, err := buildDNS01Provider()
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintln(w, ">> DNS API 自动验证:TXT 记录将由面板自动添加/清理")
+		client.Challenge.SetDNS01Provider(prov,
 			dns01.AddRecursiveNameservers([]string{"8.8.8.8:53", "1.1.1.1:53"}))
 	} else {
 		client.Challenge.SetHTTP01Provider(&httpFileProvider{site: &site})
@@ -604,6 +615,9 @@ func IssueCertForSite(siteID string, opts AcmeIssueOpts, w io.Writer) (string, e
 		}
 		if isIP {
 			return "", fmt.Errorf("签发失败: %v(请确认该 IP 的 80 端口对外开放且站点监听 80)", err)
+		}
+		if method == "dnsapi" {
+			return "", fmt.Errorf("签发失败: %v(请检查 DNS 服务商 API 凭据是否有效、域名是否托管在该服务商)", err)
 		}
 		return "", fmt.Errorf("签发失败: %v(请确认域名已解析到本服务器 IP,且 80 端口对外开放)", err)
 	}
@@ -679,6 +693,13 @@ func renewCertInPlace(id string, w io.Writer) error {
 		fmt.Fprintf(w, ">> DNS 验证的证书续期需要更新 TXT 记录(值每次不同),请按提示操作\n")
 		client.Challenge.SetDNS01Provider(&manualDNSProvider{w: w, alias: alias},
 			dns01.AddRecursiveNameservers([]string{"8.8.8.8:53", "1.1.1.1:53"}))
+	} else if method == "dnsapi" {
+		prov, err := buildDNS01Provider()
+		if err != nil {
+			return err
+		}
+		client.Challenge.SetDNS01Provider(prov,
+			dns01.AddRecursiveNameservers([]string{"8.8.8.8:53", "1.1.1.1:53"}))
 	} else {
 		if site.ID == "" {
 			return fmt.Errorf("原站点已删除,无法续期(请删除该证书后重新申请)")
@@ -700,6 +721,9 @@ func renewCertInPlace(id string, w io.Writer) error {
 	if err != nil {
 		if method == "dns" {
 			return fmt.Errorf("DNS 续期失败: %v", err)
+		}
+		if method == "dnsapi" {
+			return fmt.Errorf("DNS API 续期失败(请检查 DNS 服务商凭据是否有效): %v", err)
 		}
 		return fmt.Errorf("续期失败: %v", err)
 	}

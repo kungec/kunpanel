@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 
 	"kunpanel/internal/filemgr"
 	"kunpanel/internal/taskx"
@@ -136,9 +137,10 @@ func (s *Server) handleAcmeIssue(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		SiteID   string `json:"site_id"`
 		Staging  bool   `json:"staging"`
-		Method   string `json:"method"` // http / dns(默认 http)
-		Alias    string `json:"alias"`  // DNS 别名域名(CNAME 委托目标,可选)
+		Method   string `json:"method"` // http / dns / dnsapi(默认 http)
+		Alias    string `json:"alias"`  // DNS 别名域名(CNAME 委托目标,可选;仅手动 DNS)
 		Provider string `json:"provider"`
+		DNSApi   bool   `json:"dns_api"` // DNS API 自动验证(凭据用已保存配置)
 	}
 	if err := readJSON(r, &req); err != nil || req.SiteID == "" {
 		Fail(w, http.StatusBadRequest, "参数错误")
@@ -164,13 +166,35 @@ func (s *Server) handleAcmeIssue(w http.ResponseWriter, r *http.Request) {
 		req.Method = "http"
 	}
 	taskID, err := websites.IssueCertTaskEx(req.SiteID, websites.AcmeIssueOpts{
-		Staging: req.Staging, Method: req.Method, Alias: req.Alias,
+		Staging: req.Staging, Method: req.Method, Alias: req.Alias, DNSApi: req.DNSApi,
 	})
 	if err != nil {
 		Fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	OK(w, map[string]string{"task_id": taskID})
+}
+
+// handleDNSAPIInfo DNS 服务商列表 + 当前已存凭据(打码)
+func (s *Server) handleDNSAPIInfo(w http.ResponseWriter, r *http.Request) {
+	OK(w, websites.GetDNSAPI())
+}
+
+// handleDNSAPISet 保存 DNS 服务商凭据
+func (s *Server) handleDNSAPISet(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Provider string            `json:"provider"`
+		Creds    map[string]string `json:"creds"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		Fail(w, http.StatusBadRequest, "参数错误")
+		return
+	}
+	if err := websites.SetDNSAPI(strings.TrimSpace(req.Provider), req.Creds); err != nil {
+		Fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	OK(w, websites.GetDNSAPI())
 }
 
 func (s *Server) handleAcmeRenew(w http.ResponseWriter, r *http.Request) {

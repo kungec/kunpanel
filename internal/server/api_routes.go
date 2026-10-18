@@ -48,6 +48,9 @@ func (s *Server) registerAPI() {
 	// 任务(安装/部署进度)
 	m.Handle("GET /api/v1/tasks", wrap(http.HandlerFunc(s.handleTaskList)))
 	m.Handle("GET /api/v1/tasks/{id}", wrap(http.HandlerFunc(s.handleTaskGet)))
+	m.Handle("POST /api/v1/tasks/{id}/delete", wrap(http.HandlerFunc(s.handleTaskDelete)))
+	m.Handle("POST /api/v1/tasks/{id}/retry", wrap(http.HandlerFunc(s.handleTaskRetry)))
+	m.Handle("POST /api/v1/tasks/clear-failed", wrap(http.HandlerFunc(s.handleTaskClearFailed)))
 
 	// 面板在线更新(对接 GitHub Releases)
 	m.Handle("GET /api/v1/panel/update", wrap(http.HandlerFunc(s.handlePanelUpdateCheck)))

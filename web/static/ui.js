@@ -488,7 +488,32 @@ function taskModal(taskId, onDone) {
       if (t.status !== "running") {
         doneBtn.disabled = false;
         if (t.progress && t.progress.total > 0) { barEl.style.width = "100%"; stageEl.textContent = t.status === "success" ? "全部完成" : "失败"; }
-        if (t.status === "failed") toast("任务失败: " + (t.error || ""), "error", 5000);
+        if (t.status === "failed") {
+          toast("任务失败: " + (t.error || ""), "error", 5000);
+          // 支持重试的失败任务:页脚插入「重试此任务」(按保存的原始参数重新发起)
+          if (t.retry && t.retry.kind) {
+            let rb = qs('[data-act="retry"]', m.el);
+            if (!rb) {
+              rb = document.createElement("button");
+              rb.className = "btn btn-plain";
+              rb.dataset.act = "retry";
+              rb.textContent = "重试此任务";
+              rb.onclick = async () => {
+                try {
+                  const d = await api("/tasks/" + taskId + "/retry", { method: "POST", body: {} });
+                  taskId = d.task_id; // 轮询切到新任务
+                  doneBtn.disabled = true;
+                  rb.disabled = true;
+                  logEl.textContent = "";
+                  fire("retried");
+                  poll();
+                } catch (e) { toast(e.message, "error", 8000); }
+              };
+              const f = m.el.querySelector(".modal-footer");
+              f.insertBefore(rb, doneBtn);
+            } else { rb.disabled = false; }
+          }
+        }
         fire(t.status);
         return;
       }
@@ -506,10 +531,17 @@ function taskCenter() {
     title: "后台任务",
     width: 720,
     body: '<div id="tc-list"><div class="boot-loading" style="height:60px"><div class="spinner"></div></div></div>',
-    footer: '<button class="btn btn-primary" data-act="close">关 闭</button>',
+    footer: '<button class="btn btn-danger-plain" data-act="clear">清空失败记录</button><button class="btn btn-primary" data-act="close">关 闭</button>',
     onClose: () => { if (_tcTimer) { clearInterval(_tcTimer); _tcTimer = null; } },
   });
   qs('[data-act="close"]', m.el).onclick = m.close;
+  qs('[data-act="clear"]', m.el).onclick = async () => {
+    try {
+      const d = await api("/tasks/clear-failed", { method: "POST", body: {} });
+      toast("已清空 " + (d.cleared || 0) + " 条失败记录");
+      render();
+    } catch (e) { toast(e.message, "error"); }
+  };
   const fmtDur = (a, b) => {
     const s = Math.max(0, Math.floor(((b ? new Date(b).getTime() : Date.now()) - new Date(a).getTime()) / 1000));
     return s < 60 ? s + " 秒" : Math.floor(s / 60) + " 分 " + (s % 60) + " 秒";
@@ -528,9 +560,31 @@ function taskCenter() {
       '<div class="tc-meta">开始 ' + fmtT(t.started_at) + " · 已用时 " + fmtDur(t.started_at, t.ended_at) +
       (t.error ? ' · <span style="color:var(--danger)">' + esc(t.error) + "</span>" : "") + "</div>" +
       '<pre class="tc-tail">' + esc((t.log_tail || "").split("\n").filter(Boolean).slice(-3).join("\n") || "(等待输出…)") + "</pre>" +
-      '<button class="btn btn-sm btn-plain" data-id="' + esc(t.id) + '">' + I("eye") + " 查看完整日志</button></div>"
+      '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
+      '<button class="btn btn-sm btn-plain" data-id="' + esc(t.id) + '">' + I("eye") + " 查看完整日志</button>" +
+      (t.status === "failed"
+        ? '<button class="btn btn-sm btn-danger-plain" data-tc-del="' + esc(t.id) + '">删除记录</button>' +
+          (t.retry && t.retry.kind ? '<button class="btn btn-sm btn-primary" data-tc-retry="' + esc(t.id) + '">重试</button>' : "")
+        : "") + "</div></div>"
     ).join("");
-    qsa(".tc-item button", box).forEach((b) => (b.onclick = () => taskModal(b.dataset.id)));
+    qsa(".tc-item button", box).forEach((b) => {
+      if (b.dataset.tcDel) {
+        b.onclick = async () => {
+          if (!(await confirmDlg("确定删除这条失败任务记录吗?", { danger: true }))) return;
+          try { await api("/tasks/" + b.dataset.tcDel + "/delete", { method: "POST", body: {} }); render(); }
+          catch (e) { toast(e.message, "error"); }
+        };
+      } else if (b.dataset.tcRetry) {
+        b.onclick = async () => {
+          try {
+            const d = await api("/tasks/" + b.dataset.tcRetry + "/retry", { method: "POST", body: {} });
+            toast("已重新发起,新任务执行中", "info");
+            taskModal(d.task_id);
+            render();
+          } catch (e) { toast(e.message, "error", 6000); }
+        };
+      } else { b.onclick = () => taskModal(b.dataset.id); }
+    });
   };
   render();
   _tcTimer = setInterval(render, 3000);

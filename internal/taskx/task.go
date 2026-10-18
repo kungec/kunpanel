@@ -19,9 +19,27 @@ type Task struct {
 	// 结构化进度(可选):任务体通过 P(w) 拿到 ProgressWriter 汇报,
 	// 前端渲染进度条与当前阶段(如远程迁移到第几步)
 	Progress *Progress `json:"progress,omitempty"`
+	// 重放参数(可选):创建时由调用方附带,失败任务可在任务中心一键重试
+	Retry *RetryData `json:"retry,omitempty"`
 
 	buf *ringBuffer
 	pw  *ProgressWriter
+}
+
+// RetryData 任务的重放参数:失败后在任务中心一键重试
+type RetryData struct {
+	Kind string         `json:"kind"` // 任务类型(重试分发用,如 acme-issue)
+	Body map[string]any `json:"body"` // 原始请求参数
+}
+
+// TaskOption 任务创建可选项
+type TaskOption func(*Task)
+
+// WithRetry 附带重放参数(失败任务一键重试用)
+func WithRetry(kind string, body map[string]any) TaskOption {
+	return func(t *Task) {
+		t.Retry = &RetryData{Kind: kind, Body: body}
+	}
 }
 
 // Progress 任务进度快照
@@ -125,7 +143,7 @@ func NewManager() *Manager {
 // Start 启动一个具名后台任务;同名任务运行中则拒绝。
 // 注意 sync.Mutex 不可重入:清理必须在拿锁之前完成(锁内调用 cleanupFinished
 // 会自我死锁,曾导致首次卸载后整个任务系统永久挂死)。
-func (m *Manager) Start(name string, fn func(w io.Writer) error) (*Task, error) {
+func (m *Manager) Start(name string, fn func(w io.Writer) error, opts ...TaskOption) (*Task, error) {
 	m.cleanupFinished() // 清理 1 小时前完成的任务(自己加锁)
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -146,6 +164,11 @@ func (m *Manager) Start(name string, fn func(w io.Writer) error) (*Task, error) 
 		pw:        pw,
 	}
 	m.tasks[t.ID] = t
+	for _, op := range opts {
+		if op != nil {
+			op(t)
+		}
+	}
 	go func() {
 		// 统一 panic 恢复:用户触发的任务(备份/清理/插件等)panic 不再拖垮整个面板
 		defer func() {
@@ -233,4 +256,30 @@ func (m *Manager) List() []*Task {
 		out = append(out, &snap)
 	}
 	return out
+}
+
+// Remove 删除一条已结束的任务记录(running 任务不可删)
+func (m *Manager) Remove(id string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	t, ok := m.tasks[id]
+	if !ok || t.Status == "running" {
+		return false
+	}
+	delete(m.tasks, id)
+	return true
+}
+
+// ClearFailed 清空全部失败任务记录,返回清除条数
+func (m *Manager) ClearFailed() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for id, t := range m.tasks {
+		if t.Status == "failed" {
+			delete(m.tasks, id)
+			n++
+		}
+	}
+	return n
 }

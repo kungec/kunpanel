@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -266,17 +267,103 @@ func (s *Server) handleTaskGet(w http.ResponseWriter, r *http.Request) {
 	OK(w, t)
 }
 
+// handleTaskDelete 删除一条已结束的任务记录(running 不可删)
+func (s *Server) handleTaskDelete(w http.ResponseWriter, r *http.Request) {
+	id, ok := safeID(r.PathValue("id"))
+	if !ok {
+		Fail(w, http.StatusBadRequest, "非法任务 ID")
+		return
+	}
+	if !taskx.M.Remove(id) {
+		Fail(w, http.StatusBadRequest, "任务不存在或仍在运行")
+		return
+	}
+	OK(w, "已删除")
+}
+
+// handleTaskClearFailed 清空全部失败任务记录
+func (s *Server) handleTaskClearFailed(w http.ResponseWriter, r *http.Request) {
+	n := taskx.M.ClearFailed()
+	OK(w, map[string]int{"cleared": n})
+}
+
+// handleTaskRetry 失败任务一键重试:按任务记录里保存的重放参数重新发起
+func (s *Server) handleTaskRetry(w http.ResponseWriter, r *http.Request) {
+	id, ok := safeID(r.PathValue("id"))
+	if !ok {
+		Fail(w, http.StatusBadRequest, "非法任务 ID")
+		return
+	}
+	t, ok := taskx.M.Get(id)
+	if !ok {
+		Fail(w, http.StatusNotFound, "任务不存在")
+		return
+	}
+	if t.Status == "running" {
+		Fail(w, http.StatusBadRequest, "任务仍在运行中")
+		return
+	}
+	if t.Retry == nil || t.Retry.Kind == "" {
+		Fail(w, http.StatusBadRequest, "该任务不支持一键重试")
+		return
+	}
+	switch t.Retry.Kind {
+	case "acme-issue":
+		newID, err := s.retryAcmeIssue(t.Retry.Body)
+		if err != nil {
+			Fail(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		OK(w, map[string]string{"task_id": newID})
+	default:
+		Fail(w, http.StatusBadRequest, "该任务类型不支持重试")
+	}
+}
+
+// retryAcmeIssue 按保存的原始参数重新发起证书签发
+func (s *Server) retryAcmeIssue(body map[string]any) (string, error) {
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return "", err
+	}
+	var req struct {
+		SiteID      string   `json:"site_id"`
+		Staging     bool     `json:"staging"`
+		Method      string   `json:"method"`
+		Alias       string   `json:"alias"`
+		Provider    string   `json:"provider"`
+		DNSApi      bool     `json:"dns_api"`
+		DNSApiAlias string   `json:"dns_alias"`
+		Domains     []string `json:"domains"`
+		Wildcard    bool     `json:"wildcard"`
+	}
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return "", err
+	}
+	if req.SiteID == "" {
+		return "", fmt.Errorf("重试参数缺少站点")
+	}
+	if _, err := websites.GetSite(req.SiteID); err != nil {
+		return "", fmt.Errorf("站点已不存在,无法重试")
+	}
+	return websites.IssueCertTaskEx(req.SiteID, websites.AcmeIssueOpts{
+		Staging: req.Staging, Method: req.Method, Alias: req.Alias, DNSApi: req.DNSApi,
+		DNSApiAlias: req.DNSApiAlias, Domains: req.Domains, Wildcard: req.Wildcard,
+	})
+}
+
 // handleTaskList 后台任务列表(运行中的在前,其余按启动时间倒序;列表只带日志尾部)
 func (s *Server) handleTaskList(w http.ResponseWriter, r *http.Request) {
 	list := taskx.M.List()
 	type row struct {
-		ID        string    `json:"id"`
-		Name      string    `json:"name"`
-		Status    string    `json:"status"`
-		Error     string    `json:"error,omitempty"`
-		StartedAt time.Time `json:"started_at"`
-		EndedAt   time.Time `json:"ended_at,omitempty"`
-		LogTail   string    `json:"log_tail"`
+		ID        string         `json:"id"`
+		Name      string         `json:"name"`
+		Status    string         `json:"status"`
+		Error     string         `json:"error,omitempty"`
+		StartedAt time.Time      `json:"started_at"`
+		EndedAt   time.Time      `json:"ended_at,omitempty"`
+		LogTail   string         `json:"log_tail"`
+		Retry     *taskx.RetryData `json:"retry,omitempty"`
 	}
 	out := make([]row, 0, len(list))
 	for _, t := range list {
@@ -284,7 +371,7 @@ func (s *Server) handleTaskList(w http.ResponseWriter, r *http.Request) {
 		if len(tail) > 2048 {
 			tail = tail[len(tail)-2048:]
 		}
-		out = append(out, row{ID: t.ID, Name: t.Name, Status: t.Status, Error: t.Error, StartedAt: t.StartedAt, EndedAt: t.EndedAt, LogTail: tail})
+		out = append(out, row{ID: t.ID, Name: t.Name, Status: t.Status, Error: t.Error, StartedAt: t.StartedAt, EndedAt: t.EndedAt, LogTail: tail, Retry: t.Retry})
 	}
 	sort.Slice(out, func(a, b int) bool {
 		if (out[a].Status == "running") != (out[b].Status == "running") {

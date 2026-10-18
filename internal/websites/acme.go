@@ -1067,12 +1067,17 @@ func IssueCertTask(siteID string, staging bool) (string, error) {
 	return IssueCertTaskEx(siteID, AcmeIssueOpts{Staging: staging})
 }
 
-// IssueCertTaskEx 异步签发任务
+// IssueCertTaskEx 异步签发任务(附带原始参数:失败后可在任务中心一键重试)
 func IssueCertTaskEx(siteID string, opts AcmeIssueOpts) (string, error) {
+	body := map[string]any{
+		"site_id": siteID, "staging": opts.Staging, "method": opts.Method, "alias": opts.Alias,
+		"dns_api": opts.DNSApi, "dns_alias": opts.DNSApiAlias,
+		"domains": opts.Domains, "wildcard": opts.Wildcard,
+	}
 	t, err := taskx.M.Start("acme-issue", func(w io.Writer) error {
 		_, err := IssueCertForSite(siteID, opts, w)
 		return err
-	})
+	}, taskx.WithRetry("acme-issue", body))
 	if err != nil {
 		return "", err
 	}

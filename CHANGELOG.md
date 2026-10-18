@@ -3,6 +3,25 @@
 所有重要变更都会记录在此文件中。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v2.80.1] - 2026-10-18
+
+### 修复:PHP 扩展后装偶发编译怪错(collator_sort.h not found 等)(用户反馈)
+
+PHP 8.2 后装 intl 报 `fatal error: collator/collator_sort.h: No such file or
+directory`,而同容器手动编译正常——根因是 /usr/src/php 源码树被污染:
+
+- **安装前强制清理源码树**:`docker-php-ext-install` 对已存在的 /usr/src/php
+  只做 tar 合并,且只要有 Makefile 就跳过 configure(`make clean` 也不删
+  Makefile)——上次安装被超时中断留下的残缺树/过期 Makefile 会被永久复用,
+  任何扩展都可能因此报找不到头文件。现在安装前先 `docker-php-source
+  delete`,每次全新解压编译,自愈一切脏状态
+- **同容器扩展安装串行化**:两个安装任务并发时,后一个的 tar 解压会在前
+  一个 make 编译进行中覆盖头文件(正是"编到一半头文件消失"的特征);已按
+  容器名加锁串行执行
+
+真机:php82(故意带着脏源码树)安装 intl → 全新解压编译成功,intl 已加载,
+Collator 类与 numfmt 函数可用。
+
 ## [v2.80.0] - 2026-10-18
 
 ### 特性:PHP 常用扩展默认内置(定制镜像)+ EOL 老版本扩展可装(用户反馈)

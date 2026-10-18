@@ -1,5 +1,18 @@
 package server
 
+import "sync"
+
+// phpExtBuildMu 同容器的 PHP 扩展编译串行锁(键=容器名):
+// docker-php-ext-install 共享容器内 /usr/src/php 源码树,并发安装会互踩
+var phpExtBuildMu sync.Map // container name -> *sync.Mutex
+
+func lockPHPExtBuild(container string) func() {
+	v, _ := phpExtBuildMu.LoadOrStore(container, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
 // phpExtMeta PHP 扩展元数据:安装方式(bundled=源码树内置 / pecl=PECL 仓库)与所需系统依赖
 type phpExtMeta struct {
 	Pecl bool   `json:"pecl"`           // true=pecl install,false=docker-php-ext-install

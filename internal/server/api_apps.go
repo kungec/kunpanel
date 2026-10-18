@@ -367,6 +367,16 @@ func (s *Server) handleAppRuntimeAction(w http.ResponseWriter, r *http.Request) 
 			}
 		}
 		t, err := taskx.M.Start("php-ext-"+ext, func(w io.Writer) error {
+			// 同容器扩展安装串行化:两个 docker-php-ext-install 并发会在共享的
+			// /usr/src/php 上互相拆台(tar 解压覆盖头文件、Makefile 互踩)
+			unlockPHPExt := lockPHPExtBuild(container)
+			defer unlockPHPExt()
+			// 清掉上次安装可能留下的残缺源码树与过期 Makefile(任务超时中断、
+			// 并发互踩都会污染 /usr/src/php;delete 后 install 会重新完整解压,
+			// 这正是 intl 报 "collator/collator_sort.h not found" 一类怪错的根源)
+			if _, err := dockerx.ExecIn(container, "docker-php-source", "delete"); err != nil {
+				fmt.Fprintln(w, ">> (清理旧源码树失败,继续)", err)
+			}
 			fmt.Fprintln(w, "安装 PHP 扩展:", ext, "("+map[bool]string{true: "PECL", false: "源码内置"}[meta.Pecl]+")")
 			// 1) 系统依赖(镜像默认不含图形/压缩等开发库;EOL 版本软件源归档时
 			//    自动切换 archive.debian.org,5.6/7.4 等老版本照常可装)

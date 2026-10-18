@@ -45,6 +45,24 @@ func UserDBGrants(key string) ([]UserDBGrant, error) {
 	if !dbUserSupported(key) {
 		return nil, fmt.Errorf("该数据库类型暂不支持(PostgreSQL 后续支持)")
 	}
+	// 两条查询并行执行(mysql 客户端每次调用约 200ms,串行翻倍)
+	type res struct {
+		tr  *TableResult
+		err error
+	}
+	chDB, chUser := make(chan res, 1), make(chan res, 1)
+	go func() {
+		tr, err := TableQuery(key, "mysql", userDBQuerySQL)
+		chDB <- res{tr, err}
+	}()
+	go func() {
+		tr, err := TableQuery(key, "mysql", userGlobalQuerySQL)
+		chUser <- res{tr, err}
+	}()
+	rDB, rUser := <-chDB, <-chUser
+	if rDB.err != nil {
+		return nil, rDB.err
+	}
 	var out []UserDBGrant
 	rowGrants := func(tr *TableResult, row []interface{}) []string {
 		var ps []string
@@ -66,23 +84,23 @@ func UserDBGrants(key string) ([]UserDBGrant, error) {
 		return ""
 	}
 	// 库级授权(mysql.db):scope = Db 列
-	if tr, err := TableQuery(key, "mysql", userDBQuerySQL); err == nil {
-		for _, row := range tr.Rows {
-			u, h, db := cell(tr, row, "User"), cell(tr, row, "Host"), cell(tr, row, "Db")
+	if rDB.tr != nil {
+		for _, row := range rDB.tr.Rows {
+			u, h, db := cell(rDB.tr, row, "User"), cell(rDB.tr, row, "Host"), cell(rDB.tr, row, "Db")
 			if u == "" || systemDBUsers[u] {
 				continue
 			}
-			out = append(out, UserDBGrant{User: u, Host: h, Scope: db, Privs: strings.Join(rowGrants(tr, row), ", ")})
+			out = append(out, UserDBGrant{User: u, Host: h, Scope: db, Privs: strings.Join(rowGrants(rDB.tr, row), ", ")})
 		}
 	}
 	// 全局授权(mysql.user):scope = *;无任何权限(仅 USAGE)的跳过
-	if tr, err := TableQuery(key, "mysql", userGlobalQuerySQL); err == nil {
-		for _, row := range tr.Rows {
-			u, h := cell(tr, row, "User"), cell(tr, row, "Host")
+	if rUser.err == nil && rUser.tr != nil {
+		for _, row := range rUser.tr.Rows {
+			u, h := cell(rUser.tr, row, "User"), cell(rUser.tr, row, "Host")
 			if u == "" || systemDBUsers[u] {
 				continue
 			}
-			ps := rowGrants(tr, row)
+			ps := rowGrants(rUser.tr, row)
 			if len(ps) == 0 {
 				continue
 			}

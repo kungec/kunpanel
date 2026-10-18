@@ -3223,6 +3223,10 @@ PAGES.databases = {
     var key = this.tab.key;
     var wrap = qs("#db-table-wrap", el);
     if (!wrap) return;
+    // 授权映射与库列表并行请求(互不依赖)
+    var dbmapP = (key === "mysql" || key === "mariadb")
+      ? api("/db/" + key + "/users/dbmap").catch(function() { return { rows: [] }; })
+      : null;
     var dbs = [];
     try { dbs = (await api("/db/" + key + "/databases")) || []; }
     catch (e) { wrap.innerHTML = emptyState("warn", "加载失败", e.message); return; }
@@ -3266,8 +3270,8 @@ PAGES.databases = {
     }
 
     // 库卡片显示授权用户(账号↔库 授权映射;异步注入不阻塞卡片渲染)
-    if (key === "mysql" || key === "mariadb") {
-      api("/db/" + key + "/users/dbmap").then(function(d) {
+    if (dbmapP) {
+      Promise.resolve(dbmapP).then(function(d) {
         var rows = d.rows || [];
         if (!rows.length || !qs("[data-dbname]", wrap)) return;
         var byDB = {}, globals = [];

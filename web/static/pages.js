@@ -2923,11 +2923,14 @@ PAGES.databases = {
       if (pmaInst) pma = { url: "http://" + location.hostname + ":" + (pmaInst.params && pmaInst.params.Port || "8082") + "/", label: "phpMyAdmin" };
     } catch (e) {}
 
+    var isMySQLLike = this.tab.key === "mysql" || this.tab.key === "mariadb";
     var head = '<div class="waf-hero db-hero">' +
       '<div class="waf-hero-left">' + iconBox("database", 46) +
       '<div class="stat-meta"><h3>' + esc(typeNames[this.tab.key] || this.tab.key) + " " + stateTag(true, "运行中", "已停止") + "</h3>" +
       '<div class="stat-line db-stat-line">业务库 <b id="db-stat-dbs">-</b> 个 · 数据表 <b id="db-stat-tables">-</b> 张 · 备份 <b id="db-stat-baks">-</b> 份</div></div></div>' +
       '<div class="waf-hero-right">' +
+      (isMySQLLike ? '<button class="btn btn-sm btn-plain" id="db-users">' + I("key") + " 用户管理</button>" +
+      '<button class="btn btn-sm btn-plain" id="db-repl">' + I("refresh") + " 主从同步</button>" : "") +
       '<button class="btn btn-sm btn-plain" id="db-rootpwd">' + I("key") + " root 密码</button>" +
       (pma ? '<a class="btn btn-sm btn-plain" href="' + esc(pma.url) + '" target="_blank">' + I("external") + " " + esc(pma.label) + "</a>" : "") +
       '<button class="btn btn-sm btn-plain" id="db-refresh" title="刷新">' + I("refresh") + "</button></div></div>";
@@ -2949,6 +2952,10 @@ PAGES.databases = {
       '<div id="db-mgr" style="margin-top:14px"></div>';
 
     qs("#db-refresh", el).onclick = function() { self.render(el); };
+    var usersBtn = qs("#db-users", el);
+    if (usersBtn) usersBtn.onclick = function() { self.userMgr(); };
+    var replBtn = qs("#db-repl", el);
+    if (replBtn) replBtn.onclick = function() { self.replMgr(); };
     qs("#db-rootpwd", el).onclick = function() {
       var instName = typeNames[self.tab.key] || self.tab.key;
       var pm = modal({
@@ -2987,6 +2994,201 @@ PAGES.databases = {
     });
 
     await this.loadDbList(el);
+  },
+  /* ---- 数据库账号管理 ---- */
+  async userMgr() {
+    var self = this, key = this.tab.key;
+    var m = modal({ title: "数据库账号管理 · " + key, width: 760, body: '<div class="boot-loading" style="height:80px"><div class="spinner"></div></div>' });
+    var draw = async function() {
+      var users = [];
+      try { users = (await api("/db/" + key + "/users")) || []; }
+      catch (e) { qs(".modal-body", m.el).innerHTML = emptyState("warn", "加载失败", e.message); return; }
+      var rows = users.map(function(u) {
+        return '<tr><td class="mono">' + esc(u.user) + '</td><td class="mono">' + esc(u.host) + '</td>' +
+          '<td><div class="ops">' +
+          '<button class="btn btn-xs btn-plain" data-grant="' + esc(u.user) + '" data-host="' + esc(u.host) + '">授权</button>' +
+          '<button class="btn btn-xs btn-plain" data-grants="' + esc(u.user) + '" data-host="' + esc(u.host) + '">权限</button>' +
+          '<button class="btn btn-xs btn-plain" data-pwd="' + esc(u.user) + '" data-host="' + esc(u.host) + '">改密</button>' +
+          '<button class="btn btn-xs btn-danger-plain" data-del="' + esc(u.user) + '" data-host="' + esc(u.host) + '">删除</button></div></td></tr>';
+      }).join("");
+      qs(".modal-body", m.el).innerHTML =
+        '<div class="form-item"><div style="display:flex;gap:8px;flex-wrap:wrap">' +
+        '<input class="input" id="nu-name" placeholder="用户名" style="width:150px">' +
+        '<input class="input" id="nu-host" placeholder="主机(留空=%)" style="width:160px">' +
+        '<input class="input" id="nu-pwd" placeholder="密码(6-64 位)" style="width:170px">' +
+        '<button class="btn btn-sm btn-primary" id="nu-add">创建账号</button></div>' +
+        '<div class="help">主机:%(任意主机)/localhost/指定 IP;应用连接时按「用户名@主机」匹配;创建后用「授权」给账号分配库权限</div></div>' +
+        (users.length ? '<table class="table"><thead><tr><th>用户名</th><th>主机</th><th style="width:270px">操作</th></tr></thead><tbody>' + rows + '</tbody></table>' : emptyState("info", "暂无账号", "用上方表单创建第一个账号"));
+      var nu = qs("#nu-add", m.el);
+      if (nu) nu.onclick = async function() {
+        var user = qs("#nu-name", m.el).value.trim(), host = qs("#nu-host", m.el).value.trim(), pwd = qs("#nu-pwd", m.el).value;
+        if (!user || !pwd) { toast("请填写用户名和密码", "error"); return; }
+        try { await api("/db/" + key + "/users/create", { method: "POST", body: { user: user, host: host, password: pwd } }); toast("账号已创建,别忘了授权"); draw(); }
+        catch (e) { toast(e.message, "error", 6000); }
+      };
+      qsa("[data-del]", m.el).forEach(function(b) {
+        b.onclick = async function() {
+          if (!(await confirmDlg("确定删除账号 <b class=\"mono\">" + esc(b.getAttribute("data-del")) + "@" + esc(b.getAttribute("data-host")) + "</b>?", { danger: true }))) return;
+          try { await api("/db/" + key + "/users/delete", { method: "POST", body: { user: b.getAttribute("data-del"), host: b.getAttribute("data-host") } }); toast("已删除"); draw(); }
+          catch (e) { toast(e.message, "error", 6000); }
+        };
+      });
+      qsa("[data-pwd]", m.el).forEach(function(b) {
+        b.onclick = async function() {
+          var r = await promptDlg("修改密码 · " + b.getAttribute("data-del") + "@" + b.getAttribute("data-host"), [{ key: "pwd", label: "新密码", required: true }]);
+          if (!r) return;
+          try { await api("/db/" + key + "/users/password", { method: "POST", body: { user: b.getAttribute("data-pwd"), host: b.getAttribute("data-host"), password: r.pwd } }); toast("密码已修改"); }
+          catch (e) { toast(e.message, "error", 6000); }
+        };
+      });
+      qsa("[data-grants]", m.el).forEach(function(b) {
+        b.onclick = async function() {
+          try {
+            var d = await api("/db/" + key + "/users/grants?user=" + encodeURIComponent(b.getAttribute("data-grants")) + "&host=" + encodeURIComponent(b.getAttribute("data-host")));
+            modal({ title: "权限明细 · " + b.getAttribute("data-grants") + "@" + b.getAttribute("data-host"), width: 660,
+              body: '<pre class="mono" style="white-space:pre-wrap;background:var(--bg-2, #f6f7f9);padding:12px;border-radius:8px;max-height:50vh;overflow:auto">' + esc(d.grants || "(无)") + "</pre>" });
+          } catch (e) { toast(e.message, "error", 6000); }
+        };
+      });
+      qsa("[data-grant]", m.el).forEach(function(b) {
+        b.onclick = function() { self.userGrant(key, b.getAttribute("data-grant"), b.getAttribute("data-host")); };
+      });
+    };
+    draw();
+  },
+  async userGrant(key, user, host) {
+    var self = this;
+    var dbs = [];
+    try { dbs = (await api("/db/" + key + "/databases")) || []; } catch (e) { /* 读不到也能授全部库 */ }
+    var opts = ['<option value="*">全部库(*.*)</option>'].concat(dbs.filter(function(d) { return self.SYSTEM_DBS.indexOf(d) < 0; }).map(function(d) {
+      return '<option value="' + esc(d) + '">' + esc(d) + ".*</option>";
+    })).join("");
+    var privList = ["SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "INDEX", "ALTER", "CREATE VIEW", "SHOW VIEW", "LOCK TABLES", "REFERENCES", "EXECUTE", "EVENT", "TRIGGER"];
+    var m = modal({ title: "授权 · " + user + "@" + host, width: 540,
+      body: '<div class="form-item"><label>数据库范围</label><select class="select" id="gr-db">' + opts + '</select><div class="help">范围为 库.*;跨库需求请按库分别授权</div></div>' +
+        '<div class="form-item"><label>权限模板</label><select class="select" id="gr-mode"><option value="rw">读写(增删改查+建表改表索引)</option><option value="ro">只读(仅 SELECT)</option><option value="all">全部权限</option><option value="custom">自定义</option></select></div>' +
+        '<div id="gr-custom" style="display:none"><div class="form-item"><label>自定义权限</label><div>' + privList.map(function(p) {
+          return '<label class="radio-line" style="display:inline-block;margin:0 12px 4px 0"><input type="checkbox" value="' + p + '"> ' + p + "</label>";
+        }).join("") + "</div></div></div>",
+      footer: '<button class="btn btn-plain" data-act="revoke">收回该库权限</button><button class="btn btn-plain" data-act="no">关 闭</button><button class="btn btn-primary" data-act="yes">应 用</button>' });
+    qs("#gr-mode", m.el).onchange = function() { qs("#gr-custom", m.el).style.display = this.value === "custom" ? "" : "none"; };
+    qs('[data-act="no"]', m.el).onclick = m.close;
+    qs('[data-act="revoke"]', m.el).onclick = async function() {
+      var db = qs("#gr-db", m.el).value;
+      if (!(await confirmDlg("收回 <b class=\"mono\">" + esc(user) + "@" + esc(host) + "</b> 在 <b class=\"mono\">" + (db === "*" ? "*.*" : db + ".*") + "</b> 上的全部权限?", { danger: true }))) return;
+      try { await api("/db/" + key + "/users/revoke", { method: "POST", body: { user: user, host: host, db: db } }); toast("已收回"); m.close(); }
+      catch (e) { toast(e.message, "error", 6000); }
+    };
+    qs('[data-act="yes"]', m.el).onclick = async function() {
+      var mode = qs("#gr-mode", m.el).value, db = qs("#gr-db", m.el).value;
+      var privs = [];
+      if (mode === "all") privs = ["ALL"];
+      else if (mode === "rw") privs = ["SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "INDEX", "ALTER"];
+      else if (mode === "ro") privs = ["SELECT"];
+      else qsa("#gr-custom input:checked", m.el).forEach(function(x) { privs.push(x.value); });
+      if (!privs.length) { toast("请至少选择一项权限", "error"); return; }
+      try { await api("/db/" + key + "/users/grant", { method: "POST", body: { user: user, host: host, db: db, privs: privs } }); toast("授权成功"); m.close(); }
+      catch (e) { toast(e.message, "error", 6000); }
+    };
+  },
+  /* ---- 主从同步 ---- */
+  async replMgr() {
+    var self = this, key = this.tab.key;
+    var m = modal({ title: "主从同步 · " + key, width: 640, body: '<div class="boot-loading" style="height:80px"><div class="spinner"></div></div>' });
+    var st = null;
+    try { st = await api("/db/replication"); }
+    catch (e) { qs(".modal-body", m.el).innerHTML = emptyState("warn", "加载失败", e.message); return; }
+    var body = qs(".modal-body", m.el);
+    if (st && st.configured) {
+      var ioTag = st.io_running === "Yes" ? stateTag(true, "IO 正常") : stateTag(false, "IO " + (st.io_running || "-"));
+      var sqlTag = st.sql_running === "Yes" ? stateTag(true, "SQL 正常") : stateTag(false, "SQL " + (st.sql_running || "-"));
+      var behind = st.seconds_behind === "0" ? "0 秒(实时)" : (st.seconds_behind || "NULL(复制中断)") + " 秒";
+      body.innerHTML =
+        '<div class="settings-grid">' +
+        '<div><label>从库</label><div class="mono">' + esc(st.slave_host + ":" + st.slave_port) + "</div></div>" +
+        '<div><label>复制账号</label><div class="mono">' + esc(st.repl_user) + "</div></div>" +
+        '<div><label>IO / SQL 线程</label><div>' + ioTag + " " + sqlTag + "</div></div>" +
+        '<div><label>同步延迟</label><div>' + esc(behind) + "</div></div>" +
+        '<div><label>已初始化的库</label><div class="mono" style="font-size:12px">' + esc((st.db_list || []).join(" ") || "-") + "</div></div>" +
+        '<div><label>建立时间</label><div>' + esc(st.created || "-") + "</div></div></div>" +
+        (st.last_io_error ? '<div class="help" style="color:var(--danger);margin-top:8px">IO 错误: ' + esc(st.last_io_error) + "</div>" : "") +
+        (st.last_sql_error ? '<div class="help" style="color:var(--danger);margin-top:8px">SQL 错误: ' + esc(st.last_sql_error) + "</div>" : "") +
+        (st.healed ? '<div class="help" style="margin-top:8px">检测到主库 binlog 配置丢失(容器被重建),已自动补写并重启</div>' : "") +
+        '<div class="help" style="margin-top:8px">从库数据由 binlog 实时回放;主库容器重建后 binlog 配置会自动补写</div>';
+      m.el.querySelector(".modal-footer") && m.el.querySelector(".modal-footer").remove();
+      var foot = document.createElement("div");
+      foot.className = "modal-footer";
+      foot.innerHTML = '<button class="btn btn-plain" data-act="refresh">刷 新</button>' +
+        '<button class="btn btn-plain" data-act="stop">暂 停</button>' +
+        '<button class="btn btn-plain" data-act="start">恢 复</button>' +
+        '<button class="btn btn-danger-plain" data-act="reset">解除主从</button>' +
+        '<button class="btn btn-primary" data-act="close">关 闭</button>';
+      m.el.appendChild(foot);
+      foot.querySelector('[data-act="close"]').onclick = m.close;
+      foot.querySelector('[data-act="refresh"]').onclick = function() { self.replMgr(); m.close(); };
+      foot.querySelector('[data-act="stop"]').onclick = async function() {
+        try { await api("/db/replication/stop", { method: "POST", body: {} }); toast("复制已暂停"); self.replMgr(); m.close(); }
+        catch (e) { toast(e.message, "error", 6000); }
+      };
+      foot.querySelector('[data-act="start"]').onclick = async function() {
+        try { await api("/db/replication/start", { method: "POST", body: {} }); toast("复制已恢复"); self.replMgr(); m.close(); }
+        catch (e) { toast(e.message, "error", 6000); }
+      };
+      foot.querySelector('[data-act="reset"]').onclick = async function() {
+        if (!(await confirmDlg("解除主从同步?<br><span style='font-size:12px;color:var(--text-3)'>从库将停止并清除复制配置(已同步的数据保留);主库 binlog 与复制账号保留</span>", { danger: true }))) return;
+        try { await api("/db/replication/reset", { method: "POST", body: {} }); toast("主从已解除"); m.close(); }
+        catch (e) { toast(e.message, "error", 6000); }
+      };
+      return;
+    }
+    // 向导:主库=当前实例,从库=外部可达 MySQL/MariaDB
+    var dbs = [];
+    try { dbs = ((await api("/db/" + key + "/databases")) || []).filter(function(d) { return self.SYSTEM_DBS.indexOf(d) < 0; }); } catch (e) { /* 忽略 */ }
+    body.innerHTML =
+      '<div class="settings-hint" style="margin:0 0 10px">主库为当前实例(<b class="mono">' + esc(key) + '</b>),从库填一台<b>可从主库访问到的</b> MySQL/MariaDB(另一台服务器的库、本机另一个容器均可,需 root 密码)。未开启 binlog 时面板会写入配置并<b>重启数据库容器</b>(应用短暂断连)。</div>' +
+      '<div class="settings-grid">' +
+      '<div><label>从库地址(面板连从库用)</label><input class="input" id="rp-host" placeholder="如 192.168.1.10 或 db.example.com"></div>' +
+      '<div><label>从库端口</label><input class="input" id="rp-port" value="3306"></div>' +
+      '<div><label>从库 root 密码</label><input class="input" type="password" id="rp-spass"></div>' +
+      '<div><label>主库地址(从库回连主库用)</label><input class="input" id="rp-mhost" placeholder="同 Docker 网络填容器名如 kun-mysql;跨机填可达 IP"></div>' +
+      '<div><label>主库复制端口</label><input class="input" id="rp-mport" value="3306"></div>' +
+      '<div><label>复制账号</label><input class="input" id="rp-user" value="repl"></div>' +
+      '<div><label>复制账号密码</label><input class="input" id="rp-rpass" placeholder="6-64 位"></div></div>' +
+      '<div class="form-item" style="margin-top:10px"><label class="radio-line"><input type="checkbox" id="rp-init" checked> 全量初始化:把主库业务库导出导入从库(从库同名业务库必须为空)</label>' +
+      '<div id="rp-dbs" style="margin-top:6px;display:none">' + (dbs.length ? dbs.map(function(d) {
+        return '<label class="radio-line" style="display:inline-block;margin:0 12px 4px 0"><input type="checkbox" value="' + esc(d) + '" checked> ' + esc(d) + "</label>";
+      }).join("") : '<span class="help">主库暂无业务库</span>') + "</div></div>" +
+      '<div class="help" style="margin-top:6px">从库需与主库同系列(MySQL↔MySQL / MariaDB↔MariaDB)且配置文件里已设置 server-id(MySQL 5.7 必须,仅运行时设置不生效);主库端口需对从库可达——若主库端口绑定在 127.0.0.1,请先改绑内网/公网地址并配好防火墙(建议只放行从库 IP)。</div>';
+    qs("#rp-init", body).onchange = function() { qs("#rp-dbs", body).style.display = this.checked ? "" : "none"; };
+    m.el.querySelector(".modal-footer") && m.el.querySelector(".modal-footer").remove();
+    var foot = document.createElement("div");
+    foot.className = "modal-footer";
+    foot.innerHTML = '<button class="btn btn-plain" data-act="no">取 消</button><button class="btn btn-primary" data-act="yes">建立主从同步</button>';
+    m.el.appendChild(foot);
+    foot.querySelector('[data-act="no"]').onclick = m.close;
+    foot.querySelector('[data-act="yes"]').onclick = async function() {
+      var init = qs("#rp-init", body).checked;
+      var bodyReq = {
+        key: key,
+        slave_host: qs("#rp-host", body).value.trim(),
+        slave_port: qs("#rp-port", body).value.trim() || "3306",
+        master_host: qs("#rp-mhost", body).value.trim(),
+        master_port: qs("#rp-mport", body).value.trim() || "3306",
+        repl_user: qs("#rp-user", body).value.trim() || "repl",
+        repl_pass: qs("#rp-rpass", body).value,
+        slave_pass: qs("#rp-spass", body).value,
+        init_dump: init,
+      };
+      if (!bodyReq.master_host) { toast("请填写主库地址(从库回连主库用)", "error"); return; }
+      if (init) bodyReq.dbs = qsa("#rp-dbs input:checked", body).map(function(x) { return x.value; });
+      try {
+        var d = await api("/db/replication/setup", { method: "POST", body: bodyReq });
+        m.close();
+        taskModal(d.task_id, function(status) {
+          if (status === "success") { toast("主从同步已建立"); }
+        });
+      } catch (e) { toast(e.message, "error", 8000); }
+    };
   },
   async loadDbList(el) {
     var self = this;

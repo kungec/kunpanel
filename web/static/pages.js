@@ -1683,6 +1683,10 @@ PAGES.websites = {
               <option value="dnsapi">DNS API 自动验证(支持通配符,TXT 记录自动添加,推荐批量/通配符场景)</option>
               <option value="dns">DNS 手动验证(支持通配符/无法开放 80 端口的场景,签发时需手动添加 TXT 记录)</option>
             </select></div>
+          <div class="form-item"><label>申请域名(站点绑定的域名,勾选要签入证书的)</label>
+            <div id="acme-domain-list" style="display:flex;flex-direction:column;gap:2px"></div>
+            <label class="radio-line" style="margin-top:6px"><input type="checkbox" id="acme-wildcard"> 自动组合泛域名(*.主域:一张证书覆盖主域和所有子域名,只需一条 CNAME/TXT;仅 DNS/DNS API 验证支持)</label>
+            <div class="help" id="acme-domain-plan"></div></div>
           <div id="acme-dnsapi-row" style="display:none">
             <div class="form-item"><label>DNS 服务商</label>
               <select class="select" id="acme-dnsapi-provider" style="max-width:320px"></select>
@@ -1781,11 +1785,46 @@ PAGES.websites = {
     })();
     var methodSel = qs("#acme-method", m.el);
     var dnsapiLoaded = false;
+    // 申请域名勾选 + 泛域名组合预览(与后端 expandWildcardDomains 同规则)
+    var planDomains = function(domains, wildcard) {
+      var out = [], seen = {};
+      var put = function(x) { if (x && !seen[x]) { seen[x] = 1; out.push(x); } };
+      if (!wildcard) { domains.forEach(put); return out; }
+      var bare = domains.map(function(d) { return d.replace(/^\*\./, ""); });
+      bare.forEach(function(d) {
+        var isSub = bare.some(function(o) { return o && o !== d && d.length > o.length + 1 && d.slice(-(o.length + 1)) === "." + o; });
+        put(d);
+        if (!isSub) put("*." + d);
+      });
+      var wildBases = out.filter(function(x) { return x.indexOf("*.") === 0; }).map(function(x) { return x.slice(2); });
+      return out.filter(function(x) {
+        if (x.indexOf("*.") === 0) return true;
+        return !wildBases.some(function(b) { return x.length > b.length + 1 && x.slice(-(b.length + 1)) === "." + b; });
+      });
+    };
+    var siteDomains = (site.domain || "").split(/\s+/).filter(Boolean);
+    var domainListEl = qs("#acme-domain-list", m.el);
+    domainListEl.innerHTML = siteDomains.map(function(d) {
+      return '<label class="radio-line" style="margin:0"><input type="checkbox" class="acme-dom" value="' + esc(d) + '" checked> <span class="mono">' + esc(d) + "</span></label>";
+    }).join("") || '<div class="help">站点没有绑定域名</div>';
+    var syncDomainPlan = function() {
+      var wc = qs("#acme-wildcard", m.el);
+      var isHttp = methodSel.value === "http";
+      if (isHttp) wc.checked = false;
+      wc.disabled = isHttp;
+      var checked = qsa(".acme-dom:checked", m.el).map(function(x) { return x.value; });
+      var plan = planDomains(checked, wc.checked);
+      qs("#acme-domain-plan", m.el).textContent = plan.length ? "实际申请: " + plan.join(" ") : "";
+    };
+    qsa(".acme-dom", m.el).forEach(function(x) { x.onchange = syncDomainPlan; });
+    qs("#acme-wildcard", m.el).onchange = syncDomainPlan;
     methodSel.onchange = function() {
       qs("#acme-alias-row", m.el).style.display = this.value === "dns" ? "" : "none";
       qs("#acme-dnsapi-row", m.el).style.display = this.value === "dnsapi" ? "" : "none";
       if (this.value === "dnsapi") loadDNSAPIPanel();
+      syncDomainPlan();
     };
+    syncDomainPlan();
     // DNS API 服务商列表与凭据表单(懒加载一次)
     var dnsapiMeta = {};
     var renderDNSAPIFields = function(key, creds) {
@@ -1825,6 +1864,9 @@ PAGES.websites = {
       const method = methodSel.value;
       const alias = qs("#acme-alias", m.el).value.trim();
       const dnsAlias = qs("#acme-dnsapi-alias", m.el).value.trim();
+      const certDomains = qsa(".acme-dom:checked", m.el).map((x) => x.value);
+      if (!certDomains.length) { toast("请至少勾选一个要申请的域名", "error"); return; }
+      const wildcard = qs("#acme-wildcard", m.el).checked && method !== "http";
       if (!email) { toast("请填写申请邮箱", "error"); return; }
       const body = { email, staging, provider, eab_key_id: qs("#acme-eab-kid", m.el).value.trim(), eab_hmac: qs("#acme-eab-hmac", m.el).value.trim() };
       try { await api("/ssl/acme/config", { method: "POST", body }); }
@@ -1839,7 +1881,7 @@ PAGES.websites = {
       }
       toast(method === "dns" ? "正在创建订单,请在任务日志中查看需要添加的 TXT 记录..." : "正在发起申请...", "info", 6000);
       try {
-        const d = await api("/ssl/acme/issue", { method: "POST", body: { site_id: site.id, staging, provider, method, alias, dns_alias: dnsAlias, dns_api: method === "dnsapi" } });
+        const d = await api("/ssl/acme/issue", { method: "POST", body: { site_id: site.id, staging, provider, method, alias, dns_alias: dnsAlias, dns_api: method === "dnsapi", domains: certDomains, wildcard } });
         m.close();
         taskModal(d.task_id, (status) => {
           if (status === "success") {

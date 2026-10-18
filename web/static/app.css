@@ -1382,6 +1382,18 @@ tr.fm-selected { background: var(--primary-light); }
 .cm-fontsize .btn { padding-left: 9px; padding-right: 9px; }
 .CodeMirror-gutters { background: var(--bg); border-right: 1px solid var(--border); }
 .CodeMirror-linenumber { color: var(--text-3); }
+/* 编辑器滚动条:CM5 原生滚动条在 WebKit/macOS 下只有约 7px,拇指小到无法拖动;
+   显式加宽为经典常驻滚动条 */
+.CodeMirror-vscrollbar { width: 13px !important; }
+.CodeMirror-hscrollbar { height: 13px !important; }
+.CodeMirror-vscrollbar::-webkit-scrollbar { width: 12px; }
+.CodeMirror-hscrollbar::-webkit-scrollbar { height: 12px; }
+.CodeMirror-vscrollbar::-webkit-scrollbar-thumb,
+.CodeMirror-hscrollbar::-webkit-scrollbar-thumb {
+  background: #b6c2d2; border-radius: 6px; border: 2px solid transparent; background-clip: padding-box;
+}
+.CodeMirror-vscrollbar::-webkit-scrollbar-thumb:hover,
+.CodeMirror-hscrollbar::-webkit-scrollbar-thumb:hover { background: #93a3b8; }
 .CodeMirror-fullscreen { z-index: 2400 !important; border: none !important; }
 .CodeMirror-dialog { z-index: 2410 !important; }
 .cm-matchhighlight { background: var(--primary-light); }

@@ -4341,7 +4341,7 @@ PAGES.settings = {
           var doms = (d.domains || []).slice(0, 3).map(esc).join(" / ");
           box.innerHTML = '当前证书:<span class="tag tag-info">' + esc(d.category || "证书") + "</span> " +
             '<span class="mono">' + doms + "</span> · 到期 " + esc(d.expire || "-") + " " + due +
-            (d.enabled ? ' · <b>使用中</b>' : ' · <span class="help" style="margin:0">已保存未启用</span>');
+            (d.enabled ? ' · <b>使用中</b><span class="help" style="margin:0 0 0 6px">关闭开关并保存将回退 HTTP</span>' : ' · <span class="help" style="margin:0">已保存未启用</span>');
         } catch (e) {
           box.textContent = "证书信息读取失败: " + e.message;
         }
@@ -4359,11 +4359,21 @@ PAGES.settings = {
         const cert = qs("#ps-cert", body).value.trim();
         const key = qs("#ps-key", body).value.trim();
         if (on && !st.hasCert && !cert) { toast("请先上传证书或生成自签证书", "error"); return; }
-        if (!(await confirmDlg("面板将以 HTTPS 模式重启,重启后请使用 <b>https://</b> 访问面板<br><span style='font-size:12px;color:var(--text-3)'>自签证书浏览器会提示不受信任;若证书异常,面板会自动回退 HTTP,不会失联</span>", { danger: false }))) return;
+        // 跳转协议必须跟随开关方向:关 HTTPS 后仍跳 https 会把自己失联
+        if (on) {
+          if (!(await confirmDlg("面板将以 <b>HTTPS</b> 模式重启,重启后请使用 <b>https://</b> 访问面板<br><span style='font-size:12px;color:var(--text-3)'>自签证书浏览器会提示不受信任;若证书异常,面板会自动回退 HTTP,不会失联</span>", { danger: false }))) return;
+        } else if (st.enabled) {
+          if (!(await confirmDlg("确定关闭面板 HTTPS 吗?面板重启后将回退 <b>HTTP</b>,请改用 <b>http://</b> 访问面板", { danger: true }))) return;
+        }
         try {
           await api("/panel/ssl", { method: "POST", body: { enabled: on, cert: cert, key: key } });
           toast("保存成功,面板正在重启...", "info", 5000);
-          setTimeout(function() { location.href = location.href.replace(/^http:/, "https:"); location.reload(); }, 2500);
+          setTimeout(function() {
+            location.href = on
+              ? location.href.replace(/^http:/, "https:")
+              : location.href.replace(/^https:/, "http:");
+            location.reload();
+          }, 2500);
         } catch (e) { toast(e.message, "error", 8000); }
       };
       qs("#sec-checkup", body).onclick = function() { self.checkupDialog(); };

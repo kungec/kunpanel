@@ -292,6 +292,26 @@ func (s *Server) handleAppRuntimeInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAppRuntimeAction 运行时操作:reload(重载配置)/ test(配置测试)/ restart / php-ext(安装扩展) / php-ini(写入设置)
+// gatewayMainConf 网关主配置路径:官方 nginx 镜像在 /etc/nginx/nginx.conf,
+// OpenResty 镜像在 /usr/local/openresty/nginx/conf/nginx.conf(其主配置自带
+// include /etc/nginx/conf.d/*.conf,站点 conf.d 挂载布局两者一致);
+// nginx 命令在两种容器的 PATH 里都可用,重载命令无需区分
+func gatewayMainConf(key string) string {
+	if key == "openresty" {
+		return "/usr/local/openresty/nginx/conf/nginx.conf"
+	}
+	return "/etc/nginx/nginx.conf"
+}
+
+// gatewayErrorLog 网关全局错误日志路径(可多个,OpenResty 主配置默认写到
+// prefix logs,面板挂载的 /var/log/nginx 也可能有内容)
+func gatewayErrorLog(key string) string {
+	if key == "openresty" {
+		return "/usr/local/openresty/nginx/logs/error.log /var/log/nginx/error.log"
+	}
+	return "/var/log/nginx/error.log"
+}
+
 func (s *Server) handleAppRuntimeAction(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 	action := r.PathValue("action")
@@ -607,7 +627,7 @@ func (s *Server) handleAppRuntimeAction(w http.ResponseWriter, r *http.Request) 
 			Fail(w, http.StatusBadRequest, "仅 Nginx/OpenResty 支持")
 			return
 		}
-		content, err := dockerx.ExecIn(container, "cat", "/etc/nginx/nginx.conf")
+		content, err := dockerx.ExecIn(container, "cat", gatewayMainConf(key))
 		if err != nil {
 			Fail(w, http.StatusInternalServerError, "读取 nginx.conf 失败: "+err.Error())
 			return
@@ -625,9 +645,10 @@ func (s *Server) handleAppRuntimeAction(w http.ResponseWriter, r *http.Request) 
 		}
 		b64 := base64.StdEncoding.EncodeToString([]byte(content))
 		// 先备份 → 写入 → nginx -t 校验,失败自动回滚,通过则平滑重载
-		script := "cp /etc/nginx/nginx.conf /etc/nginx/nginx.conf.bak && " +
-			"echo " + b64 + " | base64 -d > /etc/nginx/nginx.conf && " +
-			"(nginx -t 2>/tmp/kuntest && nginx -s reload || (cp /etc/nginx/nginx.conf.bak /etc/nginx/nginx.conf; cat /tmp/kuntest; exit 1))"
+		conf := gatewayMainConf(key)
+		script := "cp " + conf + " " + conf + ".bak && " +
+			"echo " + b64 + " | base64 -d > " + conf + " && " +
+			"(nginx -t 2>/tmp/kuntest && nginx -s reload || (cp " + conf + ".bak " + conf + "; cat /tmp/kuntest; exit 1))"
 		out, err := dockerx.ExecIn(container, "sh", "-c", script)
 		if err != nil {
 			Fail(w, http.StatusBadRequest, "配置校验失败,已自动回滚: "+strings.TrimSpace(out))
@@ -639,7 +660,9 @@ func (s *Server) handleAppRuntimeAction(w http.ResponseWriter, r *http.Request) 
 			Fail(w, http.StatusBadRequest, "仅 Nginx/OpenResty 支持")
 			return
 		}
-		out, _ := dockerx.ExecIn(container, "sh", "-c", "tail -n 120 /var/log/nginx/error.log 2>/dev/null | base64 -w0")
+		// OpenResty 主配置的错误日志在 prefix logs;两种路径都 tail,缺省的自动跳过
+		errLogScript := "tail -n 120 " + gatewayErrorLog(key) + " /var/log/nginx/error.log 2>/dev/null | base64 -w0"
+		out, _ := dockerx.ExecIn(container, "sh", "-c", errLogScript)
 		decoded, derr := base64.StdEncoding.DecodeString(strings.TrimSpace(out))
 		if derr != nil {
 			decoded = []byte("")

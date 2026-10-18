@@ -3,6 +3,25 @@
 所有重要变更都会记录在此文件中。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v2.84.0] - 2026-10-18
+
+### 修复:OpenResty 的「配置文件/错误日志」页签(用户报加载失败)
+
+应用管理 → OpenResty → 配置文件报 "cat: /etc/nginx/nginx.conf: No such file
+or directory"——主配置读写路径写死了官方 nginx 镜像的位置,OpenResty 镜像
+的实际主配置在 /usr/local/openresty/nginx/conf/。现在:
+
+- **配置文件读取/保存按网关类型自动选路径**(nginx=/etc/nginx/nginx.conf,
+  openresty=/usr/local/openresty/nginx/conf/nginx.conf);备份、nginx -t 校验、
+  失败回滚、平滑重载流程不变(nginx 命令在两种容器的 PATH 里都可用)
+- **错误日志按网关适配**:OpenResty 同时 tail 自身 prefix logs 与挂载的
+  /var/log/nginx(缺省路径自动跳过)
+- OpenResty 主配置自带 include /etc/nginx/conf.d/*.conf,站点 conf.d 挂载
+  布局两者一致,站点配置不受影响
+
+真机:openresty 容器上命令级复现配置读取/备份/修改/nginx -t/平滑重载/
+还原全部通过。
+
 ## [v2.83.0] - 2026-10-18
 
 ### 改进:取消泛域名复选框的禁用限制,改为自动切换验证方式(用户反馈)

@@ -4,6 +4,8 @@ package websites
 // 免手动加记录,并解锁通配符证书。服务商实现来自内置 lego
 // (对应 ACME 官方客户端支持列表,内置国内外常用 7 家)。
 // 凭据保存在数据目录(0600),回显时打码,"••••" 开头的回传值视为沿用已存。
+// 别名委托:主域挑战名 CNAME 到任意自定义记录时,lego 会沿 CNAME 把
+// TXT 原样写到目标记录上(不自动加 _acme-challenge. 前缀)。
 
 import (
 	"encoding/json"
@@ -175,36 +177,6 @@ func SetDNSAPI(provider string, creds map[string]string) error {
 		}
 	}
 	return saveDNSAPI(dnsAPIConfig{Provider: provider, Creds: creds})
-}
-
-// aliasMapProvider CNAME 别名委托包装:凭据所属服务商不托管目标域名的 DNS 时,
-// 在主域 DNS 加 CNAME(_acme-challenge.主域 → _acme-challenge.别名域名),
-// TXT 由 API 写到别名挑战名,Let's Encrypt 校验时沿 CNAME 读取
-type aliasMapProvider struct {
-	inner challenge.Provider
-	alias string // 别名域名(不含 _acme-challenge. 前缀)
-}
-
-func (p *aliasMapProvider) Present(domain, token, keyAuth string) error {
-	return p.inner.Present(p.alias, token, keyAuth)
-}
-
-func (p *aliasMapProvider) CleanUp(domain, token, keyAuth string) error {
-	return p.inner.CleanUp(p.alias, token, keyAuth)
-}
-
-// buildDNS01ProviderWithAlias 构造 DNS 提供者;alias 非空时包装为别名映射
-func buildDNS01ProviderWithAlias(alias string) (challenge.Provider, error) {
-	inner, err := buildDNS01Provider()
-	if err != nil {
-		return nil, err
-	}
-	alias = strings.Trim(strings.TrimSpace(alias), ".")
-	alias = strings.TrimPrefix(alias, "_acme-challenge.")
-	if alias == "" {
-		return inner, nil
-	}
-	return &aliasMapProvider{inner: inner, alias: alias}, nil
 }
 
 // buildDNS01Provider 按已存配置构造 lego DNS 提供者

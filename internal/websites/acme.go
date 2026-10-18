@@ -404,53 +404,49 @@ func (p *httpFileProvider) CleanUp(domain, token, keyAuth string) error {
 	return nil
 }
 
-// manualDNSProvider DNS-01:输出 TXT 记录 → 轮询生效(present 阻塞等待用户操作)
+// manualDNSProvider DNS-01:输出 TXT 记录 → 轮询生效(present 阻塞等待用户操作)。
+// 主域挑战名可 CNAME 到任意自定义记录(别名委托),TXT 加在 CNAME 目标记录上;
+// 轮询查询挑战名——解析器透明跟随 CNAME,先加 TXT 后补 CNAME 也能等到
 type manualDNSProvider struct {
-	w     io.Writer
-	alias string
+	w io.Writer
 }
 
 func (p *manualDNSProvider) Present(domain, token, keyAuth string) error {
 	info := dns01.GetChallengeInfo(domain, keyAuth)
-	aliasHost := ""
-	if p.alias != "" {
-		aliasHost = "_acme-challenge." + p.alias
-		fmt.Fprintf(p.w, ">> [别名模式] 请添加 TXT 记录: 主机 %s | 值 %s\n", aliasHost, info.Value)
-		fmt.Fprintf(p.w, ">> (需在主域 DNS 添加 CNAME: %s → %s)\n", info.FQDN, aliasHost)
-	} else {
-		fmt.Fprintf(p.w, ">> 请添加 TXT 记录: 主机 %s | 值 %s\n", info.FQDN, info.Value)
+	challengeName := strings.TrimSuffix(info.FQDN, ".")
+	target := strings.TrimSuffix(info.EffectiveFQDN, ".")
+	if target != challengeName {
+		fmt.Fprintf(p.w, ">> [别名模式] %s 已 CNAME → %s,TXT 记录请加在别名记录上\n", challengeName, target)
+	}
+	fmt.Fprintf(p.w, ">> 请添加 TXT 记录: 主机 %s | 值 %s\n", target, info.Value)
+	if target == challengeName {
+		fmt.Fprintf(p.w, ">> (如主域 DNS 不好操作,可把 %s CNAME 到你控制的自定义记录,再把 TXT 加到该记录)\n", challengeName)
 	}
 	deadline := time.Now().Add(10 * time.Minute)
 	lastBeat := time.Now()
 	for time.Now().Before(deadline) {
-		txts, err := net.LookupTXT(info.FQDN)
+		txts, err := net.LookupTXT(challengeName)
 		if err == nil {
 			for _, t := range txts {
 				if strings.TrimSpace(t) == info.Value {
-					fmt.Fprintf(p.w, ">> DNS 记录已生效(%s)\n", info.FQDN)
+					fmt.Fprintf(p.w, ">> DNS 记录已生效(%s)\n", target)
 					return nil
 				}
 			}
 		}
-		// 每分钟报一次两侧 DNS 现状,便于判断是 CNAME 未加还是 TXT 未生效
-		if aliasHost != "" && time.Since(lastBeat) >= time.Minute {
+		// 每分钟报一次 DNS 现状,便于判断是 CNAME 未加还是 TXT 未生效
+		if time.Since(lastBeat) >= time.Minute {
 			lastBeat = time.Now()
-			fmt.Fprintf(p.w, ">> 仍在等待 DNS 生效 ... %s\n", dnsAliasDiag(info.FQDN, aliasHost))
+			fmt.Fprintf(p.w, ">> 仍在等待 DNS 生效 ... %s\n", dnsTxtDiag(challengeName))
 		}
 		time.Sleep(8 * time.Second)
 	}
-	msg := fmt.Sprintf("等待 %s 的 TXT 记录超时", info.FQDN)
-	if aliasHost != "" {
-		msg += ";当前 DNS 现状:" + dnsAliasDiag(info.FQDN, aliasHost) +
-			"。别名模式需要两条记录:①主域 DNS 加 CNAME(主域挑战名 → 别名挑战名);②别名域加 TXT 记录(值见任务日志)"
-	} else {
-		msg += ":请确认记录已保存且已生效"
-	}
-	return fmt.Errorf("%s", msg)
+	return fmt.Errorf("等待 %s 的 TXT 记录超时;当前 DNS 现状:%s;别名模式需要两条记录:①主域 DNS 加 CNAME(挑战名 → 你自定义的记录);②在自定义记录上加 TXT(值见任务日志)",
+		challengeName, dnsTxtDiag(challengeName))
 }
 
-// dnsAliasDiag 别名模式下主域/别名两侧挑战名的 DNS 现状(诊断用)
-func dnsAliasDiag(mainFQDN, aliasHost string) string {
+// dnsTxtDiag 挑战名(及 CNAME 目标,若已设置)的 TXT 现状(诊断用)
+func dnsTxtDiag(challengeName string) string {
 	describe := func(host string) string {
 		txts, err := net.LookupTXT(host)
 		if err != nil {
@@ -461,7 +457,13 @@ func dnsAliasDiag(mainFQDN, aliasHost string) string {
 		}
 		return host + " TXT=" + strings.Join(txts, ",")
 	}
-	return "主域[" + describe(mainFQDN) + "] 别名[" + describe(aliasHost) + "]"
+	out := "挑战名[" + describe(challengeName) + "]"
+	if cn, err := net.LookupCNAME(challengeName); err == nil {
+		if t := strings.TrimSuffix(cn, "."); t != "" && t != challengeName {
+			out += " 已CNAME→[" + describe(t) + "]"
+		}
+	}
+	return out
 }
 
 func (p *manualDNSProvider) CleanUp(domain, token, keyAuth string) error { return nil }
@@ -470,9 +472,9 @@ func (p *manualDNSProvider) CleanUp(domain, token, keyAuth string) error { retur
 type AcmeIssueOpts struct {
 	Staging     bool
 	Method      string // http / dns / dnsapi
-	Alias       string // DNS 别名域名(CNAME 委托目标,可选;仅手动 DNS)
+	Alias       string // 手动 DNS 模式的别名记录(备注用;面板自动跟随主域 CNAME)
 	DNSApi      bool   // DNS API 自动验证(凭据来自已保存的 DNS 服务商配置)
-	DNSApiAlias string // DNS API 模式的 CNAME 别名域名(可选;TXT 写到别名挑战名)
+	DNSApiAlias string // DNS API 模式的 CNAME 别名记录(可选;TXT 原样写到主域 CNAME 指向的记录)
 }
 
 // orderDomains 校验并归一域名(通配符仅 DNS 验证支持)。
@@ -538,10 +540,6 @@ func IssueCertForSite(siteID string, opts AcmeIssueOpts, w io.Writer) (string, e
 	// staging 覆盖:账户目录仍是生产时,本次签发强制走 staging 目录
 	stagingOverride := staging && !providerStaging(prov)
 	fmt.Fprintf(w, ">> 为 %s 申请 %s 证书(%s / %s 验证)...\n", site.Domain, providerName(prov), stageName(staging), map[string]string{"http": "HTTP 文件", "dns": "DNS", "dnsapi": "DNS API"}[method])
-	alias := strings.TrimSpace(opts.Alias)
-	if alias != "" && method == "dns" {
-		alias = strings.TrimSuffix(strings.TrimPrefix(alias, "_acme-challenge."), ".")
-	}
 
 	client, _, err := acmeClientForStaged(prov, stagingOverride, w)
 	if err != nil {
@@ -549,19 +547,30 @@ func IssueCertForSite(siteID string, opts AcmeIssueOpts, w io.Writer) (string, e
 	}
 
 	if method == "dns" {
-		client.Challenge.SetDNS01Provider(&manualDNSProvider{w: w, alias: alias},
+		client.Challenge.SetDNS01Provider(&manualDNSProvider{w: w},
 			dns01.AddRecursiveNameservers([]string{"8.8.8.8:53", "1.1.1.1:53"}))
 	} else if method == "dnsapi" {
-		prov, err := buildDNS01ProviderWithAlias(opts.DNSApiAlias)
+		prov, err := buildDNS01Provider()
 		if err != nil {
 			return "", err
 		}
-		if strings.TrimSpace(opts.DNSApiAlias) != "" {
-			fmt.Fprintf(w, ">> [别名模式] TXT 将由 API 写到 %s;需在主域 DNS 添加 CNAME: _acme-challenge.%s → _acme-challenge.%s\n",
-				"_acme-challenge."+strings.Trim(strings.TrimSpace(opts.DNSApiAlias), "."), domains[0], strings.Trim(strings.TrimSpace(opts.DNSApiAlias), "."))
+		alias := strings.TrimSuffix(strings.TrimSpace(opts.DNSApiAlias), ".")
+		if alias != "" {
+			fmt.Fprintf(w, ">> [别名模式] TXT 将由 API 写到主域 CNAME 指向的记录(你填写的别名: %s,原样使用不自动加前缀)\n", alias)
 		} else {
 			fmt.Fprintln(w, ">> DNS API 自动验证:TXT 记录将由面板自动添加/清理")
-			fmt.Fprintln(w, ">> 注意: 域名的 DNS 需托管在该服务商;否则请在主域 DNS 加 CNAME 并填写「DNS 别名域名」")
+			fmt.Fprintln(w, ">> 注意: 域名的 DNS 需托管在该服务商;否则请在主域 DNS 加 CNAME 并填写「DNS 别名记录」")
+		}
+		// 逐域名报一次挑战名当前指向,便于发现 CNAME 未加/加错
+		for _, d := range domains {
+			cn := "_acme-challenge." + strings.TrimPrefix(d, "*.")
+			if t, err := net.LookupCNAME(cn); err == nil {
+				if ts := strings.TrimSuffix(t, "."); ts != "" && ts != cn {
+					fmt.Fprintf(w, ">> %s 当前 CNAME → %s\n", cn, ts)
+				} else if alias != "" {
+					fmt.Fprintf(w, ">> 注意: %s 尚未设置 CNAME,请在主域 DNS 添加 CNAME → %s\n", cn, alias)
+				}
+			}
 		}
 		client.Challenge.SetDNS01Provider(prov,
 			dns01.AddRecursiveNameservers([]string{"8.8.8.8:53", "1.1.1.1:53"}))
@@ -631,7 +640,10 @@ func IssueCertForSite(siteID string, opts AcmeIssueOpts, w io.Writer) (string, e
 				if def, ok := dnsProviderDef(dnsName); ok {
 					dnsName = def.Name
 				}
-				return "", fmt.Errorf("签发失败: 域名 %s 的 DNS 未托管在该服务商。两种解决:①把该域名的 DNS 托管/迁移到 %s;②保持现有 DNS 不变,在主域 DNS 添加 CNAME 后,在「DNS 别名域名」填写别名再重试", domains[0], dnsName)
+				if alias := strings.TrimSuffix(strings.TrimSpace(opts.DNSApiAlias), "."); alias != "" {
+					return "", fmt.Errorf("签发失败: 未在 %s 找到记录对应的 DNS zone。别名模式下请检查:①主域 DNS 已添加 CNAME(_acme-challenge.主域名 → 你填写的别名记录 %s);②别名记录所在域名的 DNS 已托管在 %s;③CNAME 刚添加需等生效后重试", dnsName, alias, dnsName)
+				}
+				return "", fmt.Errorf("签发失败: 域名 %s 的 DNS 未托管在该服务商。两种解决:①把该域名的 DNS 托管/迁移到 %s;②保持现有 DNS 不变,在主域 DNS 添加 CNAME 后,在「DNS 别名记录」填写别名再重试", domains[0], dnsName)
 			case strings.Contains(es, "6003") || strings.Contains(es, "Invalid request headers") || strings.Contains(es, "InvalidAccessKeyId") || strings.Contains(es, "Unauthorized") || strings.Contains(es, "authentication") || strings.Contains(es, "401") || strings.Contains(es, "403"):
 				clip := es
 	if len(clip) > 200 {
@@ -659,9 +671,9 @@ func IssueCertForSite(siteID string, opts AcmeIssueOpts, w io.Writer) (string, e
 		}
 	}
 	expire, days := parseCertPEM(res.Certificate)
-	vAliasOut := alias
+	vAliasOut := strings.TrimSuffix(strings.TrimSpace(opts.Alias), ".")
 	if method == "dnsapi" {
-		vAliasOut = strings.TrimSpace(opts.DNSApiAlias)
+		vAliasOut = strings.TrimSuffix(strings.TrimSpace(opts.DNSApiAlias), ".")
 	}
 	info := CertInfo{
 		ID: certID, Name: domains[0] + "(" + providerName(prov) + ")", Domains: strings.Join(domains, " "),
@@ -701,7 +713,7 @@ func renewCertInPlace(id string, w io.Writer) error {
 	if method == "" {
 		method = "http"
 	}
-	fmt.Fprintf(w, ">> 续期 %s(%s 验证)...\n", info.Domains, map[string]string{"http": "HTTP", "dns": "DNS"}[method])
+	fmt.Fprintf(w, ">> 续期 %s(%s 验证)...\n", info.Domains, map[string]string{"http": "HTTP", "dns": "DNS", "dnsapi": "DNS API"}[method])
 	var site Site
 	if info.SiteID != "" {
 		if s0, err := GetSite(info.SiteID); err == nil {
@@ -714,13 +726,12 @@ func renewCertInPlace(id string, w io.Writer) error {
 	if err != nil {
 		return err
 	}
-	alias := info.VAlias
 	if method == "dns" {
 		fmt.Fprintf(w, ">> DNS 验证的证书续期需要更新 TXT 记录(值每次不同),请按提示操作\n")
-		client.Challenge.SetDNS01Provider(&manualDNSProvider{w: w, alias: alias},
+		client.Challenge.SetDNS01Provider(&manualDNSProvider{w: w},
 			dns01.AddRecursiveNameservers([]string{"8.8.8.8:53", "1.1.1.1:53"}))
 	} else if method == "dnsapi" {
-		prov, err := buildDNS01ProviderWithAlias(info.VAlias)
+		prov, err := buildDNS01Provider()
 		if err != nil {
 			return err
 		}

@@ -1688,13 +1688,13 @@ PAGES.websites = {
               <select class="select" id="acme-dnsapi-provider" style="max-width:320px"></select>
               <div class="help">凭据保存后面板自动添加/清理 TXT 记录,并支持通配符证书;API 凭据在服务商控制台创建(如阿里云 AccessKey、Cloudflare API Token)</div></div>
             <div id="acme-dnsapi-fields"></div>
-            <div class="form-item"><label>DNS 别名域名(域名 DNS 不在该服务商时必填)</label>
-              <input class="input mono" id="acme-dnsapi-alias" placeholder="如 677778.xyz(填你控制解析的别名域名)" style="max-width:320px">
-              <div class="help">两种用法:①域名的 DNS 已托管在该服务商 → 别名留空;②域名 DNS 在别处(如注册商自带解析)→ 必填:先在主域 DNS 加 CNAME(_acme-challenge.主域名 → _acme-challenge.此别名域名),TXT 将由 API 写到别名处</div></div></div>
+            <div class="form-item"><label>DNS 别名记录(域名 DNS 不在该服务商时填写)</label>
+              <input class="input mono" id="acme-dnsapi-alias" placeholder="如 acme.677778.xyz(CNAME 指向的自定义记录名,原样使用)" style="max-width:320px">
+              <div class="help">两种用法:①域名的 DNS 已托管在该服务商 → 留空;②域名 DNS 在别处(如注册商自带解析)→ 先在主域 DNS 加 CNAME(_acme-challenge.主域名 → 你自定义的别名记录,每个域名一条,可指向不同记录),TXT 将写到 CNAME 指向的记录名(取填写的值原样使用,不自动加 _acme-challenge 前缀)</div></div></div>
           <div id="acme-alias-row" style="display:none">
-            <div class="form-item"><label>DNS 别名域名(可选)</label>
-              <input class="input" id="acme-alias" placeholder="如 acme.your-domain.com(可选)" style="max-width:320px">
-              <div class="help">别名模式:在主域 DNS 添加 CNAME「_acme-challenge.主域名 → _acme-challenge.别名域名」,TXT 记录即可统一维护在别名域名下,主域 DNS 无需每次改动</div></div>
+            <div class="form-item"><label>DNS 别名记录(可选)</label>
+              <input class="input" id="acme-alias" placeholder="可留空;面板自动跟随主域 CNAME" style="max-width:320px">
+              <div class="help">可选:把主域挑战名(_acme-challenge.主域名)CNAME 到你控制的自定义记录,TXT 记录统一维护在该记录下;面板会自动跟随 CNAME 并提示 TXT 应加在哪条记录上</div></div>
           </div>
           <label class="radio-line"><input type="checkbox" id="acme-staging" ${acmeCfg.staging ? "checked" : ""}> 使用测试环境(staging,不限频但浏览器不信任,验证流程用)</label>
           <div style="margin-top:10px"><button class="btn btn-sm btn-primary" id="ssl-acme-issue">${I("bolt")} 申请证书并启用 HTTPS</button></div></div>
@@ -1824,6 +1824,7 @@ PAGES.websites = {
       const staging = qs("#acme-staging", m.el).checked || (providerMeta[provider] || {}).staging || false;
       const method = methodSel.value;
       const alias = qs("#acme-alias", m.el).value.trim();
+      const dnsAlias = qs("#acme-dnsapi-alias", m.el).value.trim();
       if (!email) { toast("请填写申请邮箱", "error"); return; }
       const body = { email, staging, provider, eab_key_id: qs("#acme-eab-kid", m.el).value.trim(), eab_hmac: qs("#acme-eab-hmac", m.el).value.trim() };
       try { await api("/ssl/acme/config", { method: "POST", body }); }
@@ -1838,7 +1839,7 @@ PAGES.websites = {
       }
       toast(method === "dns" ? "正在创建订单,请在任务日志中查看需要添加的 TXT 记录..." : "正在发起申请...", "info", 6000);
       try {
-        const d = await api("/ssl/acme/issue", { method: "POST", body: { site_id: site.id, staging, provider, method, alias, dns_api: method === "dnsapi" } });
+        const d = await api("/ssl/acme/issue", { method: "POST", body: { site_id: site.id, staging, provider, method, alias, dns_alias: dnsAlias, dns_api: method === "dnsapi" } });
         m.close();
         taskModal(d.task_id, (status) => {
           if (status === "success") {

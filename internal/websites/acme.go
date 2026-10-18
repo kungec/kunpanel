@@ -592,6 +592,54 @@ func orderDomains(raw []string, method string) ([]string, bool, error) {
 	return out, isIP, nil
 }
 
+// transientCAErr 判断是否为 CA 端瞬时故障:nonce 拉取失败/空响应/5xx/超时等,
+// ZeroSSL 的 newNonce 偶发返回空响应与 5xx,重试即可恢复
+func transientCAErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	for _, k := range []string{"nonce", "unexpected end of json", "502", "503", "504", "timeout", "tls handshake", "connection reset", "server is currently busy"} {
+		if strings.Contains(s, strings.ToLower(k)) {
+			return true
+		}
+	}
+	return false
+}
+
+// caRetry CA 瞬时故障自动重试(最多 3 次,递增退避);非瞬时错误原样返回
+func caRetry(w io.Writer, fn func() error) error {
+	var last error
+	for attempt := 1; attempt <= 3; attempt++ {
+		last = fn()
+		if last == nil || !transientCAErr(last) {
+			return last
+		}
+		if attempt < 3 {
+			delay := time.Duration(attempt*4) * time.Second
+			tail := last.Error()
+			if len(tail) > 160 {
+				tail = tail[:160]
+			}
+			fmt.Fprintf(w, ">> CA 接口瞬时故障(%s),%s 后自动重试(%d/3)...\n", tail, delay, attempt)
+			time.Sleep(delay)
+		}
+	}
+	return last
+}
+
+// caHint 按 CA 追加排障提示(错误透传给任务日志)
+func caHint(provider string, err error) string {
+	msg := ""
+	if err != nil {
+		msg = err.Error()
+	}
+	if provider == "zerossl" && (transientCAErr(err) || strings.Contains(msg, "zerossl") || strings.Contains(msg, "ZeroSSL")) {
+		return "(ZeroSSL 接口偶发不稳定:可稍后重试;反复失败可在「证书服务商」处改用 Let's Encrypt,或配置 ZeroSSL 的 EAB 凭据)"
+	}
+	return ""
+}
+
 // IssueCertForSite 签发证书并自动绑定(异步任务体)
 func IssueCertForSite(siteID string, opts AcmeIssueOpts, w io.Writer) (string, error) {
 	site, err := GetSite(siteID)
@@ -701,17 +749,25 @@ func IssueCertForSite(siteID string, opts AcmeIssueOpts, w io.Writer) (string, e
 		if err != nil {
 			return "", err
 		}
-		res, err = client.Certificate.ObtainForCSR(certificate.ObtainForCSRRequest{
-			CSR:        csrObj,
-			PrivateKey: key,
-			Bundle:     true,
-			Profile:    profile,
+		err = caRetry(w, func() error {
+			var e error
+			res, e = client.Certificate.ObtainForCSR(certificate.ObtainForCSRRequest{
+				CSR:        csrObj,
+				PrivateKey: key,
+				Bundle:     true,
+				Profile:    profile,
+			})
+			return e
 		})
 	} else {
-		res, err = client.Certificate.Obtain(certificate.ObtainRequest{
-			Domains: domains,
-			Bundle:  true,
-			Profile: profile,
+		err = caRetry(w, func() error {
+			var e error
+			res, e = client.Certificate.Obtain(certificate.ObtainRequest{
+				Domains: domains,
+				Bundle:  true,
+				Profile: profile,
+			})
+			return e
 		})
 	}
 	if err != nil {
@@ -740,9 +796,9 @@ func IssueCertForSite(siteID string, opts AcmeIssueOpts, w io.Writer) (string, e
 	}
 	return "", fmt.Errorf("签发失败: DNS 服务商 API 凭据无效或权限不足(%s)", clip)
 			}
-			return "", fmt.Errorf("签发失败: %v(请检查 DNS API 凭据与域名归属)", err)
+			return "", fmt.Errorf("签发失败: %v%s(请检查 DNS API 凭据与域名归属)", err, caHint(prov, err))
 		}
-		return "", fmt.Errorf("签发失败: %v(请确认域名已解析到本服务器 IP,且 80 端口对外开放)", err)
+		return "", fmt.Errorf("签发失败: %v%s(请确认域名已解析到本服务器 IP,且 80 端口对外开放)", err, caHint(prov, err))
 	}
 
 	certID := "cert_" + fmt.Sprintf("%d", time.Now().UnixNano()/1000000)
@@ -840,9 +896,14 @@ func renewCertInPlace(id string, w io.Writer) error {
 		PrivateKey:  certKeyBytes(id),
 		CSR:         certCSRBytes(id),
 	}
-	res, err := client.Certificate.RenewWithOptions(certRes, &certificate.RenewOptions{
-		Bundle:  true,
-		Profile: info.Profile,
+	var res *certificate.Resource
+	err = caRetry(w, func() error {
+		var e error
+		res, e = client.Certificate.RenewWithOptions(certRes, &certificate.RenewOptions{
+			Bundle:  true,
+			Profile: info.Profile,
+		})
+		return e
 	})
 	if err != nil {
 		if method == "dns" {

@@ -17,6 +17,7 @@ import (
 
 	"kunpanel/internal/appstore"
 	"kunpanel/internal/config"
+	"kunpanel/internal/dockerx"
 	"kunpanel/internal/util"
 )
 
@@ -370,6 +371,8 @@ func Create(o CreateOpts) (*Site, error) {
 		if o.SiteType == "php" {
 			ensureSitePHPMount(s, io.Discard)
 		}
+		// 挂载变更可能重建了容器(容器 ID 变化),主动失效快照缓存
+		dockerx.InvalidateDockerCache()
 		index := filepath.Join(s.Root, "index.html")
 		if !fileExists(index) {
 			_ = util.AtomicWrite(index, []byte(fmt.Sprintf(`<!DOCTYPE html>
@@ -594,6 +597,7 @@ func Delete(id string, removeFiles bool) error {
 			dirErr = fmt.Errorf("站点已删除,但根目录删除失败: %v", err)
 		} else {
 			cleanupSiteMounts(cp.Root)
+			dockerx.InvalidateDockerCache()
 		}
 	}
 	if err := Reload(); err != nil {
@@ -655,6 +659,7 @@ func DeleteMany(ids []string, removeFiles bool) (int, error) {
 				continue
 			}
 			cleanupSiteMounts(s.Root)
+			dockerx.InvalidateDockerCache()
 		}
 	}
 	// 配置文件已清理;重载失败如实上报(站点列表已不含被删站点)

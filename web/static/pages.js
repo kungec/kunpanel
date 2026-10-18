@@ -4325,6 +4325,26 @@ PAGES.settings = {
       };
       // 面板 HTTPS
       var st = window.__psSSL || {};
+      // 已启用时锁死复选框(防止误触关闭把自己锁在外面),改用显式关闭按钮
+      var sslCheckbox = body.querySelector("#ps-ssl-on");
+      if (st.enabled && sslCheckbox) {
+        sslCheckbox.disabled = true;
+        var closeSslBtn = document.createElement("button");
+        closeSslBtn.className = "btn btn-danger-plain btn-sm";
+        closeSslBtn.textContent = "关闭 HTTPS";
+        closeSslBtn.onclick = async function() {
+          if (!(await confirmDlg("确定关闭面板 HTTPS 吗?面板重启后将回退 <b>HTTP</b>,请改用 <b>http://服务器IP:端口</b> 访问面板", { danger: true }))) return;
+          try {
+            await api("/panel/ssl", { method: "POST", body: { enabled: false, cert: "", key: "" } });
+            toast("已关闭,面板正在重启,稍后请用 http:// 访问...", "info", 6000);
+            setTimeout(function() {
+              location.href = location.href.replace(/^https:/, "http:");
+              location.reload();
+            }, 2500);
+          } catch (e) { toast(e.message, "error", 8000); }
+        };
+        sslCheckbox.parentNode.appendChild(closeSslBtn);
+      }
       // 当前证书状态卡:类别/域名/有效期(自签、上传、LE 申请的都显示)
       (async function() {
         var box = body.querySelector("#ps-ssl-status");
@@ -4355,7 +4375,7 @@ PAGES.settings = {
         } catch (e) { toast(e.message, "error", 6000); this.disabled = false; }
       };
       qs("#ps-ssl-save", body).onclick = async function() {
-        const on = qs("#ps-ssl-on", body).checked;
+        const on = sslCheckbox ? sslCheckbox.checked : qs("#ps-ssl-on", body).checked;
         const cert = qs("#ps-cert", body).value.trim();
         const key = qs("#ps-key", body).value.trim();
         if (on && !st.hasCert && !cert) { toast("请先上传证书或生成自签证书", "error"); return; }

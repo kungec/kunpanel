@@ -561,6 +561,7 @@ func IssueCertForSite(siteID string, opts AcmeIssueOpts, w io.Writer) (string, e
 				"_acme-challenge."+strings.Trim(strings.TrimSpace(opts.DNSApiAlias), "."), domains[0], strings.Trim(strings.TrimSpace(opts.DNSApiAlias), "."))
 		} else {
 			fmt.Fprintln(w, ">> DNS API 自动验证:TXT 记录将由面板自动添加/清理")
+			fmt.Fprintln(w, ">> 注意: 域名的 DNS 需托管在该服务商;否则请在主域 DNS 加 CNAME 并填写「DNS 别名域名」")
 		}
 		client.Challenge.SetDNS01Provider(prov,
 			dns01.AddRecursiveNameservers([]string{"8.8.8.8:53", "1.1.1.1:53"}))
@@ -623,7 +624,22 @@ func IssueCertForSite(siteID string, opts AcmeIssueOpts, w io.Writer) (string, e
 			return "", fmt.Errorf("签发失败: %v(请确认该 IP 的 80 端口对外开放且站点监听 80)", err)
 		}
 		if method == "dnsapi" {
-			return "", fmt.Errorf("签发失败: %v(请检查 DNS 服务商 API 凭据是否有效、域名是否托管在该服务商)", err)
+			es := err.Error()
+			switch {
+			case strings.Contains(es, "could not find zone") || strings.Contains(es, "find zone") || strings.Contains(es, "no such zone"):
+				dnsName := loadDNSAPI().Provider
+				if def, ok := dnsProviderDef(dnsName); ok {
+					dnsName = def.Name
+				}
+				return "", fmt.Errorf("签发失败: 域名 %s 的 DNS 未托管在该服务商。两种解决:①把该域名的 DNS 托管/迁移到 %s;②保持现有 DNS 不变,在主域 DNS 添加 CNAME 后,在「DNS 别名域名」填写别名再重试", domains[0], dnsName)
+			case strings.Contains(es, "6003") || strings.Contains(es, "Invalid request headers") || strings.Contains(es, "InvalidAccessKeyId") || strings.Contains(es, "Unauthorized") || strings.Contains(es, "authentication") || strings.Contains(es, "401") || strings.Contains(es, "403"):
+				clip := es
+	if len(clip) > 200 {
+		clip = clip[:200]
+	}
+	return "", fmt.Errorf("签发失败: DNS 服务商 API 凭据无效或权限不足(%s)", clip)
+			}
+			return "", fmt.Errorf("签发失败: %v(请检查 DNS API 凭据与域名归属)", err)
 		}
 		return "", fmt.Errorf("签发失败: %v(请确认域名已解析到本服务器 IP,且 80 端口对外开放)", err)
 	}

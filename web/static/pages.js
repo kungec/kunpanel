@@ -1688,9 +1688,9 @@ PAGES.websites = {
               <select class="select" id="acme-dnsapi-provider" style="max-width:320px"></select>
               <div class="help">凭据保存后面板自动添加/清理 TXT 记录,并支持通配符证书;API 凭据在服务商控制台创建(如阿里云 AccessKey、Cloudflare API Token)</div></div>
             <div id="acme-dnsapi-fields"></div>
-            <div class="form-item"><label>DNS 别名域名(可选)</label>
-              <input class="input mono" id="acme-dnsapi-alias" placeholder="如 kun.bh.cx.677778.xyz" style="max-width:320px">
-              <div class="help">域名 DNS 不在上述服务商时使用:先在主域 DNS 加 CNAME(_acme-challenge.主域名 → _acme-challenge.此别名),TXT 将由 API 写到别名处</div></div></div>
+            <div class="form-item"><label>DNS 别名域名(域名 DNS 不在该服务商时必填)</label>
+              <input class="input mono" id="acme-dnsapi-alias" placeholder="如 677778.xyz(填你控制解析的别名域名)" style="max-width:320px">
+              <div class="help">两种用法:①域名的 DNS 已托管在该服务商 → 别名留空;②域名 DNS 在别处(如注册商自带解析)→ 必填:先在主域 DNS 加 CNAME(_acme-challenge.主域名 → _acme-challenge.此别名域名),TXT 将由 API 写到别名处</div></div></div>
           <div id="acme-alias-row" style="display:none">
             <div class="form-item"><label>DNS 别名域名(可选)</label>
               <input class="input" id="acme-alias" placeholder="如 acme.your-domain.com(可选)" style="max-width:320px">

@@ -168,6 +168,7 @@ func (s *Server) registerAPI() {
 
 	// 数据库账号管理(MySQL/MariaDB)
 	m.Handle("GET /api/v1/db/{key}/users", wrap(http.HandlerFunc(s.handleDbUsers)))
+	m.Handle("GET /api/v1/db/{key}/users/dbmap", wrap(http.HandlerFunc(s.handleDbUserDBMap)))
 	m.Handle("POST /api/v1/db/{key}/users/create", wrap(http.HandlerFunc(s.handleDbUserCreate)))
 	m.Handle("POST /api/v1/db/{key}/users/delete", wrap(http.HandlerFunc(s.handleDbUserDelete)))
 	m.Handle("POST /api/v1/db/{key}/users/password", wrap(http.HandlerFunc(s.handleDbUserPassword)))

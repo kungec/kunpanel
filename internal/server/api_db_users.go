@@ -24,6 +24,19 @@ func (s *Server) handleDbUsers(w http.ResponseWriter, r *http.Request) {
 	OK(w, users)
 }
 
+// handleDbUserDBMap 账号↔库 授权映射(库卡片显示授权用户、账号列表显示权限范围)
+func (s *Server) handleDbUserDBMap(w http.ResponseWriter, r *http.Request) {
+	rows, err := dbmgr.UserDBGrants(r.PathValue("key"))
+	if err != nil {
+		Fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if rows == nil {
+		rows = []dbmgr.UserDBGrant{}
+	}
+	OK(w, map[string]any{"rows": rows})
+}
+
 func (s *Server) handleDbUserCreate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		User     string `json:"user"`

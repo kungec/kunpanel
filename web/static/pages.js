@@ -3000,11 +3000,34 @@ PAGES.databases = {
     var self = this, key = this.tab.key;
     var m = modal({ title: "数据库账号管理 · " + key, width: 760, body: '<div class="boot-loading" style="height:80px"><div class="spinner"></div></div>' });
     var draw = async function() {
-      var users = [];
-      try { users = (await api("/db/" + key + "/users")) || []; }
-      catch (e) { qs(".modal-body", m.el).innerHTML = emptyState("warn", "加载失败", e.message); return; }
+      var users = [], mapRows = [];
+      try {
+        var rs = await Promise.all([
+          api("/db/" + key + "/users"),
+          api("/db/" + key + "/users/dbmap").catch(function() { return { rows: [] }; }),
+        ]);
+        users = rs[0] || [];
+        mapRows = rs[1].rows || [];
+      } catch (e) { qs(".modal-body", m.el).innerHTML = emptyState("warn", "加载失败", e.message); return; }
+      // 账号 → 权限范围(全部库 / 各库 + 摘要)
+      var byUser = {};
+      mapRows.forEach(function(x) {
+        var k = x.user + "@" + x.host;
+        (byUser[k] = byUser[k] || []).push(x);
+      });
+      var scopeSummary = function(u, h) {
+        var list = byUser[u + "@" + h] || [];
+        if (!list.length) return '<span class="help" style="margin:0">未授权(仅可登录)</span>';
+        return list.map(function(x) {
+          var scope = x.scope === "*" ? "*.*" : x.scope + ".*";
+          var pv = x.privs || "";
+          var tag = pv.indexOf("SELECT") >= 0 && pv.indexOf("INSERT") >= 0 && pv.indexOf("UPDATE") >= 0 && pv.indexOf("DELETE") >= 0 && pv.split(",").length >= 15 ? "全部" : (pv === "SELECT" ? "只读" : (pv.split(",").length >= 4 && pv.indexOf("SELECT") >= 0 ? "读写" : pv.split(",").slice(0, 3).join(",") + (pv.split(",").length > 3 ? "…" : "")));
+          return '<span class="mono" title="' + esc(pv || "USAGE") + '">' + esc(scope) + "(" + esc(tag) + ")</span>";
+        }).join("<br>");
+      };
       var rows = users.map(function(u) {
         return '<tr><td class="mono">' + esc(u.user) + '</td><td class="mono">' + esc(u.host) + '</td>' +
+          '<td style="font-size:12px">' + scopeSummary(u.user, u.host) + '</td>' +
           '<td><div class="ops">' +
           '<button class="btn btn-xs btn-plain" data-grant="' + esc(u.user) + '" data-host="' + esc(u.host) + '">授权</button>' +
           '<button class="btn btn-xs btn-plain" data-grants="' + esc(u.user) + '" data-host="' + esc(u.host) + '">权限</button>' +
@@ -3018,7 +3041,7 @@ PAGES.databases = {
         '<input class="input" id="nu-pwd" placeholder="密码(6-64 位)" style="width:170px">' +
         '<button class="btn btn-sm btn-primary" id="nu-add">创建账号</button></div>' +
         '<div class="help">主机:%(任意主机)/localhost/指定 IP;应用连接时按「用户名@主机」匹配;创建后用「授权」给账号分配库权限</div></div>' +
-        (users.length ? '<table class="table"><thead><tr><th>用户名</th><th>主机</th><th style="width:270px">操作</th></tr></thead><tbody>' + rows + '</tbody></table>' : emptyState("info", "暂无账号", "用上方表单创建第一个账号"));
+        (users.length ? '<table class="table"><thead><tr><th>用户名</th><th>主机</th><th>权限范围</th><th style="width:270px">操作</th></tr></thead><tbody>' + rows + '</tbody></table>' : emptyState("info", "暂无账号", "用上方表单创建第一个账号"));
       var nu = qs("#nu-add", m.el);
       if (nu) nu.onclick = async function() {
         var user = qs("#nu-name", m.el).value.trim(), host = qs("#nu-host", m.el).value.trim(), pwd = qs("#nu-pwd", m.el).value;
@@ -3235,6 +3258,33 @@ PAGES.databases = {
         "</div>";
     } else {
       wrap.innerHTML = '<div class="db-empty">' + I("database") + '<p>还没有业务数据库</p><p class="help">点击右上角「添加数据库」创建' + (sys.length ? ';系统库 ' + sys.length + ' 个已隐藏' : "") + '</p></div>';
+    }
+
+    // 库卡片显示授权用户(账号↔库 授权映射;异步注入不阻塞卡片渲染)
+    if (key === "mysql" || key === "mariadb") {
+      api("/db/" + key + "/users/dbmap").then(function(d) {
+        var rows = d.rows || [];
+        if (!rows.length || !qs("[data-dbname]", wrap)) return;
+        var byDB = {}, globals = [];
+        rows.forEach(function(x) {
+          var who = x.user + "@" + x.host;
+          var pv = x.privs || "";
+          var n = pv ? pv.split(",").length : 0;
+          var tag = !n ? "" : (n >= 15 ? "全部" : (pv === "SELECT" ? "只读" : (n >= 4 ? "读写" : pv.split(",").slice(0, 2).join(","))));
+          if (x.scope === "*") { globals.push(who + (tag ? "(" + tag + ")" : "")); return; }
+          (byDB[x.scope] = byDB[x.scope] || []).push(who + (tag ? "(" + tag + ")" : ""));
+        });
+        qsa("[data-dbname]", wrap).forEach(function(card) {
+          var db = card.getAttribute("data-dbname");
+          if (self.SYSTEM_DBS.indexOf(db) >= 0) return;
+          var us = (byDB[db] || []).concat(globals);
+          if (!us.length) return;
+          var div = document.createElement("div");
+          div.style.cssText = "font-size:11px;color:var(--text-3);margin-top:4px;line-height:1.5;word-break:break-all";
+          div.innerHTML = "授权用户: " + us.map(function(x) { return esc(x); }).join("、");
+          card.appendChild(div);
+        });
+      }).catch(function() {});
     }
 
     var ssb = qs("#db-showsys", wrap);

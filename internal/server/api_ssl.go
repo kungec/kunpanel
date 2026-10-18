@@ -135,12 +135,13 @@ func (s *Server) handleAcmeProviders(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAcmeIssue(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		SiteID   string `json:"site_id"`
-		Staging  bool   `json:"staging"`
-		Method   string `json:"method"` // http / dns / dnsapi(默认 http)
-		Alias    string `json:"alias"`  // DNS 别名域名(CNAME 委托目标,可选;仅手动 DNS)
-		Provider string `json:"provider"`
-		DNSApi   bool   `json:"dns_api"` // DNS API 自动验证(凭据用已保存配置)
+		SiteID      string `json:"site_id"`
+		Staging     bool   `json:"staging"`
+		Method      string `json:"method"` // http / dns / dnsapi(默认 http)
+		Alias       string `json:"alias"`  // DNS 别名域名(CNAME 委托目标,可选;仅手动 DNS)
+		Provider    string `json:"provider"`
+		DNSApi      bool   `json:"dns_api"`  // DNS API 自动验证(凭据用已保存配置)
+		DNSApiAlias string `json:"dns_alias"` // DNS API 模式的 CNAME 别名域名(可选)
 	}
 	if err := readJSON(r, &req); err != nil || req.SiteID == "" {
 		Fail(w, http.StatusBadRequest, "参数错误")
@@ -166,7 +167,7 @@ func (s *Server) handleAcmeIssue(w http.ResponseWriter, r *http.Request) {
 		req.Method = "http"
 	}
 	taskID, err := websites.IssueCertTaskEx(req.SiteID, websites.AcmeIssueOpts{
-		Staging: req.Staging, Method: req.Method, Alias: req.Alias, DNSApi: req.DNSApi,
+		Staging: req.Staging, Method: req.Method, Alias: req.Alias, DNSApi: req.DNSApi, DNSApiAlias: req.DNSApiAlias,
 	})
 	if err != nil {
 		Fail(w, http.StatusInternalServerError, err.Error())

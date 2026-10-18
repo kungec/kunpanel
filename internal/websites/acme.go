@@ -468,10 +468,11 @@ func (p *manualDNSProvider) CleanUp(domain, token, keyAuth string) error { retur
 
 // acmeIssueOpts 签发参数
 type AcmeIssueOpts struct {
-	Staging bool
-	Method  string // http / dns / dnsapi
-	Alias   string // DNS 别名域名(CNAME 委托目标,可选;仅手动 DNS)
-	DNSApi  bool   // DNS API 自动验证(凭据来自已保存的 DNS 服务商配置)
+	Staging     bool
+	Method      string // http / dns / dnsapi
+	Alias       string // DNS 别名域名(CNAME 委托目标,可选;仅手动 DNS)
+	DNSApi      bool   // DNS API 自动验证(凭据来自已保存的 DNS 服务商配置)
+	DNSApiAlias string // DNS API 模式的 CNAME 别名域名(可选;TXT 写到别名挑战名)
 }
 
 // orderDomains 校验并归一域名(通配符仅 DNS 验证支持)。
@@ -551,11 +552,16 @@ func IssueCertForSite(siteID string, opts AcmeIssueOpts, w io.Writer) (string, e
 		client.Challenge.SetDNS01Provider(&manualDNSProvider{w: w, alias: alias},
 			dns01.AddRecursiveNameservers([]string{"8.8.8.8:53", "1.1.1.1:53"}))
 	} else if method == "dnsapi" {
-		prov, err := buildDNS01Provider()
+		prov, err := buildDNS01ProviderWithAlias(opts.DNSApiAlias)
 		if err != nil {
 			return "", err
 		}
-		fmt.Fprintln(w, ">> DNS API 自动验证:TXT 记录将由面板自动添加/清理")
+		if strings.TrimSpace(opts.DNSApiAlias) != "" {
+			fmt.Fprintf(w, ">> [别名模式] TXT 将由 API 写到 %s;需在主域 DNS 添加 CNAME: _acme-challenge.%s → _acme-challenge.%s\n",
+				"_acme-challenge."+strings.Trim(strings.TrimSpace(opts.DNSApiAlias), "."), domains[0], strings.Trim(strings.TrimSpace(opts.DNSApiAlias), "."))
+		} else {
+			fmt.Fprintln(w, ">> DNS API 自动验证:TXT 记录将由面板自动添加/清理")
+		}
 		client.Challenge.SetDNS01Provider(prov,
 			dns01.AddRecursiveNameservers([]string{"8.8.8.8:53", "1.1.1.1:53"}))
 	} else {
@@ -637,11 +643,15 @@ func IssueCertForSite(siteID string, opts AcmeIssueOpts, w io.Writer) (string, e
 		}
 	}
 	expire, days := parseCertPEM(res.Certificate)
+	vAliasOut := alias
+	if method == "dnsapi" {
+		vAliasOut = strings.TrimSpace(opts.DNSApiAlias)
+	}
 	info := CertInfo{
 		ID: certID, Name: domains[0] + "(" + providerName(prov) + ")", Domains: strings.Join(domains, " "),
 		Expire: expire, Days: days, SelfSigned: false,
 		Acme: true, SiteID: siteID, Staging: staging,
-		VMethod: method, VAlias: alias, Profile: profile,
+		VMethod: method, VAlias: vAliasOut, Profile: profile,
 		Created: time.Now().Format("2006-01-02 15:04:05"),
 	}
 	if profile != "" {
@@ -694,7 +704,7 @@ func renewCertInPlace(id string, w io.Writer) error {
 		client.Challenge.SetDNS01Provider(&manualDNSProvider{w: w, alias: alias},
 			dns01.AddRecursiveNameservers([]string{"8.8.8.8:53", "1.1.1.1:53"}))
 	} else if method == "dnsapi" {
-		prov, err := buildDNS01Provider()
+		prov, err := buildDNS01ProviderWithAlias(info.VAlias)
 		if err != nil {
 			return err
 		}

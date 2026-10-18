@@ -3,6 +3,19 @@
 所有重要变更都会记录在此文件中。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v2.79.3] - 2026-10-18
+
+### 改进:DNS API 自动验证支持 CNAME 别名委托(可选,用户反馈)
+
+DNS API 自动验证模式新增**可选「DNS 别名域名」输入**:域名 DNS 不在凭据
+所属服务商时,先在主域 DNS 加 CNAME(_acme-challenge.主域名 →
+_acme-challenge.别名域名),TXT 由 API 写到别名处,Let's Encrypt 沿 CNAME
+读取——两者结合即可完成验证。不填则默认写入域名自己的 DNS(常用场景)。
+
+- 续期自动沿用签发时的别名设置
+- 真机验证:别名模式下 TXT 写入目标为别名挑战名,指令输出正确,
+  Cloudflare API 被按别名域名调用(假凭据下返回明确的 zone 错误)
+
 ## [v2.79.2] - 2026-10-18
 
 ### 改进:HTTPS 设置弹窗支持删除证书(用户建议)

@@ -375,6 +375,7 @@ function confirmDlg(msg, opts = {}) {
     const danger = opts.danger !== false;
     // close() 会同步触发 onClose;必须先 resolve 结果,否则 null/false 覆盖真实选择(点确定等于取消)
     let done = false;
+    let confirmed = false;
     const finish = (v) => { if (!done) { done = true; resolve(v); } };
     const m = openLayer({
       title: opts.title || "操作确认",
@@ -383,10 +384,14 @@ function confirmDlg(msg, opts = {}) {
       footer:
         '<button class="btn btn-plain" data-act="no">取 消</button>' +
         '<button class="btn ' + (danger ? "btn-danger" : "btn-primary") + '" data-act="yes">确 定</button>',
-      onClose: () => finish(false),
+      onClose: () => {
+        // 取消/× 关闭:清掉触发按钮的转圈(确认执行时不清,toast 出现时才清)
+        if (!confirmed) clearBusyBtns();
+        finish(false);
+      },
     });
     qs('[data-act="no"]', m.el).onclick = () => { finish(false); m.close(); };
-    qs('[data-act="yes"]', m.el).onclick = () => { finish(true); m.close(); };
+    qs('[data-act="yes"]', m.el).onclick = () => { confirmed = true; finish(true); m.close(); };
   });
 }
 
@@ -394,6 +399,7 @@ function confirmDlg(msg, opts = {}) {
 function promptDlg(title, fields) {
   return new Promise((resolve) => {
     let done = false;
+    let confirmed = false;
     const finish = (v) => { if (!done) { done = true; resolve(v); } }; // 同上:先 resolve 再 close
     const body = fields.map((f, i) =>
       '<div class="form-item ' + (f.required ? "required" : "") + '" style="margin-bottom:14px">' +
@@ -406,7 +412,10 @@ function promptDlg(title, fields) {
     const m = openLayer({
       title, width: 480, body,
       footer: '<button class="btn btn-plain" data-act="no">取 消</button><button class="btn btn-primary" data-act="yes">确 定</button>',
-      onClose: () => finish(null),
+      onClose: () => {
+        if (!confirmed) clearBusyBtns(); // 同 confirmDlg:取消时清掉触发按钮的转圈
+        finish(null);
+      },
     });
     qs('[data-act="no"]', m.el).onclick = () => { finish(null); m.close(); };
     qs('[data-act="yes"]', m.el).onclick = () => {
@@ -415,6 +424,7 @@ function promptDlg(title, fields) {
       for (const f of fields) {
         if (f.required && !String(out[f.key] || "").trim()) { toast(f.label + " 不能为空", "error"); return; }
       }
+      confirmed = true;
       finish(out);
       m.close();
     };

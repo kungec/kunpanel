@@ -4639,7 +4639,8 @@ PAGES.settings = {
         '<div id="ps-ssl-status" class="help" style="margin:0 0 10px">读取证书信息 ...</div>' +
         '<div style="margin:-4px 0 10px"><button class="btn btn-primary btn-sm" id="ps-ssl-le">' + I("bolt") + ' 申请 Let\'s Encrypt 证书(自动部署与续期)</button></div>' +
         '<div class="form-item"><label style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">' +
-        '<input type="checkbox" id="ps-ssl-on" ' + (!sslState.hasCert || sslState.enabled ? "checked" : "") + '> 启用面板 HTTPS 访问</label></div>' +
+        '<input type="checkbox" id="ps-ssl-on" ' + (sslState.enabled ? "checked" : "") + '> 启用面板 HTTPS 访问</label>' +
+        (!sslState.enabled && !sslState.hasCert ? '<span class="help" style="margin:0 0 0 10px">生成/上传证书后勾选此项启用;未勾选时保存仅保存证书</span>' : "") + '</div>' +
         '<div class="form-item"><label>上传证书(PEM)</label>' +
         '<textarea class="textarea mono" id="ps-cert" rows="3" placeholder="证书内容(BEGIN CERTIFICATE ...),留空沿用已存证书"></textarea>' +
         '<textarea class="textarea mono" id="ps-key" rows="3" placeholder="私钥内容(BEGIN PRIVATE KEY ...)" style="margin-top:6px"></textarea></div>' +
@@ -4687,9 +4688,10 @@ PAGES.settings = {
       };
       // 面板 HTTPS
       var st = window.__psSSL || {};
-      // 已启用时锁死复选框(防止误触关闭把自己锁在外面),改用显式关闭按钮
+      // 已启用且有证书时锁死复选框(防止误触关闭把自己锁在外面),改用显式关闭按钮;
+      // 已启用但证书缺失(异常态)时不禁用——允许取消勾选并保存以清除启用状态
       var sslCheckbox = body.querySelector("#ps-ssl-on");
-      if (st.enabled && sslCheckbox) {
+      if (st.enabled && st.hasCert && sslCheckbox) {
         sslCheckbox.disabled = true;
         var closeSslBtn = document.createElement("button");
         closeSslBtn.className = "btn btn-danger-plain btn-sm";
@@ -4801,8 +4803,36 @@ PAGES.settings = {
         this.disabled = true; this.textContent = "生成中...";
         try {
           await api("/panel/ssl/selfsign", { method: "POST", body: {} });
+          // 同步前端状态:证书已存在,保存守卫与复选框都要更新
+          sslState.hasCert = true;
+          window.__psSSL.hasCert = true;
+          var cb = body.querySelector("#ps-ssl-on");
+          if (cb && !sslState.enabled) cb.checked = true;
+          this.textContent = "重新生成自签证书";
+          this.disabled = false;
+          var box = body.querySelector("#ps-ssl-status");
+          if (box) box.innerHTML = "自签证书已生成(KunPanel / 本机 IP,10 年):点击「立即启用 HTTPS 并重启」一键启用,或勾选「启用面板 HTTPS 访问」后保存";
+          // 一键启用:复用已生成的证书文件(后端留空即沿用),重启后面板自动跳转 https
+          var enableBtn = body.querySelector("#ps-ssl-enable-now");
+          if (!enableBtn) {
+            var eb = document.createElement("button");
+            eb.className = "btn btn-primary btn-sm";
+            eb.id = "ps-ssl-enable-now";
+            eb.textContent = "立即启用 HTTPS 并重启";
+            eb.onclick = async function() {
+              if (!(await confirmDlg("面板将以 <b>HTTPS</b> 模式重启,重启后浏览器会自动跳转到 <b>https://</b> 访问面板<br><span style='font-size:12px;color:var(--text-3)'>自签证书浏览器会提示不受信任;若证书异常,面板会自动回退 HTTP,不会失联</span>"))) return;
+              try {
+                await api("/panel/ssl", { method: "POST", body: { enabled: true, cert: "", key: "" } });
+                toast("保存成功,面板正在重启,即将跳转 https ...", "info", 5000);
+                setTimeout(function() {
+                  location.href = location.href.replace(/^http:/, "https:");
+                  location.reload();
+                }, 2500);
+              } catch (e) { toast(e.message, "error", 8000); }
+            };
+            this.parentNode.appendChild(eb);
+          }
           toast("自签证书已生成");
-          this.textContent = "已生成 ✓";
         } catch (e) { toast(e.message, "error", 6000); this.disabled = false; }
       };
       qs("#ps-ssl-save", body).onclick = async function() {

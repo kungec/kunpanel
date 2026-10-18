@@ -125,7 +125,7 @@ func builtinTemplates() []Template {
 			Params: []Param{
 				{Key: "Version", Label: "PHP 版本", Default: "8.4", Type: "select", Required: true,
 					Options: []string{"5.6", "7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5"},
-					Help:    "8.5=最新版 · 8.4/8.3/8.2=稳定维护版 · 8.1/8.0/7.4=旧版兼容(远程迁移自动匹配用) · 5.6=老项目专用(EOL,仅内置类扩展可装) · 运行镜像为官方 php:<版本>-apache"},
+					Help:    "8.5=最新版 · 8.4/8.3/8.2=稳定维护版 · 8.1/8.0/7.4=旧版兼容(远程迁移自动匹配用) · 5.6=老项目专用(EOL,自动切换归档软件源) · 安装即构建定制镜像:gd/zip/intl/bcmath/redis 等常用扩展默认内置,同一版本仅需构建一次"},
 				{Key: "Port", Label: "访问端口", Default: "8088", Type: "port", Required: true},
 			},
 			ComposeFrom: func(p map[string]string) string {
@@ -739,8 +739,14 @@ func templateKeyOf(key string) string {
 // 必须走同一渲染路径,否则自动修复会生成 kun-php 容器名覆盖原实例
 func renderComposeFor(key string, tpl Template, params map[string]string) string {
 	content := tpl.ComposeFrom(params)
-	if IsPHPRuntimeKey(key) && key != "php" {
-		content = strings.ReplaceAll(content, "container_name: kun-php\n", "container_name: kun-"+key+"\n")
+	if IsPHPRuntimeKey(key) {
+		// 定制镜像(内置常用扩展)已构建时优先使用;未构建保持官方镜像
+		if img := PHPComposeImage(params["Version"]); img != "" {
+			content = strings.Replace(content, "image: php:"+params["Version"]+"-apache", "image: "+img, 1)
+		}
+		if key != "php" {
+			content = strings.ReplaceAll(content, "container_name: kun-php\n", "container_name: kun-"+key+"\n")
+		}
 	}
 	return content
 }
@@ -1188,9 +1194,18 @@ func Apply(key, action string, w io.Writer) error {
 	}
 	if w != nil {
 		if strings.HasPrefix(action, "up") {
-			fmt.Fprintln(w, "[1/2] 拉取镜像(首次可能需要数分钟)...")
-			if err := dockerx.ComposeStream(dir, dst, "pull"); err != nil {
-				fmt.Fprintln(w, "镜像拉取出现问题(本地可能已有镜像),继续尝试启动 ...")
+			// 定制 PHP 镜像只存在于本地,compose pull 会报 "pull access denied"
+			// 干扰用户——引用 kunpanel/php 镜像时跳过 pull
+			skipPull := false
+			if b, rerr := os.ReadFile(filepath.Join(dir, "docker-compose.yml")); rerr == nil &&
+				strings.Contains(string(b), "image: kunpanel/php:") {
+				skipPull = true
+			}
+			if !skipPull {
+				fmt.Fprintln(w, "[1/2] 拉取镜像(首次可能需要数分钟)...")
+				if err := dockerx.ComposeStream(dir, dst, "pull"); err != nil {
+					fmt.Fprintln(w, "镜像拉取出现问题(本地可能已有镜像),继续尝试启动 ...")
+				}
 			}
 			fmt.Fprintln(w, "[2/2] 创建并启动容器 ...")
 		}

@@ -3,6 +3,31 @@
 所有重要变更都会记录在此文件中。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v2.80.0] - 2026-10-18
+
+### 特性:PHP 常用扩展默认内置(定制镜像)+ EOL 老版本扩展可装(用户反馈)
+
+"PHP 中一些必要扩展没默认内置"——PHP 5.6 上点装 gd 直接被拒(基础镜像的
+Debian stretch 软件源已归档,系统依赖无法安装)。现在:
+
+- **安装 PHP 即构建定制镜像** `kunpanel/php:<版本>-apache`:gd/zip/intl/
+  bcmath/exif/soap/sockets/pcntl/sysv*/dba/ftp/opcache/mysqli/pdo_mysql 等
+  20 个常用扩展 + PECL redis(按 PHP 版本钉住发行版)默认内置,免逐个
+  后装;同一版本仅构建一次(约 5~10 分钟),站点文件外部挂载不受影响
+- **EOL 版本软件源归档自动兜底**:默认 apt 源 404 时自动切换
+  archive.debian.org——归档套件的 Release 签名密钥与有效期均已过期,需
+  `[trusted=yes]` + 关闭 Check-Valid-Until;stretch 没有 VERSION_CODENAME
+  字段,回退解析 `VERSION="9 (stretch)"`
+- **扩展后装同样修复**:php-ext 安装在老版本上自动走归档源(不再直接
+  拒绝 5.6);Debian multiarch 头文件(gmp.h 等)平铺到 /usr/include 兜底;
+  gd 编译参数按 7.4 分界自动切换(--with-freetype-dir → --with-freetype)
+- **已装实例升级入口**:PHP 管理弹窗「运行信息」新增「重建镜像」——把
+  现有 php.ini/conf.d 与已装扩展编入新镜像后重建容器,配置与扩展不丢
+- 定制镜像仅存本地,compose up 对其跳过 pull(不再报 "pull access denied")
+
+真机:安装 PHP 5.6 → 定制镜像构建成功,20 个扩展 + redis 全部加载,
+imagecreatetruecolor(gd)/Redis 类可用;后装 gmp 走归档源成功编译加载。
+
 ## [v2.79.5] - 2026-10-18
 
 ### 修复:DNS 别名记录填了不生效 + 别名取填写值原样使用(用户反馈)

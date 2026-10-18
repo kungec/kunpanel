@@ -2339,7 +2339,8 @@ PAGES.apps = {
       fetchRT(true).then(function(d) {
           var html = '<div class="am-info-row"><div class="am-info-label">当前版本</div><div class="mono am-info-val">' + esc(d.version || "-") + "</div></div>" +
           '<div class="am-ops"><button class="btn btn-sm btn-plain" id="am-restart">' + I("restart") + " 重启应用</button>" +
-          '<button class="btn btn-sm btn-plain" id="am-reload">' + I("refresh") + " 重载配置</button></div>";
+          '<button class="btn btn-sm btn-plain" id="am-reload">' + I("refresh") + " 重载配置</button>" +
+          '<button class="btn btn-sm btn-plain" id="am-rebuild">' + I("refresh") + " 重建镜像(内置常用扩展)</button></div>";
         html += loadedChips(d.extensions || [], d.removable);
         if (d.settings) {
           html += '<div class="settings-section"><div class="settings-section-title">面板快捷设置(写入独立覆盖文件,不影响 php.ini)</div>' +
@@ -2357,6 +2358,16 @@ PAGES.apps = {
         };
         qs("#am-reload", view).onclick = function() {
           api("/apps/instances/" + key + "/runtime/reload", { method: "POST", body: {} }).then(function(d2) { toast(d2 || "已重载"); }).catch(function(e) { toast(e.message, "error", 5000); });
+        };
+        var rb = qs("#am-rebuild", view);
+        if (rb) rb.onclick = function() {
+          confirmDlg("重建 PHP 定制镜像?<br><span style='font-size:12px;color:var(--text-3)'>内置 gd/zip/intl/bcmath/redis 等常用扩展,保留 php.ini 与已装扩展;容器会短暂重启,构建约 5~10 分钟(同一版本仅需一次)</span>").then(function(ok) {
+            if (!ok) return;
+            api("/apps/instances/" + key + "/runtime/php-rebuild-image", { method: "POST", body: {} }).then(function(d2) {
+              toast("开始重建镜像", "info");
+              taskModal(d2.task_id, function() { self._amRT = null; switchTab(self._amTab); });
+            }).catch(function(e) { toast(e.message, "error", 6000); });
+          });
         };
         var ib = qs("#am-ini-save", view);
         if (ib) ib.onclick = function() {
@@ -2382,7 +2393,7 @@ PAGES.apps = {
           self._amCatalog = cat;
           // 分组:已加载在上,可安装按类目
           var html = loadedChips(rs[0].extensions || [], rs[0].removable);
-          html += '<div class="settings-section"><div class="settings-section-title">可安装扩展 <span class="help" style="margin:0">点卡片安装;源码/PECL 编译约 1~5 分钟,自动重启生效</span></div>';
+          html += '<div class="settings-section"><div class="settings-section-title">可安装扩展 <span class="help" style="margin:0">点卡片安装;源码/PECL 编译约 1~5 分钟,自动重启生效 · 新装实例已内置常用扩展,旧实例可在「运行信息」重建镜像升级</span></div>';
           var cats = [];
           Object.keys(cat).forEach(function(name) {
             var c = cat[name].cat || "其他";

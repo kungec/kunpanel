@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -68,6 +69,11 @@ func (s *Server) handleAppInstall(w http.ResponseWriter, r *http.Request) {
 	}
 	// 后台拉起容器并返回任务 ID(必须用实际键,否则会启动错误的实例)
 	t, err := taskx.M.Start("app-"+actualKey, func(w io.Writer) error {
+		// PHP:先构建(或复用)内置常用扩展的定制镜像,compose 随即切换到
+		// 该镜像再拉起容器;构建日志全程流式输出
+		if err := appstore.PreparePHPStart(actualKey, w); err != nil {
+			return err
+		}
 		return appstore.Apply(actualKey, "up -d", w)
 	})
 	if err != nil {
@@ -341,11 +347,13 @@ func (s *Server) handleAppRuntimeAction(w http.ResponseWriter, r *http.Request) 
 			Fail(w, http.StatusBadRequest, "暂不支持该扩展: "+ext)
 			return
 		}
-		// PHP 5.x 基础镜像(Debian Stretch)apt 源已归档:需要系统库的扩展无法自动编译,提前明示
-		if strings.TrimSpace(meta.Deps) != "" {
-			if vout, verr := dockerx.ExecIn(container, "php", "-r", "echo PHP_VERSION_ID;"); verr == nil && strings.HasPrefix(strings.TrimSpace(vout), "5") {
-				Fail(w, http.StatusBadRequest, "PHP 5.6 基础镜像的软件源已归档(EOL),扩展 "+ext+" 所需的系统依赖无法自动安装;5.6 仅支持无需系统库的内置扩展(如 opcache/bcmath/mysqli 等)")
-				return
+		// gd 编译参数分版本:7.4 起参数改名(freetype-dir → freetype)
+		conf := meta.Conf
+		if ext == "gd" {
+			if vout, verr := dockerx.ExecIn(container, "php", "-r", "echo PHP_VERSION_ID;"); verr == nil {
+				if id, e := strconv.Atoi(strings.TrimSpace(vout)); e == nil && id < 70400 {
+					conf = "--with-freetype-dir=/usr/include/ --with-jpeg-dir=/usr/include/"
+				}
 			}
 		}
 		// 已加载守卫:避免重复安装产生混乱状态(opcache 在 PHP 8.4 php -m 显示为 "Zend OPcache")
@@ -360,13 +368,18 @@ func (s *Server) handleAppRuntimeAction(w http.ResponseWriter, r *http.Request) 
 		}
 		t, err := taskx.M.Start("php-ext-"+ext, func(w io.Writer) error {
 			fmt.Fprintln(w, "安装 PHP 扩展:", ext, "("+map[bool]string{true: "PECL", false: "源码内置"}[meta.Pecl]+")")
-			// 1) 系统依赖(镜像默认不含图形/压缩等开发库)
+			// 1) 系统依赖(镜像默认不含图形/压缩等开发库;EOL 版本软件源归档时
+			//    自动切换 archive.debian.org,5.6/7.4 等老版本照常可装)
 			if strings.TrimSpace(meta.Deps) != "" {
 				fmt.Fprintln(w, "[1/3] 安装系统依赖: "+meta.Deps)
 				if err := util.RunWithTimeoutWriter(5*time.Minute, w, "docker", "exec", container, "sh", "-c",
-					"apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "+meta.Deps); err != nil {
-					return fmt.Errorf("系统依赖安装失败(请检查扩展是否适配当前系统): %v", err)
+					appstore.DebArchiveFallbackSh+"; DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "+meta.Deps); err != nil {
+					return fmt.Errorf("系统依赖安装失败(已尝试归档源兜底): %v", err)
 				}
+				// 老 PHP(<7.0)的 configure 不认 Debian multiarch 头文件目录
+				// (/usr/include/<arch>/gmp.h 等),平铺到 /usr/include 兜底
+				_, _ = dockerx.ExecIn(container, "sh", "-c",
+					"if [ -d /usr/include/x86_64-linux-gnu ]; then cp -an /usr/include/x86_64-linux-gnu/*.h /usr/include/ 2>/dev/null; fi; true")
 			}
 			// 2) 编译安装
 			if meta.Pecl {
@@ -378,9 +391,9 @@ func (s *Server) handleAppRuntimeAction(w http.ResponseWriter, r *http.Request) 
 					return fmt.Errorf("启用扩展失败: %v", e)
 				}
 			} else {
-				if strings.TrimSpace(meta.Conf) != "" {
-					fmt.Fprintln(w, "[2/3] 配置编译参数: "+meta.Conf)
-					confArgs := append([]string{"exec", container, "docker-php-ext-configure", ext}, strings.Fields(meta.Conf)...)
+				if strings.TrimSpace(conf) != "" {
+					fmt.Fprintln(w, "[2/3] 配置编译参数: "+conf)
+					confArgs := append([]string{"exec", container, "docker-php-ext-configure", ext}, strings.Fields(conf)...)
 					if err := util.RunWithTimeoutWriter(5*time.Minute, w, "docker", confArgs...); err != nil {
 						return fmt.Errorf("编译配置失败: %v", err)
 					}
@@ -393,6 +406,21 @@ func (s *Server) handleAppRuntimeAction(w http.ResponseWriter, r *http.Request) 
 			// 3) 重启加载
 			fmt.Fprintln(w, "[3/3] 重启容器加载扩展 ...")
 			return util.RunWithTimeoutWriter(60*time.Second, w, "docker", "restart", container)
+		})
+		if err != nil {
+			Fail(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		OK(w, map[string]string{"task_id": t.ID})
+	case "php-rebuild-image":
+		// 重建 PHP 定制镜像(内置常用扩展,保留 php.ini/conf.d 与已装扩展)
+		// 并用新镜像重建容器;旧版官方镜像的存量实例借此升级
+		if !isPHPRuntimeKey(key) {
+			Fail(w, http.StatusBadRequest, "仅 PHP 运行时支持重建镜像")
+			return
+		}
+		t, err := taskx.M.Start("php-image-"+key, func(w io.Writer) error {
+			return appstore.RebuildPHPImage(key, w)
 		})
 		if err != nil {
 			Fail(w, http.StatusInternalServerError, err.Error())

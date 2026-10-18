@@ -389,9 +389,23 @@ function promptDlg(title, fields) {
 function taskModal(taskId, onDone) {
   // 必须用独立浮层:调用方常常刚 close 掉上一个 modal(),
   // 而 modal() 复用同一个 #modal-box 且 close 是 140ms 延迟清理,会把这个刚创建的任务弹窗清空
+  let fired = false;
+  const fire = (status) => { if (fired) return; fired = true; if (onDone) onDone(status); };
   const m = openLayer({
     title: "任务执行中",
     width: 680,
+    onClose: async function() {
+      // 任意关闭路径(后台运行/×/完成)都回传任务最新状态,页面据此刷新:
+      // 此前「后台运行」不触发 onDone,页面不刷新导致依赖最新数据的表单(如
+      // PHP 多版本端口)用到过期数据
+      stopped = true;
+      if (fired) return;
+      try {
+        const t = await api("/tasks/" + taskId);
+        if (t.status === "failed") toast("任务失败: " + (t.error || ""), "error", 5000);
+        fire(t.status);
+      } catch (e) { fire("unknown"); }
+    },
     body: '<div id="task-progress" style="display:none;margin-bottom:10px">' +
       '<div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:6px">' +
       '<span id="task-stage"></span><span class="mono" id="task-pct"></span></div>' +
@@ -408,7 +422,7 @@ function taskModal(taskId, onDone) {
   const pctEl = qs("#task-pct", m.el);
   const wrapEl = qs("#task-progress", m.el);
   qs('[data-act="bg"]', m.el).onclick = () => m.close();
-  doneBtn.onclick = () => { m.close(); if (onDone) onDone(); };
+  doneBtn.onclick = () => m.close();
   let stopped = false;
   const poll = async () => {
     if (stopped) return;
@@ -429,16 +443,13 @@ function taskModal(taskId, onDone) {
         doneBtn.disabled = false;
         if (t.progress && t.progress.total > 0) { barEl.style.width = "100%"; stageEl.textContent = t.status === "success" ? "全部完成" : "失败"; }
         if (t.status === "failed") toast("任务失败: " + (t.error || ""), "error", 5000);
-        if (onDone) onDone(t.status);
-        onDone = null;
+        fire(t.status);
         return;
       }
     } catch (e) { /* ignore */ }
     setTimeout(poll, 1200);
   };
   poll();
-  const origClose = m.close;
-  m.close = () => { stopped = true; origClose(); };
   return m;
 }
 

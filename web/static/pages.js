@@ -2699,7 +2699,9 @@ PAGES.apps = {
     };
   },
   installDialog(el, t) {
-    // PHP 多版本:端口默认避开已装实例的端口
+    // PHP 多版本:端口默认避开已装实例的端口。
+    // window.__phpUsedPorts 可能过期(装完未刷新页面),打开弹窗时再拉一次
+    // 最新实例数据修正默认值;后端亦有端口防撞兜底
     var usedPorts = {};
     (window.__phpUsedPorts || []).forEach(function(x) { usedPorts[x] = 1; });
     var defPort = function(p0) {
@@ -2752,7 +2754,24 @@ PAGES.apps = {
     })();
     m.el.querySelector('[data-act="no"]').onclick = m.close;
     m.el.querySelector('[data-act="yes"]').onclick = function() {
-      var params = {};
+      // 打开弹窗时拉取最新实例端口,修正默认值(避免页面数据过期导致撞端口)
+    if (t.key === "php") {
+      api("/apps/instances").then(function(insts) {
+        (insts || []).forEach(function(x) {
+          if (x.key === "php" || /^php[0-9]+$/.test(x.key)) {
+            var pn = x.params && x.params.Port;
+            if (pn) usedPorts[String(pn)] = 1;
+          }
+        });
+        var inp = m.el.querySelector('[data-k="Port"]');
+        if (inp && usedPorts[inp.value]) {
+          var n = parseInt(inp.value, 10) || 8088;
+          while (usedPorts[String(n)]) n++;
+          inp.value = String(n);
+        }
+      }).catch(function() {});
+    }
+    var params = {};
       m.el.querySelectorAll("[data-k]").forEach(function(inp) { params[inp.getAttribute("data-k")] = inp.value.trim(); });
       for (var pi in t.params || []) {
         var pp = t.params[pi];

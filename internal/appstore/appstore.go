@@ -873,6 +873,23 @@ func Install(key string, params map[string]string) (string, error) {
 			return "", err
 		}
 		key = instKey
+		// 端口防撞兜底:前端默认端口可能基于过期数据(装完未刷新),
+		// 与已有 PHP 实例撞端口会导致 compose up 失败——自动顺延到空闲端口
+		port, _ := strconv.Atoi(strings.TrimSpace(params["Port"]))
+		if port > 0 {
+			used := map[int]bool{}
+			for _, it := range loadInstances() {
+				if it.Key == key || IsPHPRuntimeKey(it.Key) {
+					if pn, e := strconv.Atoi(strings.TrimSpace(it.Params["Port"])); e == nil {
+						used[pn] = true
+					}
+				}
+			}
+			for used[port] {
+				port++
+			}
+			params["Port"] = strconv.Itoa(port)
+		}
 	} else {
 		// 非 PHP 应用:已安装即返回明确错误。重复安装会覆盖 compose 并与
 		// 运行中的容器撞名/撞端口,任务只报"compose up -d 失败"让用户一头雾水

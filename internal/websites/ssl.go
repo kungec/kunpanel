@@ -43,6 +43,11 @@ func (c CertInfo) renewDueDays() int {
 
 func sslDir() string { return filepath.Join(config.DataDir(), "ssl") }
 
+// CertFilePath / KeyFilePath 站点证书与私钥文件路径(导出:面板 SSL 从站点
+// 证书导入时读取文件内容)
+func CertFilePath(id string) string { return certCrtPath(id) }
+func KeyFilePath(id string) string  { return certKeyPath(id) }
+
 func certMetaPath(id string) string  { return filepath.Join(sslDir(), id+".json") }
 func certCrtPath(id string) string   { return filepath.Join(sslDir(), id+".crt") }
 func certKeyPath(id string) string   { return filepath.Join(sslDir(), id+".key") }

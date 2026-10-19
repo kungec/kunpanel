@@ -590,6 +590,41 @@ function taskCenter() {
   _tcTimer = setInterval(render, 3000);
 }
 
+/* ---------- 服务器文件选择器(点目录进入,点文件回填) ---------- */
+function serverFilePicker(onPick, startPath) {
+  let cur = startPath || "/";
+  const m = openLayer({
+    title: "选择服务器文件",
+    width: 640,
+    body: '<div id="sfp-crumb" class="help mono" style="margin-bottom:8px;word-break:break-all"></div>' +
+      '<div id="sfp-list" style="max-height:46vh;overflow:auto;border:1px solid var(--border-light);border-radius:8px"></div>' +
+      '<div class="help" style="margin-top:8px">点击目录进入,点击文件选择(面板有权限读取的文件均可)</div>',
+    footer: '<button class="btn btn-plain" data-act="close">关 闭</button>',
+  });
+  qs('[data-act="close"]', m.el).onclick = m.close;
+  const row = (marker, name, attr, val) =>
+    '<div class="sfp-row" ' + attr + '="' + esc(val) + '"><span class="help" style="margin:0 6px 0 0;display:inline">' + marker + "</span>" + esc(name) + "</div>";
+  const load = async (p) => {
+    cur = p;
+    qs("#sfp-crumb", m.el).textContent = cur;
+    const box = qs("#sfp-list", m.el);
+    box.innerHTML = '<div class="boot-loading" style="height:50px"><div class="spinner"></div></div>';
+    try {
+      const d = await api("/files?path=" + encodeURIComponent(p));
+      const base = d.path === "/" ? "" : d.path;
+      let html = d.parent && d.parent !== d.path ? row("..(上级目录)", "", "data-go", d.parent) : "";
+      (d.entries || []).slice().sort((a, b) => (b.dir ? 1 : 0) - (a.dir ? 1 : 0) || String(a.name).localeCompare(String(b.name))).forEach((e) => {
+        const full = (base === "" ? "" : base) + "/" + e.name;
+        html += e.dir ? row("[目录]", e.name, "data-go", full) : row("[文件]", e.name, "data-file", full);
+      });
+      box.innerHTML = html || '<div class="help" style="padding:10px">空目录</div>';
+      qsa("[data-go]", box).forEach((x) => (x.onclick = () => load(x.dataset.go)));
+      qsa("[data-file]", box).forEach((x) => (x.onclick = () => { onPick(x.dataset.file); m.close(); }));
+    } catch (e) { box.innerHTML = emptyState("warn", "读取失败", e.message); }
+  };
+  load(cur);
+}
+
 /* ---------- 环形仪表 ---------- */
 function ring(pct, label) {
   const size = 108, sw = 9, r = (size - sw) / 2 - 1, c = 2 * Math.PI * r;

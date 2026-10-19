@@ -73,13 +73,25 @@ func (s *Server) handlePanelSSLGet(w http.ResponseWriter, r *http.Request) {
 // handlePanelSSLSave 保存证书/开关;变更后需重启面板生效
 func (s *Server) handlePanelSSLSave(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Enabled bool   `json:"enabled"`
-		Cert    string `json:"cert"`
-		Key     string `json:"key"`
+		Enabled  bool   `json:"enabled"`
+		Cert     string `json:"cert"`
+		Key      string `json:"key"`
+		CertPath string `json:"cert_path"` // 从服务器文件导入(与 cert/key 内容二选一)
+		KeyPath  string `json:"key_path"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		Fail(w, http.StatusBadRequest, "参数错误")
 		return
+	}
+	// 从服务器文件路径导入:读取文件后走同一套配对校验与落盘(复制语义,
+	// 之后源文件变动不影响面板)
+	if req.Cert == "" && req.Key == "" && (strings.TrimSpace(req.CertPath) != "" || strings.TrimSpace(req.KeyPath) != "") {
+		cb, kb, err := readPEMFiles(req.CertPath, req.KeyPath)
+		if err != nil {
+			Fail(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		req.Cert, req.Key = cb, kb
 	}
 	_ = os.MkdirAll(filepath.Dir(panelSSLCert()), 0o755)
 	if req.Cert != "" || req.Key != "" {
@@ -140,6 +152,28 @@ func (s *Server) handlePanelSSLSelfSign(w http.ResponseWriter, r *http.Request) 
 	}
 	_ = os.Chmod(panelSSLKey(), 0o600)
 	OK(w, "自签证书已生成(浏览器会提示不受信任,属正常现象)")
+}
+
+// handlePanelSSLSiteCerts 已有站点证书列表(供「从站点证书导入」下拉选择):
+// 返回面板签发/保存过的站点证书及其文件路径
+func (s *Server) handlePanelSSLSiteCerts(w http.ResponseWriter, r *http.Request) {
+	list := websites.ListCerts()
+	type row struct {
+		ID       string `json:"id"`
+		Domains  string `json:"domains"`
+		Expire   string `json:"expire"`
+		Category string `json:"category,omitempty"`
+		CertPath string `json:"cert_path"`
+		KeyPath  string `json:"key_path"`
+	}
+	out := make([]row, 0, len(list))
+	for _, c := range list {
+		out = append(out, row{
+			ID: c.ID, Domains: c.Domains, Expire: c.Expire,
+			CertPath: websites.CertFilePath(c.ID), KeyPath: websites.KeyFilePath(c.ID),
+		})
+	}
+	OK(w, out)
 }
 
 // handlePanelSSLIssueLE 为面板申请 Let's Encrypt 证书(DNS API 验证)

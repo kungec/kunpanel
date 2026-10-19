@@ -66,6 +66,9 @@ a:hover { color: var(--primary-hover); }
 ::-webkit-scrollbar-thumb { background: #cbd5e0; border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: #a0aec0; }
 ::-webkit-scrollbar-track { background: transparent; }
+/* 服务器文件选择器行 */
+.sfp-row { padding: 8px 12px; cursor: pointer; border-bottom: 1px solid var(--border-light); font-size: 12.5px; display: flex; align-items: center; }
+.sfp-row:hover { background: var(--primary-light, rgba(67,97,238,.08)); }
 h1,h2,h3,h4 { letter-spacing: -.02em; }
 
 /* ================= 动画 ================= */

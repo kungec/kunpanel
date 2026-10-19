@@ -4714,6 +4714,17 @@ PAGES.settings = {
         '<div class="form-item"><label>上传证书(PEM)</label>' +
         '<textarea class="textarea mono" id="ps-cert" rows="3" placeholder="证书内容(BEGIN CERTIFICATE ...),留空沿用已存证书"></textarea>' +
         '<textarea class="textarea mono" id="ps-key" rows="3" placeholder="私钥内容(BEGIN PRIVATE KEY ...)" style="margin-top:6px"></textarea></div>' +
+        '<div class="settings-row" style="margin-top:10px"><label>从服务器文件导入(与粘贴内容二选一)</label></div>' +
+        '<div class="settings-row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
+        '<span class="help" style="margin:0;width:64px">证书文件</span>' +
+        '<input class="input mono" id="ps-cert-path" placeholder="如 /etc/ssl/private/fullchain.pem" style="flex:1;min-width:200px">' +
+        '<button class="btn btn-plain btn-sm" id="ps-cert-browse">浏览</button></div>' +
+        '<div class="settings-row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
+        '<span class="help" style="margin:0;width:64px">私钥文件</span>' +
+        '<input class="input mono" id="ps-key-path" placeholder="如 /etc/ssl/private/privkey.pem" style="flex:1;min-width:200px">' +
+        '<button class="btn btn-plain btn-sm" id="ps-key-browse">浏览</button></div>' +
+        '<div class="settings-row"><label>从已有站点证书导入</label><select class="select" id="ps-site-cert" style="max-width:100%"><option value="">选择站点证书…</option></select>' +
+        '<div class="help">列出「网站」页已申请/上传的证书,选择后自动填入上方文件路径;导入为复制语义,之后源文件变动不影响面板</div></div>' +
         '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">' +
         '<button class="btn btn-primary btn-sm" id="ps-ssl-save">保存并重启面板</button>' +
         '<button class="btn btn-plain btn-sm" id="ps-selfsign">一键生成自签证书</button></div>' +
@@ -4779,6 +4790,37 @@ PAGES.settings = {
         };
         sslCheckbox.parentNode.appendChild(closeSslBtn);
       }
+      // 从服务器文件导入:浏览按钮(目录+文件逐级选择)
+      var wireBrowse = function(btnId, inputId) {
+        var btn = body.querySelector(btnId);
+        if (!btn) return;
+        btn.onclick = function() {
+          serverFilePicker(function(p) { body.querySelector(inputId).value = p; });
+        };
+      };
+      wireBrowse("#ps-cert-path", "#ps-cert-browse");
+      wireBrowse("#ps-key-path", "#ps-key-browse");
+      // 从已有站点证书导入:下拉选择后自动填入文件路径
+      (async function() {
+        var sel = body.querySelector("#ps-site-cert");
+        if (!sel) return;
+        try {
+          var list = (await api("/panel/ssl/site-certs")) || [];
+          if (list.length) {
+            sel.innerHTML = '<option value="">选择站点证书…</option>' + list.map(function(c) {
+              return '<option value="' + esc(c.id) + '" data-cert="' + esc(c.cert_path) + '" data-key="' + esc(c.key_path) + '">' +
+                esc(c.domains || c.id) + "(剩 " + (c.expire || "-") + ")</option>";
+            }).join("");
+          }
+        } catch (e) { /* 下拉不可用不影响手填 */ }
+        sel.onchange = function() {
+          var o = sel.options[sel.selectedIndex];
+          if (o && o.value) {
+            body.querySelector("#ps-cert-path").value = o.getAttribute("data-cert") || "";
+            body.querySelector("#ps-key-path").value = o.getAttribute("data-key") || "";
+          }
+        };
+      })();
       // 当前证书状态卡:类别/域名/有效期(自签、上传、LE 申请的都显示)
       (async function() {
         var box = body.querySelector("#ps-ssl-status");
@@ -4909,7 +4951,10 @@ PAGES.settings = {
         const on = sslCheckbox ? sslCheckbox.checked : qs("#ps-ssl-on", body).checked;
         const cert = qs("#ps-cert", body).value.trim();
         const key = qs("#ps-key", body).value.trim();
-        if (on && !st.hasCert && !cert) { toast("请先上传证书或生成自签证书", "error"); return; }
+        const certPath = qs("#ps-cert-path", body).value.trim();
+        const keyPath = qs("#ps-key-path", body).value.trim();
+        if ((certPath !== "") !== (keyPath !== "")) { toast("证书文件与私钥文件需同时填写", "error"); return; }
+        if (on && !st.hasCert && !cert && certPath === "") { toast("请先上传证书或生成自签证书", "error"); return; }
         // 跳转协议必须跟随开关方向:关 HTTPS 后仍跳 https 会把自己失联
         if (on) {
           if (!(await confirmDlg("面板将以 <b>HTTPS</b> 模式重启,重启后请使用 <b>https://</b> 访问面板<br><span style='font-size:12px;color:var(--text-3)'>自签证书浏览器会提示不受信任;若证书异常,面板会自动回退 HTTP,不会失联</span>", { danger: false }))) return;
@@ -4917,7 +4962,7 @@ PAGES.settings = {
           if (!(await confirmDlg("确定关闭面板 HTTPS 吗?面板重启后将回退 <b>HTTP</b>,请改用 <b>http://</b> 访问面板", { danger: true }))) return;
         }
         try {
-          await api("/panel/ssl", { method: "POST", body: { enabled: on, cert: cert, key: key } });
+          await api("/panel/ssl", { method: "POST", body: { enabled: on, cert: cert, key: key, cert_path: certPath, key_path: keyPath } });
           toast("保存成功,面板正在重启...", "info", 5000);
           setTimeout(function() {
             location.href = on

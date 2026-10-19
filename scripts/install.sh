@@ -383,11 +383,31 @@ fi
 
 # ---------------- 等待就绪并输出信息 ----------------
 sleep 2
-LOCAL_IP=$(ip -4 addr show scope global 2>/dev/null | grep -oE '(?<=inet )[0-9.]+' 2>/dev/null || true)
-if [[ -z "$LOCAL_IP" ]]; then
-  LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+# 面板地址优先展示公网 IP:Oracle/AWS/GCP 等云主机网卡上只有内网 IP(公网为
+# 云上 NAT 映射),取本机网卡会显示 10.x 内网地址。依次尝试多个公网 IP 检测
+# 服务(单个 4s 超时),全部失败再回退本机网卡地址
+PUBLIC_IP=""
+for svc in "https://api.ipify.org" "https://ifconfig.me/ip" "https://ipv4.icanhazip.com" "https://ip.3322.net"; do
+  PUBLIC_IP=$(curl -s -m 4 "$svc" 2>/dev/null | grep -oE '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | head -1)
+  [[ -n "$PUBLIC_IP" ]] && break
+done
+LOCAL_IP=""
+if [[ -n "$PUBLIC_IP" ]]; then
+  LOCAL_IP="$PUBLIC_IP"
+else
+  LOCAL_IP=$(ip -4 addr show scope global 2>/dev/null | awk '/inet /{print $2}' | head -1)
+  if [[ -z "$LOCAL_IP" ]]; then
+    LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+  fi
+  [[ -z "$LOCAL_IP" ]] && LOCAL_IP="127.0.0.1"
 fi
-[[ -z "$LOCAL_IP" ]] && LOCAL_IP="127.0.0.1"
+# NAT 网络标记:公网 IP 与网卡 IP 不同(如甲骨文/AWS),需在云控制台放行端口
+IS_NAT="0"
+if [[ -n "$PUBLIC_IP" ]]; then
+  for ip in $(hostname -I 2>/dev/null); do
+    [[ "$ip" == "$PUBLIC_IP" ]] && IS_NAT="1"
+  done
+fi
 
 echo
 REAL_VER=$("$KP_DIR/bin/kunpanel" --version 2>/dev/null | awk '{print $2}')
@@ -406,5 +426,8 @@ if [[ -f "$KP_DIR/data/initial_password.txt" ]]; then
   echo "            直接访问 http://IP:端口 返回 404,请牢记上方面板地址"
 else
   echo "  面板已在运行,初始账号信息: cat $KP_DIR/data/initial_password.txt"
+fi
+if [[ "$IS_NAT" == "0" && -n "$PUBLIC_IP" ]]; then
+  warn "检测到 NAT 网络(公网 IP 与网卡 IP 不同,如甲骨文/AWS):除本机防火墙外,还需在云控制台的安全列表/安全组放行 TCP $PORT_HINT,并用公网 IP 访问面板"
 fi
 echo "=============================================================="

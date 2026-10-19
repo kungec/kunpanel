@@ -279,6 +279,40 @@ func (s *Server) handleAppRuntimeInfo(w http.ResponseWriter, r *http.Request) {
 		if v, err := dockerx.ExecIn(container, "redis-server", "--version"); err == nil {
 			out["version"] = strings.TrimSpace(strings.SplitN(v, "\n", 2)[0])
 		}
+	} else if key == "python" {
+		if v, err := dockerx.ExecIn(container, "python3", "--version"); err == nil {
+			out["version"] = strings.TrimSpace(v)
+		}
+		if m, err := dockerx.ExecIn(container, "pip3", "list", "--format=freeze"); err == nil {
+			var exts []string
+			for _, line := range strings.Split(m, "\n") {
+				if line = strings.TrimSpace(line); line != "" && !strings.Contains(line, "WARNING") {
+					exts = append(exts, line)
+				}
+			}
+			out["extensions"] = exts
+		}
+		out["workdir"] = "/app"
+	} else if key == "nodejs" {
+		if v, err := dockerx.ExecIn(container, "node", "--version"); err == nil {
+			out["version"] = strings.TrimSpace(v)
+		}
+		if m, err := dockerx.ExecIn(container, "npm", "ls", "--global", "--depth=0"); err == nil {
+			var exts []string
+			for _, line := range strings.Split(m, "\n") {
+				line = strings.TrimSpace(line)
+				if line != "" && !strings.HasPrefix(line, "/") && !strings.HasPrefix(line, "─") && !strings.Contains(line, "npm ls") {
+					exts = append(exts, strings.TrimPrefix(line, "└── "))
+				}
+			}
+			out["extensions"] = exts
+		}
+		out["workdir"] = "/app"
+	} else if key == "golang" {
+		if v, err := dockerx.ExecIn(container, "go", "version"); err == nil {
+			out["version"] = strings.TrimSpace(v)
+		}
+		out["workdir"] = "/app"
 	} else {
 		sub := "-v"
 		if key == "openresty" {

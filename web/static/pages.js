@@ -2185,6 +2185,7 @@ PAGES.apps = {
           html += '<td>' + statusTag + '</td>';
           var canManage = r.key === "nginx" || r.key === "openresty" ||
             r.key === "mysql" || r.key === "mariadb" || r.key === "postgresql" || r.key === "redis" ||
+            r.key === "python" || r.key === "nodejs" || r.key === "golang" ||
             /^php[0-9]*$/.test(r.key);
           html += '<td><div style="display:flex;gap:4px;flex-wrap:wrap">';
           if (canManage) html += '<button class="btn btn-sm btn-primary" data-app-mgr="' + r.key + '">管理</button>';
@@ -2202,7 +2203,11 @@ PAGES.apps = {
             var dis = (a === "start" && running) || (a !== "start" && missing) || (a === "stop" && !running);
             html += '<button class="btn btn-sm btn-plain" data-app-act="' + a + '" data-app-key="' + r.key + '"' + (dis ? " disabled" : "") + ">" + actNames[a] + '</button>';
           });
-          html += '<button class="btn btn-sm btn-danger-plain" data-app-act="uninstall" data-app-key="' + r.key + '"' + (missing ? ' title="清除安装记录' + '" data-clear="1"' : '') + '>' + (missing ? "清除" : "卸载") + '</button></div></td></tr>';
+          html += '<button class="btn btn-sm btn-danger-plain" data-app-act="uninstall" data-app-key="' + r.key + '"' + (missing ? ' title="清除安装记录' + '" data-clear="1"' : '') + '>' + (missing ? "清除" : "卸载") + '</button>';
+          if (r.status === "running" && (r.key === "python" || r.key === "nodejs" || r.key === "golang")) {
+            html += '<a class="btn btn-sm btn-plain" href="#/terminal?container=kun-' + esc(r.key) + '">终端</a>';
+          }
+          html += '</div></td></tr>';
         });
         html += '</tbody></table></div>';
       }

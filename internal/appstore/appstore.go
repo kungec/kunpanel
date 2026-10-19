@@ -613,6 +613,130 @@ networks:
 			},
 			WebURL: func(p map[string]string) string { return fmt.Sprintf("http://<IP>:%s", pval(p, "HttpPort", "2019")) },
 		},
+
+		{
+			Key: "python", Name: "Python 运行环境", Category: "运行环境", Icon: "code", Version: "多版本可选",
+			Desc: "官方 Python 运行环境容器:挂载 app 目录跑脚本/服务,配合网页终端直接执行,支持 pip 安装依赖",
+			Params: []Param{
+				{Key: "Version", Label: "Python 版本", Default: "3.12", Type: "select", Required: true,
+					Options: []string{"3.12", "3.11", "3.10", "3.9"},
+					Help: "slim 精简镜像;进入终端后 python / pip 即用,工作目录 /app"},
+			},
+			ComposeFrom: func(p map[string]string) string {
+				return fmt.Sprintf(`services:
+  python:
+    image: python:%s-slim
+    container_name: kun-python
+    restart: always
+    working_dir: /app
+    stdin_open: true
+    tty: true
+    command: sleep infinity
+    volumes:
+      - ./app:/app
+`, pval(p, "Version", "3.12"))
+			},
+		},
+		{
+			Key: "nodejs", Name: "Node.js 运行环境", Category: "运行环境", Icon: "code", Version: "多版本可选",
+			Desc: "官方 Node.js 运行环境容器:挂载 app 目录跑脚本/服务,自带 npm,配合网页终端使用",
+			Params: []Param{
+				{Key: "Version", Label: "Node.js 版本", Default: "22", Type: "select", Required: true,
+					Options: []string{"22", "20", "18"},
+					Help: "slim 精简镜像;进入终端后 node / npm 即用,工作目录 /app"},
+			},
+			ComposeFrom: func(p map[string]string) string {
+				return fmt.Sprintf(`services:
+  nodejs:
+    image: node:%s-slim
+    container_name: kun-nodejs
+    restart: always
+    working_dir: /app
+    stdin_open: true
+    tty: true
+    command: sleep infinity
+    volumes:
+      - ./app:/app
+`, pval(p, "Version", "22"))
+			},
+		},
+		{
+			Key: "golang", Name: "Go 运行环境", Category: "运行环境", Icon: "code", Version: "多版本可选",
+			Desc: "官方 Go 构建与运行环境容器:挂载 app 目录写代码,终端内 go build / go run",
+			Params: []Param{
+				{Key: "Version", Label: "Go 版本", Default: "1.23", Type: "select", Required: true,
+					Options: []string{"1.23", "1.22", "1.21"},
+					Help: "标准 bookworm 镜像;进入终端后 go 即用,工作目录 /app(GOPATH=/go)"},
+			},
+			ComposeFrom: func(p map[string]string) string {
+				return fmt.Sprintf(`services:
+  golang:
+    image: golang:%s
+    container_name: kun-golang
+    restart: always
+    working_dir: /app
+    stdin_open: true
+    tty: true
+    command: sleep infinity
+    volumes:
+      - ./app:/app
+`, pval(p, "Version", "1.23"))
+			},
+		},
+		{
+			Key: "apache", Name: "Apache", Category: "Web服务器", Icon: "globe", Version: "2.4",
+			Desc: "全球使用最广的 Web 服务器(Apache HTTP Server):挂载 htdocs 目录即放静态站点,支持 .htaccess",
+			Params: []Param{
+				{Key: "HttpPort", Label: "HTTP 端口", Default: "8080", Type: "port", Required: true,
+					Help: "对外 HTTP 端口(注意勿与 Nginx/OpenResty 的 80 冲突)"},
+			},
+			ComposeFrom: func(p map[string]string) string {
+				return fmt.Sprintf(`services:
+  apache:
+    image: httpd:2.4
+    container_name: kun-apache
+    restart: unless-stopped
+    ports:
+      - "%s:80"
+    volumes:
+      - ./htdocs:/usr/local/apache2/htdocs
+`, pval(p, "HttpPort", "8080"))
+			},
+			WebURL: func(p map[string]string) string { return fmt.Sprintf("http://<IP>:%s", pval(p, "HttpPort", "8080")) },
+		},
+		{
+			Key: "vsftpd", Name: "FTP 服务(vsftpd)", Category: "运行环境", Icon: "folder", Version: "latest",
+			Desc: "vsftpd FTP 服务端:账号密码登录,支持被动模式,FTP 客户端直连管理文件",
+			Params: []Param{
+				{Key: "Port", Label: "FTP 端口", Default: "21", Type: "port", Required: true},
+				{Key: "PasvMin", Label: "被动模式起始端口", Default: "21100", Type: "port", Required: true},
+				{Key: "PasvMax", Label: "被动模式结束端口", Default: "21110", Type: "port", Required: true},
+				{Key: "User", Label: "FTP 用户名", Default: "ftpuser", Type: "text", Required: true},
+				{Key: "Password", Label: "FTP 密码", Default: "", Type: "password", Required: true},
+				{Key: "PasvAddress", Label: "被动模式公网 IP", Default: "", Type: "text",
+					Help: "云服务器(甲骨文/AWS 等 NAT 网络)必填公网 IP,否则被动模式无法连接"},
+			},
+			ComposeFrom: func(p map[string]string) string {
+				return fmt.Sprintf(`services:
+  vsftpd:
+    image: fauria/vsftpd
+    container_name: kun-vsftpd
+    restart: unless-stopped
+    ports:
+      - "%s:21"
+      - "%s-%s:21100-21110"
+    environment:
+      FTP_USER: "%s"
+      FTP_PASS: "%s"
+      PASV_ADDRESS: "%s"
+      PASV_MIN_PORT: "21100"
+      PASV_MAX_PORT: "21110"
+    volumes:
+      - ./data:/home/vsftpd
+`, pval(p, "Port", "21"), pval(p, "PasvMin", "21100"), pval(p, "PasvMax", "21110"),
+					pval(p, "User", "ftpuser"), pval(p, "Password", ""), pval(p, "PasvAddress", ""))
+			},
+		},
 	}
 }
 

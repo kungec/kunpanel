@@ -102,6 +102,11 @@ func (s *Server) registerAPI() {
 	m.Handle("GET /api/v1/ssh", wrap(http.HandlerFunc(s.handleSSHStatus)))
 	m.Handle("POST /api/v1/ssh/port", wrap(http.HandlerFunc(s.handleSSHPort)))
 	m.Handle("POST /api/v1/ssh/hardening", wrap(http.HandlerFunc(s.handleSSHHardening)))
+	m.Handle("GET /api/v1/ssh/fail2ban", wrap(http.HandlerFunc(s.handleF2BStatus)))
+	m.Handle("POST /api/v1/ssh/fail2ban/enable", wrap(http.HandlerFunc(s.handleF2BEnable)))
+	m.Handle("POST /api/v1/ssh/fail2ban/disable", wrap(http.HandlerFunc(s.handleF2BDisable)))
+	m.Handle("POST /api/v1/ssh/fail2ban/params", wrap(http.HandlerFunc(s.handleF2BParams)))
+	m.Handle("POST /api/v1/ssh/fail2ban/unban", wrap(http.HandlerFunc(s.handleF2BUnban)))
 	m.Handle("POST /api/v1/ssh/keys", wrap(http.HandlerFunc(s.handleSSHKeyAdd)))
 	m.Handle("DELETE /api/v1/ssh/keys/{index}", wrap(http.HandlerFunc(s.handleSSHKeyRemove)))
 

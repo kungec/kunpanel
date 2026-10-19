@@ -1,12 +1,91 @@
 package server
 
 import (
+	"io"
 	"net/http"
 	"strconv"
 
 	"kunpanel/internal/secmgr"
+	"kunpanel/internal/taskx"
 	"kunpanel/internal/websites"
 )
+
+// ---------- SSH 防爆破(fail2ban) ----------
+
+func (s *Server) handleF2BStatus(w http.ResponseWriter, r *http.Request) {
+	st, err := secmgr.F2BStatus()
+	if err != nil {
+		Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	OK(w, st)
+}
+
+func (s *Server) handleF2BEnable(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		MaxRetry int `json:"max_retry"`
+		FindMin  int `json:"findtime_min"`
+		BanMin   int `json:"bantime_min"`
+	}
+	_ = readJSON(r, &req)
+	if req.MaxRetry <= 0 {
+		req.MaxRetry = 5
+	}
+	if req.FindMin <= 0 {
+		req.FindMin = 10
+	}
+	if req.BanMin <= 0 {
+		req.BanMin = 120
+	}
+	t, err := taskx.M.Start("ssh-fail2ban", func(w io.Writer) error {
+		return secmgr.F2BEnable(req.MaxRetry, req.FindMin, req.BanMin, w)
+	})
+	if err != nil {
+		Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	OK(w, map[string]string{"task_id": t.ID})
+}
+
+func (s *Server) handleF2BDisable(w http.ResponseWriter, r *http.Request) {
+	if err := secmgr.F2BDisable(); err != nil {
+		Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	OK(w, "已关闭 SSH 防爆破")
+}
+
+func (s *Server) handleF2BParams(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		MaxRetry int `json:"max_retry"`
+		FindMin  int `json:"findtime_min"`
+		BanMin   int `json:"bantime_min"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		Fail(w, http.StatusBadRequest, "参数错误")
+		return
+	}
+	if err := secmgr.F2BSetParams(req.MaxRetry, req.FindMin, req.BanMin); err != nil {
+		Fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	OK(w, "参数已更新")
+}
+
+func (s *Server) handleF2BUnban(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		IP string `json:"ip"`
+	}
+	if err := readJSON(r, &req); err != nil || req.IP == "" {
+		Fail(w, http.StatusBadRequest, "参数错误")
+		return
+	}
+	if err := secmgr.F2BUnban(req.IP); err != nil {
+		Fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	OK(w, "已解封 "+req.IP)
+}
 
 // ---------- SSH 安全 ----------
 

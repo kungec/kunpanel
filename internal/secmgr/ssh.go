@@ -193,7 +193,12 @@ func SetPort(port int) error {
 	}
 	// 启用中的防火墙先放行新端口,防止把自己锁在外面
 	openFirewallPort(port)
-	return apply(map[string]string{"Port": strconv.Itoa(port)})
+	if err := apply(map[string]string{"Port": strconv.Itoa(port)}); err != nil {
+		return err
+	}
+	// 防爆破 jail 已启用时同步监控新端口(改写 jail 的 port 行并重载)
+	syncJailPort(port)
+	return nil
 }
 
 // SetHardening Root 登录与密码认证开关;关闭密码认证前必须有公钥,否则拒绝

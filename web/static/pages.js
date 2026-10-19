@@ -3747,7 +3747,8 @@ PAGES.terminal = {
     var pageTitle = container ? "容器终端 · " + container : "Web 终端";
     var page = document.createElement("div");
     page.className = "term-page page-fade";
-    page.innerHTML = '<div class="term-header"><div class="left">' + I("terminal") + ' <b>' + esc(pageTitle) + '</b><span class="term-status off" id="t-status">连接中...</span></div><div style="display:flex;gap:10px;align-items:center"><button class="btn btn-sm btn-plain" id="t-reconnect">重连</button><button class="btn btn-sm btn-plain" id="t-clear">清屏</button></div></div><div class="term-body" id="t-body"><pre class="term-out" id="t-out"></pre></div><div class="term-input-hint">' + (container ? "输入 exit 退出容器" : "Ctrl+C 中断 · Ctrl+D 退出 · Tab 补全") + '</div>';
+    page.innerHTML = '<div class="term-header"><div class="left">' + I("terminal") + ' <b>' + esc(pageTitle) + '</b><span class="term-status off" id="t-status">连接中...</span></div><div style="display:flex;gap:10px;align-items:center"><button class="btn btn-sm btn-plain" id="t-reconnect">重连</button><button class="btn btn-sm btn-plain" id="t-clear">清屏</button></div></div><div class="term-body" id="t-body"><pre class="term-out" id="t-out"></pre></div><div class="term-input-hint">' + (container ? "输入 exit 退出容器" : "Ctrl+C 中断 · Ctrl+D 退出 · Tab 补全") + '</div>' +
+      (container ? "" : '<div style="padding:5px 14px;font-size:11.5px;color:var(--danger);background:color-mix(in srgb, var(--danger) 7%, transparent)">这是 root 权限终端:修改用户名 / SSH 配置 / 防火墙等误操作可能导致服务器失联,请谨慎执行</div>');
     el.appendChild(page);
     var out = qs("#t-out", page), status = qs("#t-status", page), body = qs("#t-body", page);
     var send = function(obj) { if (this.ws && this.ws.readyState === 1) this.ws.send(JSON.stringify(obj)); }.bind(this);
@@ -4447,7 +4448,7 @@ PAGES.ssh = {
         '<div class="settings-section"><div class="settings-section-title">修改 SSH 端口</div>' +
         '<div class="settings-row"><label>新端口</label><input class="input" id="ssh-port" type="number" value="' + st.port + '" style="max-width:160px">' +
         '<button class="btn btn-primary btn-sm" id="ssh-port-btn">修改端口</button></div>' +
-        '<div class="settings-hint">自动放行新端口(如防火墙已启用);修改后请用新端口重连。修改前请记牢当前端口。</div></div>' +
+        '<div class="settings-hint">自动放行新端口(如防火墙已启用);修改后请用新端口重连。修改前请记牢当前端口。<b>云主机(甲骨文/AWS 等)还需在云控制台安全列表放行新端口</b>,否则新连接会连不上(当前已连接会话不受影响,可随时回来改回)。</div></div>' +
         '<div class="settings-section"><div class="settings-section-title">登录加固</div>' +
         '<div class="settings-row"><label>Root 登录</label><select class="select" id="ssh-root" style="max-width:260px">' +
         rootOpt("yes", "允许 Root 直接登录(不安全)") +
@@ -4463,7 +4464,9 @@ PAGES.ssh = {
         '<div class="settings-section"><div class="settings-section-title">公钥管理(/root/.ssh/authorized_keys)</div>' +
         '<div class="settings-row"><label>添加公钥</label><textarea class="textarea" id="ssh-key-input" rows="2" placeholder="ssh-ed25519 AAAA... user@host" style="flex:1"></textarea></div>' +
         '<div class="settings-row"><label></label><button class="btn btn-primary btn-sm" id="ssh-key-add">添加公钥</button></div>' +
-        '<div id="ssh-keys">' + self.keyTable(st.keys || []) + "</div></div>";
+        '<div id="ssh-keys">' + self.keyTable(st.keys || []) + "</div></div>" +
+        '<div class="settings-section"><div class="settings-section-title">SSH 防爆破(失败次数过多自动封禁)</div>' +
+        '<div id="f2b-box">' + skeletonTable(2, 2, 90) + "</div></div>";
       el.innerHTML = html;
 
       qs("#ssh-port-btn", el).onclick = async function() {
@@ -4504,6 +4507,65 @@ PAGES.ssh = {
           } catch (e) { toast(e.message, "error"); }
         };
       });
+      // SSH 防爆破(fail2ban)状态与操作
+      (async function() {
+        var fbox = el.querySelector("#f2b-box");
+        if (!fbox) return;
+        var d;
+        try { d = await api("/ssh/fail2ban"); }
+        catch (e) { fbox.innerHTML = emptyState("warn", "加载失败", e.message); return; }
+        var enableBtn = function(label) {
+          return '<button class="btn btn-primary btn-sm" id="f2b-enable">' + label + "</button>" +
+            '<div class="settings-hint">安装 fail2ban 并按当前 SSH 端口(' + (d.port || st.port) + ")启用防爆破:同一 IP 登录失败次数过多自动封禁。需服务器可访问发行版软件源。部署在后台任务中执行。</div>";
+        };
+        if (!d.installed) {
+          fbox.innerHTML = '<div class="settings-row"><label>状态</label><span class="tag">未安装</span></div>' + enableBtn("一键安装并启用");
+        } else if (!d.jail_active) {
+          fbox.innerHTML = '<div class="settings-row"><label>状态</label><span class="tag tag-info">fail2ban 已安装,SSH 防爆破未启用</span></div>' + enableBtn("一键启用");
+        } else {
+          var chips = (d.banned || []).map(function(ip) {
+            return '<span class="mono" style="display:inline-flex;align-items:center;gap:4px;background:var(--bg-2);border-radius:6px;padding:2px 8px">' + esc(ip) +
+              ' <i data-unban="' + esc(ip) + '" style="cursor:pointer;color:var(--danger);font-style:normal;font-weight:bold" title="解封该 IP">×</i></span>';
+          }).join(" ");
+          fbox.innerHTML = '<div class="settings-row"><label>状态</label><span class="tag tag-success">防护中</span>' +
+            '<span class="help" style="margin:0 0 0 12px">失败 ' + d.max_retry + " 次 / " + d.findtime + " 分钟内 → 封禁 " + d.bantime + " 分钟 · 监控端口 " + (d.port || st.port) + "</span></div>" +
+            '<div class="settings-row"><label>当前封禁</label><div style="display:flex;gap:6px;flex-wrap:wrap">' + (chips || '<span class="help" style="margin:0">暂无封禁 IP</span>') + "</div></div>" +
+            '<div class="settings-row"><label>调整参数</label><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">' +
+            '<input class="input" id="f2b-retry" type="number" value="' + d.max_retry + '" style="width:120px" title="最大失败次数"><span class="help" style="margin:0">次失败</span>' +
+            '<input class="input" id="f2b-find" type="number" value="' + d.findtime + '" style="width:110px" title="统计窗口(分钟)"><span class="help" style="margin:0">分钟内</span>' +
+            '<input class="input" id="f2b-ban" type="number" value="' + d.bantime + '" style="width:110px" title="封禁时长(分钟)"><span class="help" style="margin:0">封禁分钟</span>' +
+            '<button class="btn btn-sm btn-primary" id="f2b-save">保存参数</button></div>' +
+            '<div class="help">已用 <b>' + (d.banned || []).length + "</b> 个 IP 被封禁;点击 IP 旁的 × 可手动解封</div></div>";
+        }
+        var en = el.querySelector("#f2b-enable");
+        if (en) en.onclick = async function() {
+          if (!(await confirmDlg("安装并启用 SSH 防爆破(fail2ban)?<br><span style='font-size:12px;color:var(--text-3)'>同一 IP 登录失败次数过多将自动封禁;需服务器能访问发行版软件源;部署在后台任务中执行</span>"))) return;
+          en.disabled = true; en.textContent = "部署中...";
+          try {
+            await api("/ssh/fail2ban/enable", { method: "POST", body: { max_retry: 5, findtime_min: 10, bantime_min: 120 } });
+            toast("SSH 防爆破已启用");
+            self.render(el);
+          } catch (e) { toast(e.message, "error", 8000); en.disabled = false; en.textContent = "一键安装并启用"; }
+        };
+        var sv = el.querySelector("#f2b-save");
+        if (sv) sv.onclick = async function() {
+          var bodyReq = {
+            max_retry: Number(el.querySelector("#f2b-retry").value) || 5,
+            findtime_min: Number(el.querySelector("#f2b-find").value) || 10,
+            bantime_min: Number(el.querySelector("#f2b-ban").value) || 120,
+          };
+          try { await api("/ssh/fail2ban/params", { method: "POST", body: bodyReq }); toast("参数已更新"); self.render(el); }
+          catch (e) { toast(e.message, "error", 6000); }
+        };
+        qsa("[data-unban]", el).forEach(function(x) {
+          x.onclick = async function() {
+            var ip = x.getAttribute("data-unban");
+            if (!(await confirmDlg("解封 <b class='mono'>" + esc(ip) + "</b>?", { danger: true }))) return;
+            try { await api("/ssh/fail2ban/unban", { method: "POST", body: { ip: ip } }); toast("已解封 " + ip); self.render(el); }
+            catch (e) { toast(e.message, "error", 6000); }
+          };
+        });
+      })();
     }).catch(function(e) {
       el.innerHTML = emptyState("warn", "无法读取 SSH 配置", e.message);
     });

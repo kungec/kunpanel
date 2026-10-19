@@ -41,6 +41,8 @@ PAGES.dashboard = {
       if (days <= (c.profile === "shortlived" ? 3 : 30)) expiring++;
     });
     var memPct = s.mem_percent || 0, cpuPct = s.cpu_percent || 0;
+    var hasSwap = (s.swap_total || 0) > 0;
+    var swapPct = hasSwap ? (s.swap_percent || 0) : 0;
     // 数据库 KPI = 各运行实例的业务库总数(与数据库页口径一致;databases 由后端统计)
     var dbTotal = dbs.reduce(function(a, r) { return a + (r.running ? r.databases || 0 : 0); }, 0);
 
@@ -69,6 +71,7 @@ PAGES.dashboard = {
       '<span class="net-line up">' + I("netUp") + ' <b id="live-tx">' + fmtSpeed(s.net_tx_speed) + "</b></span></span></div>" +
       bar("CPU 使用率", cpuPct, (s.cpu_cores || "-") + " 核 · " + esc((s.cpu_model || "-").split("@")[0].trim().slice(0, 24)), "", "live-cpu") +
       bar("内存使用", memPct, fmtBytes(s.mem_used) + " / " + fmtBytes(s.mem_total), "", "live-mem") +
+      (hasSwap ? bar("Swap 交换分区", swapPct, fmtBytes(s.swap_used) + " / " + fmtBytes(s.swap_total), "", "live-swap") : "") +
       bar("系统负载", Math.min(100, (s.load1 / Math.max(1, s.cpu_cores)) * 100), "1/5/15 分钟: " + s.load1 + " / " + s.load5 + " / " + s.load15, "", "live-load") +
       diskRows +
       "</div>" +
@@ -154,13 +157,14 @@ PAGES.dashboard = {
         if (el.dataset.route !== "dashboard") return;
         var s2 = d2.system;
         var pairs = [["live-cpu", (s2.cpu_percent || 0).toFixed(1) + "%"], ["live-mem", (s2.mem_percent || 0).toFixed(1) + "%"],
+          ["live-swap", (s2.swap_percent || 0).toFixed(1) + "%"],
           ["live-load", Math.min(100, (s2.load1 / Math.max(1, s2.cpu_cores)) * 100).toFixed(1) + "%"],
           ["live-rx", fmtSpeed(s2.net_rx_speed)], ["live-tx", fmtSpeed(s2.net_tx_speed)]];
         pairs.forEach(function(pr) {
           var n = document.getElementById(pr[0]);
           if (n) n.textContent = pr[1];
         });
-        [["live-cpu", s2.cpu_percent || 0], ["live-mem", s2.mem_percent || 0],
+        [["live-cpu", s2.cpu_percent || 0], ["live-mem", s2.mem_percent || 0], ["live-swap", s2.swap_percent || 0],
          ["live-load", Math.min(100, (s2.load1 / Math.max(1, s2.cpu_cores)) * 100)],
          ["live-disk", s2.disks && s2.disks[0] ? s2.disks[0].usage_percent : 0]].forEach(function(pr) {
           var b = document.getElementById(pr[0] + "-bar");

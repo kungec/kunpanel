@@ -44,6 +44,7 @@ type Snapshot struct {
 	MemUsageP  float64    `json:"mem_percent"`
 	SwapTotal  uint64     `json:"swap_total"`
 	SwapUsed   uint64     `json:"swap_used"`
+	SwapUsageP float64    `json:"swap_percent"`
 	Uptime     uint64     `json:"uptime"`
 	Disks      []DiskInfo `json:"disks"`
 	NetRx      uint64     `json:"net_rx_total"`
@@ -219,6 +220,7 @@ func collect() Snapshot {
 	if sw, err := mem.SwapMemory(); err == nil {
 		s.SwapTotal = sw.Total
 		s.SwapUsed = sw.Used
+		s.SwapUsageP = round1(sw.UsedPercent)
 	}
 
 	// 根分区每轮采,其余挂载点每 30 秒采一次

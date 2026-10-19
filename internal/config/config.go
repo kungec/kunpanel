@@ -21,9 +21,9 @@ type Config struct {
 	Username     string `json:"username"`
 	Salt         string `json:"salt"`
 	PasswordHash string `json:"password_hash"`
-	HashAlgo     string `json:"hash_algo"`           // pbkdf2(当前) / 空 = 旧版 sha256,登录成功时自动升级
+	HashAlgo     string `json:"hash_algo"` // pbkdf2(当前) / 空 = 旧版 sha256,登录成功时自动升级
 	JWTSecret    string `json:"jwt_secret"`
-	Entrance     string `json:"entrance"` // 安全入口,空则关闭
+	Entrance     string `json:"entrance"`              // 安全入口,空则关闭
 	TotpSecret   string `json:"totp_secret,omitempty"` // 两步验证密钥(base32),空 = 未设置
 	TotpEnabled  bool   `json:"totp_enabled"`          // 两步验证是否已启用
 	PanelName    string `json:"panel_name"`
@@ -131,32 +131,84 @@ func Load() (*Manager, error) {
 }
 
 // OpenFirewallPort 尽力而为放行面板端口:检测 ufw/firewalld 并放行,失败静默
-// (供首次初始化与修改端口场景调用;不依赖 fwmgmt,避免反向依赖)
+// (供首次初始化与修改端口场景调用;不依赖 fwmgmt,避免反向依赖)。
+// 裸 iptables 环境(Oracle/AWS 平台镜像自带规则仅放行 22,无 ufw/firewalld)
+// 单独处理:INPUT 链有 REJECT/DROP 兜底时,把面板端口插到最前并持久化
 func OpenFirewallPort(port int) {
 	if runtime.GOOS != "linux" || port <= 0 || port > 65535 {
 		return
 	}
 	spec := fmt.Sprintf("%d/tcp", port)
+	ufwActive := false
 	if _, err := exec.LookPath("ufw"); err == nil {
 		// 用退出码判断(不依赖 locale 的状态文本;inactive 时 allow 无副作用)
-		if err := exec.Command("ufw", "status").Run(); err == nil {
+		if out, err := exec.Command("ufw", "status").CombinedOutput(); err == nil && strings.Contains(string(out), "Status: active") {
+			ufwActive = true
 			if err := exec.Command("ufw", "allow", spec).Run(); err == nil {
 				// 放行后校验确实生效
 				if out, err := exec.Command("ufw", "status").CombinedOutput(); err == nil && strings.Contains(string(out), spec) {
 					fmt.Println("已放行系统防火墙(ufw)端口", spec)
 				}
 			}
-			return
 		}
 	}
+	if ufwActive {
+		return
+	}
+	fwActive := false
 	if _, err := exec.LookPath("firewall-cmd"); err == nil {
 		// firewalld:用退出码 + 输出非空判断(中文环境 --state 输出 running 一致)
 		if out, err := exec.Command("firewall-cmd", "--state").CombinedOutput(); err == nil && strings.TrimSpace(string(out)) == "running" {
+			fwActive = true
 			if err := exec.Command("firewall-cmd", "--permanent", "--add-port", spec).Run(); err == nil {
 				_ = exec.Command("firewall-cmd", "--reload").Run()
 				fmt.Println("已放行系统防火墙(firewalld)端口", spec)
 			}
 		}
+	}
+	if fwActive {
+		return
+	}
+	openIPTablesPort(port)
+}
+
+// openIPTablesPort 裸 iptables 放行端口:仅当 INPUT 链带 REJECT/DROP 兜底规则
+// 时才插入 ACCEPT(避免误改无规则的宽松系统),并持久化到两个常见落点
+func openIPTablesPort(port int) {
+	if _, err := exec.LookPath("iptables"); err != nil {
+		return
+	}
+	portStr := strconv.Itoa(port)
+	// 端口已放行则跳过
+	if err := exec.Command("iptables", "-C", "INPUT", "-p", "tcp", "--dport", portStr, "-j", "ACCEPT").Run(); err == nil {
+		return
+	}
+	out, err := exec.Command("iptables", "-S", "INPUT").CombinedOutput()
+	if err != nil {
+		return
+	}
+	low := strings.ToLower(string(out))
+	if !strings.Contains(low, "reject") && !strings.Contains(low, "drop") {
+		return
+	}
+	if err := exec.Command("iptables", "-I", "INPUT", "1", "-p", "tcp", "--dport", portStr, "-j", "ACCEPT").Run(); err != nil {
+		fmt.Println("放行 iptables 端口失败:", portStr, err)
+		return
+	}
+	// 持久化:Debian 系 netfilter-persistent;否则写两个常见恢复文件
+	persisted := false
+	if _, err := exec.LookPath("netfilter-persistent"); err == nil {
+		if err := exec.Command("netfilter-persistent", "save").Run(); err == nil {
+			persisted = true
+		}
+	}
+	if b, err := exec.Command("iptables-save").CombinedOutput(); err == nil {
+		_ = os.WriteFile("/etc/iptables/rules.v4", b, 0o600)
+		_ = os.WriteFile("/etc/sysconfig/iptables", b, 0o600)
+		persisted = true
+	}
+	if persisted {
+		fmt.Println("已放行裸 iptables 端口", portStr, "(已持久化;云主机还需在云控制台安全列表放行)")
 	}
 }
 

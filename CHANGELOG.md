@@ -3,6 +3,23 @@
 所有重要变更都会记录在此文件中。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v2.90.2] - 2026-10-19
+
+### 修复:Oracle(甲骨文)等裸 iptables 云主机面板端口未自动放行(用户反馈)
+
+甲骨文平台镜像的系统 iptables 自带规则只放行 22,其余端口 REJECT,且这类
+镜像**不带 ufw/firewalld**——面板的自动放行只认这两个防火墙,于是全部
+跳过:云安全列表即使放行了端口,系统层仍然拦截,面板无法访问。
+
+- 面板侧(首次初始化 / 修改端口):ufw/firewalld 均未启用时,检测 INPUT
+  链是否带 REJECT/DROP 兜底规则,带则把面板端口插到最前并持久化
+  (netfilter-persistent save / 写 rules.v4 与 sysconfig/iptables)
+- 安装脚本同样补裸 iptables 分支(端口冲突检测、持久化到 rules.v4)
+- 仅在系统确有兜底拒绝规则时才动 iptables,宽松系统不受影响
+
+另:原脚本 grep 用了 grep 不支持的 lookbehind 语法一直静默失败(靠
+hostname -I 兜底),一并修正。
+
 ## [v2.91.0] - 2026-10-19
 
 ### 特性:应用商店新增运行环境与 Apache / FTP(用户建议)

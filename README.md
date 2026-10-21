@@ -6,8 +6,8 @@
 
 **轻量级服务器运维管理面板 —— Go 单二进制,开箱即用**
 
-[![](https://img.shields.io/badge/版本-v2.84.0-3b82f6?style=flat-square)](https://github.com/kungec/kunpanel/releases)
-[![](https://img.shields.io/badge/Go-1.23+-00ADD8?style=flat-square)](https://golang.org)
+[![](https://img.shields.io/badge/版本-v2.90.3-3b82f6?style=flat-square)](https://github.com/kungec/kunpanel/releases)
+[![](https://img.shields.io/badge/Go-1.27+-00ADD8?style=flat-square)](https://golang.org)
 [![](https://img.shields.io/badge/平台-Linux%20%7C%20Windows-lightgrey?style=flat-square)](./README.md)
 [![](https://img.shields.io/badge/License-MIT-green?style=flat-square)](./LICENSE)
 [![](https://img.shields.io/badge/QQ群-307386089-eb1923?style=flat-square)](#交流群)
@@ -160,7 +160,7 @@ git clone https://github.com/kungec/kunpanel.git && cd kunpanel
 bash build.sh v2.78.1     # 产出 linux(amd64/arm64/arm) + windows 全平台安装包
 ```
 
-Go 1.23+,前端为原生 JS(`go:embed` 内嵌),无 Node 构建步骤。
+Go 1.27+,前端为原生 JS(`go:embed` 内嵌),无 Node 构建步骤。
 
 ## 🤝 赞助商
 

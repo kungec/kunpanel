@@ -154,7 +154,7 @@ func validatePrivs(privs []string) (string, error) {
 	for _, p := range privs {
 		p = strings.ToUpper(strings.TrimSpace(p))
 		if !allow[p] {
-			return "", fmt.Errorf("不支持的权限: " + p)
+			return "", fmt.Errorf("不支持的权限: %s", p)
 		}
 		clean = append(clean, p)
 	}

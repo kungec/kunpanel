@@ -3,6 +3,23 @@
 所有重要变更都会记录在此文件中。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v2.90.3] - 2026-10-21
+
+### 安全:Go 工具链升级至 1.27.3,修复中间证书信任漏洞 CVE-2026-111943
+
+Go 标准库 crypto/x509 的 `Certificate.Verify` 构建证书链时不会过滤已被
+撤销(私钥已泄露)的中间证书,攻击者可用其签发任意域名的 TLS 证书并通过
+校验。修复版在 Verify 与 Darwin/Windows 系统校验中按 SPKI SHA-256 哈希
+拒绝这组中间证书。
+
+- 构建工具链 1.23.4 → **1.27.3**(go.mod toolchain 钉版,CI 同步 1.27)
+- 依赖升级:x/crypto v0.58.0、go-jose v4.1.6(v2.69.0 因旧工具链锁回的
+  版本约束就此解除)
+- lego v4.24.0 → v4.25.2(顺带修复 GO-2025-3847:ACME API 未强制 HTTPS)
+- 修复一处 vet 非常量格式串(dbmgr 权限校验)
+- **CI govulncheck 移除 `|| true` 改为阻断**(v2.69.0 注释兑现),当前
+  扫描 0 漏洞
+
 ## [v2.90.2] - 2026-10-19
 
 ### 修复:Oracle(甲骨文)等裸 iptables 云主机面板端口未自动放行(用户反馈)
